@@ -23,6 +23,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.IOException;
@@ -226,7 +227,7 @@ public class MainActivity extends Activity {
         }
     }
 
-	private void updateProgress(final int progress, final String message) {
+    private void updateProgress(final int progress, final String message) {
 		if (neumorphicDialog != null && neumorphicDialog.isShowing()) {
 			runOnUiThread(new Runnable() {
 					@Override
@@ -288,12 +289,23 @@ public class MainActivity extends Activity {
                         }
                         // Accept only files that start with the ELF magic (0x7F 'E' 'L' 'F').
                         // A 403/HTML error page saved as libgspace1.so would crash System.load.
-                        try (java.io.FileInputStream elfCheck = new java.io.FileInputStream(tmpFile)) {
+                        // (Written as plain try/catch - AIDE's ECJ parser mis-handles
+                        // try-with-resources whose resource initializer throws.)
+                        FileInputStream elfCheck = null;
+                        try {
+                            elfCheck = new FileInputStream(tmpFile);
                             byte[] magic = new byte[4];
                             if (elfCheck.read(magic) != 4
                                     || magic[0] != 0x7F || magic[1] != 'E' || magic[2] != 'L' || magic[3] != 'F') {
                                 tmpFile.delete();
                                 return false;
+                            }
+                        } catch (IOException e) {
+                            tmpFile.delete();
+                            return false;
+                        } finally {
+                            if (elfCheck != null) {
+                                try { elfCheck.close(); } catch (IOException ignored) { }
                             }
                         }
                         file.delete();
@@ -341,11 +353,18 @@ public class MainActivity extends Activity {
         }
 
         private boolean looksLikeElf(File f) {
-            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+            FileInputStream in = null;
+            try {
+                in = new FileInputStream(f);
                 byte[] magic = new byte[4];
-                return in.read(magic) == 4 && magic[0] == 0x7F && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
+                int n = in.read(magic);
+                return n == 4 && magic[0] == 0x7F && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
             } catch (IOException e) {
                 return false;
+            } finally {
+                if (in != null) {
+                    try { in.close(); } catch (IOException ignored) { }
+                }
             }
         }
 
