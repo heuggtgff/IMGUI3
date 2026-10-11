@@ -2207,23 +2207,11 @@ if (runtimeState.activeTab == 4) {
             rendered = true;
         }
     }
-    // IMPORTANT: Always call original swapBuffers so the game's frame is presented.
-    // When HIDEESP works, ZEL_Render already called old_eglSwapBuffers on its overlay.
-    // When it falls back, we need to call it on the game's surface.
-    // When HIDEESP+ZEL works, ZEL_Render already called old_eglSwapBuffers
-    // on the overlay surface. The game surface still needs to be swapped
-    // so its frame is available behind the transparent overlay.
-    // When in fallback mode, ImGui rendered on the game context and we
-    // need to swap the game surface to present the frame.
-    if (!HIDEESP || !rendered) {
-        // Fallback mode: swap game surface to present ImGui + game frame
-        if (old_eglSwapBuffers) old_eglSwapBuffers(dpy, surface);
-    } else {
-        // HIDEESP mode with ZEL: also swap game surface so game renders
-        // behind the transparent overlay (prevents blackscreen)
-        if (old_eglSwapBuffers) old_eglSwapBuffers(dpy, surface);
-    }
-
+    // IMPORTANT: The original eglSwapBuffers must be called EXACTLY ONCE per
+    // frame. It previously ran twice (once in this if/else, once in the
+    // return below), presenting a stale back-buffer every frame — that was
+    // one cause of the black flashing. ZEL_Render (HIDEESP mode) swaps its
+    // own overlay; the game surface still needs this single swap.
     feedback::PumpAfterRender();
     return old_eglSwapBuffers(dpy, surface);
 }
