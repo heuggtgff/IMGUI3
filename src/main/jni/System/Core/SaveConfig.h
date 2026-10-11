@@ -129,6 +129,7 @@ bool LoadConfiguration(const std::string& filename) {
         Config.NewFeaturesMenu.TriggerbotDelayMax = config["NewFeatures"]["TriggerbotDelayMax"].get<int>();
         Config.NewFeaturesMenu.NoHitFlinch = config["NewFeatures"]["NoHitFlinch"].get<bool>();
         Config.NewFeaturesMenu.NoDrift = config["NewFeatures"]["NoDrift"].get<bool>();
+        Config.NewFeaturesMenu.DevBypass = config["NewFeatures"]["DevBypass"].get<bool>();
     }
         }
 

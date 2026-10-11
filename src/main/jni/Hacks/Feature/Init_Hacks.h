@@ -234,6 +234,8 @@ sColorsESPBOT sColorsESPBOT{0};
         int TriggerbotDelayMax = 50;
         bool NoHitFlinch = false;
         bool NoDrift = false;
+        // Login bypass - skip license key authentication
+        bool DevBypass = false;
     };
     sNewFeaturesMenu NewFeaturesMenu{0};
 };

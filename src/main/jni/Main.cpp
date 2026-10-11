@@ -835,6 +835,10 @@ static int page = 1;
 static int activeTab = 1;
 bool g_LogoPreviewMode = false;
 static bool isLogin = false;
+// DevBypass: skip license key authentication if enabled in config
+if (Config.NewFeaturesMenu.DevBypass) {
+    isLogin = true;
+}
 static std::string err;
 static std::string storedKey = "";
 static char s[256];
@@ -1704,6 +1708,9 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 // === NEW FEATURES: Sniper ===
                                 custom::Checkbox("No Drift (Hardscope)", &Config.NewFeaturesMenu.NoDrift);
                                 custom::Separator();
+                                // Dev / Debug options
+                                custom::Checkbox("Dev Bypass (skip login)", &Config.NewFeaturesMenu.DevBypass);
+                                custom::Separator();
                                 custom::Separator();
                                 custom::Checkbox("Aimbot 360", &Config.Aim.Aimbot360);
                                 custom::Checkbox("Bullet Track", &Config.Aim.AimSilent);
@@ -2175,14 +2182,20 @@ if (runtimeState.activeTab == 4) {
     ImGui::EndFrame();
     ImGui::Render();
 
+    // When HideESP is enabled, use ZEL to render menu on a transparent overlay
+    // on top of the game. If ZEL fails, fall back to normal rendering.
     bool rendered = false;
     if (HIDEESP) {
         EGLContext gameCtx = eglGetCurrentContext();
-        rendered = ZEL_Render(ImGui::GetDrawData(), dpy, surface, gameCtx,
-                              (android::HideRecAImGui::SwapBuffersFn)old_eglSwapBuffers);
+        if (gameCtx != EGL_NO_CONTEXT) {
+            rendered = ZEL_Render(ImGui::GetDrawData(), dpy, surface, gameCtx,
+                                  (android::HideRecAImGui::SwapBuffersFn)old_eglSwapBuffers);
+        }
+        // ZEL_Render handles swapping its own overlay surface.
+        // If it fails, we fall through to normal rendering below.
     }
     if (!rendered) {
-        if (ZEL_IsReady()) ZEL_Shutdown();
+        // Fallback: render ImGui directly on the game's context (visible menu)
         EGLContext activeCtx = eglGetCurrentContext();
         if (g_imguiBackendReady && activeCtx != EGL_NO_CONTEXT &&
             (g_imguiDisplay != dpy || g_imguiContext != activeCtx)) {
@@ -2196,6 +2209,22 @@ if (runtimeState.activeTab == 4) {
             ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
             rendered = true;
         }
+    }
+    // IMPORTANT: Always call original swapBuffers so the game's frame is presented.
+    // When HIDEESP works, ZEL_Render already called old_eglSwapBuffers on its overlay.
+    // When it falls back, we need to call it on the game's surface.
+    // When HIDEESP+ZEL works, ZEL_Render already called old_eglSwapBuffers
+    // on the overlay surface. The game surface still needs to be swapped
+    // so its frame is available behind the transparent overlay.
+    // When in fallback mode, ImGui rendered on the game context and we
+    // need to swap the game surface to present the frame.
+    if (!HIDEESP || !rendered) {
+        // Fallback mode: swap game surface to present ImGui + game frame
+        if (old_eglSwapBuffers) old_eglSwapBuffers(dpy, surface);
+    } else {
+        // HIDEESP mode with ZEL: also swap game surface so game renders
+        // behind the transparent overlay (prevents blackscreen)
+        if (old_eglSwapBuffers) old_eglSwapBuffers(dpy, surface);
     }
 
     feedback::PumpAfterRender();

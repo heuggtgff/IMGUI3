@@ -71,6 +71,7 @@ void LoadConfig() {
         else if (key == "NewFeatures.TriggerbotDelayMax") Config.NewFeaturesMenu.TriggerbotDelayMax = std::stoi(valueStr);
         else if (key == "NewFeatures.NoHitFlinch") Config.NewFeaturesMenu.NoHitFlinch = (valueStr == "1");
         else if (key == "NewFeatures.NoDrift") Config.NewFeaturesMenu.NoDrift = (valueStr == "1");
+        else if (key == "NewFeatures.DevBypass") Config.NewFeaturesMenu.DevBypass = (valueStr == "1");
         else if (key == "ExtraMenu.WallHack") Config.ExtraMenu.WallHack = (valueStr == "1");
     }
     file.close();
@@ -123,6 +124,7 @@ void SaveConfig() {
     file << "NewFeatures.TriggerbotDelayMax " << Config.NewFeaturesMenu.TriggerbotDelayMax << "\n";
     file << "NewFeatures.NoHitFlinch " << Config.NewFeaturesMenu.NoHitFlinch << "\n";
     file << "NewFeatures.NoDrift " << Config.NewFeaturesMenu.NoDrift << "\n";
+    file << "NewFeatures.DevBypass " << Config.NewFeaturesMenu.DevBypass << "\n";
     file << "ExtraMenu.WallHack " << Config.ExtraMenu.WallHack << "\n";
     
     file.close();
