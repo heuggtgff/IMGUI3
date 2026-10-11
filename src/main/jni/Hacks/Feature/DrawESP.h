@@ -1160,8 +1160,10 @@ void WeaponFireComponent_Instant_CreateBulletProjectile(void* thiz, Vector3 star
     SmartReloadMarkShotFired();
 }
 
-// Replacement for WeaponFireComponent_Instant::ChangePunchAngleByGetHit (libunity.so+0xC9C0EDC).
-// Installed from Main.cpp Init_Thread; owns the "No Hit Flinch" option.
+// Replacement for WeaponFireComponent_Instant::ChangePunchAngleByGetHit.
+// NOT currently installed: the candidate address (libunity.so+0xC9C0EDC) is
+// unverified - the dump notes say RVA 0xC9C10E8 - and hooking it made the game
+// flicker and crash. No Hit Flinch is handled by Patches.NoHitFlinch instead.
 void NewFeatures_Hook_ChangePunchAngleByGetHit(void* thiz, float hitPunchAngleMultiplier) {
     // While enabled, skip the camera punch entirely instead of applying it.
     if (Config.NewFeaturesMenu.NoHitFlinch) return;
@@ -1169,8 +1171,10 @@ void NewFeatures_Hook_ChangePunchAngleByGetHit(void* thiz, float hitPunchAngleMu
         oWeaponFireComponent_Instant_ChangePunchAngleByGetHit(thiz, hitPunchAngleMultiplier);
 }
 
-// Replacement for WeaponFireComponent_Instant::Tick (libunity.so+0xC9C0B64).
-// Installed from Main.cpp Init_Thread; owns the "No Drift (Hardscope)" option.
+// Replacement for WeaponFireComponent_Instant::Tick.
+// NOT currently installed: the target address (libunity.so+0xC9C0B64) is an
+// unverified guess; hooking it corrupted the game (flicker, crash ~20s).
+// Enable only after confirming the real Tick RVA in a fresh dump.
 void NewFeatures_Hook_Tick(void* thiz, float deltaTime) {
     // Keep the breathing countdown cleared so scope sway never builds up.
     if (Config.NewFeaturesMenu.NoDrift && thiz != nullptr)

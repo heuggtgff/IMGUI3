@@ -1925,8 +1925,9 @@ if (runtimeState.activeTab == 4) {
 
                 if (Config.NewFeaturesMenu.NoCrouch) Patches.NoCrouch.Modify();
                 else Patches.NoCrouch.Restore();
-                // No Hit Flinch is applied by NewFeatures_Hook_ChangePunchAngleByGetHit,
-                // which checks Config.NewFeaturesMenu.NoHitFlinch on every call.
+
+                if (Config.NewFeaturesMenu.NoHitFlinch) Patches.NoHitFlinch.Modify();
+                else Patches.NoHitFlinch.Restore();
             }
             ImGui::End();
             ImGui::PopStyleVar();
@@ -2245,22 +2246,17 @@ void Init_Thread() {
     
 
 
-    // No Hit Flinch: handled by NewFeatures_Hook_ChangePunchAngleByGetHit
-    // (DobbyHook below on the same address, libunity.so+0xC9C0EDC). A
-    // MemoryPatch here would overwrite the hook entry and leave half of the
-    // hook trampoline behind on Restore(), so the hook owns this option now.
+    // No Hit Flinch stays a memory patch. The NewFeatures Tick /
+    // ChangePunchAngleByGetHit Dobby hooks are intentionally NOT installed:
+    // their target addresses (libunity.so+0xC9C0B64 / +0xC9C0EDC) are
+    // unverified guesses - the dump notes put ChangePunchAngleByGetHit at
+    // RVA 0xC9C10E8 - and hooking them corrupted the game (screen flicker,
+    // native crash seconds later). See DrawESP.h for the (unused) hook bodies.
+    Patches.NoHitFlinch = MemoryPatch::createWithHex("libunity.so", 0xC9C0EDC,
+        "00 00 80 D2 C0 03 5F D6");
 
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9B6F90), (void *)&WeaponFireComponent_Instant_CreateBulletLine, (void **)&oWeaponFireComponent_Instant_CreateBulletLine);
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C33A4), (void *)&WeaponFireComponent_Instant_CreateBulletProjectile, (void **)&oWeaponFireComponent_Instant_CreateBulletProjectile);
-    
-
-    DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C0EDC),
-              (void *)&NewFeatures_Hook_ChangePunchAngleByGetHit,
-              (void **)&oWeaponFireComponent_Instant_ChangePunchAngleByGetHit);
-    
-    DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C0B64),
-              (void *)&NewFeatures_Hook_Tick,
-              (void **)&oWeaponFireComponent_Instant_Tick);
     
     InstallBRClassEspConfigHook();
     InitializeAllHooks();
