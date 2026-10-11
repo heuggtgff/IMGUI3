@@ -23,14 +23,8 @@ void SmartReloadMarkShotFired();
 void (*oWeaponFireComponent_Instant_CreateBulletLine)(uintptr_t thiz, Vector3 startPos, Vector3 dir, bool isDualFire) = nullptr;
 void (*oWeaponFireComponent_Instant_CreateBulletProjectile)(void* thiz, Vector3 startPos, Vector3 dir, void* weaponImpact, int itemID, int flySmokeAssetID, bool enableVirtualStartPos, Vector3 virtualStartPos) = nullptr;
 
-// New Features hooks
-void (*oWeaponFireComponent_Instant_ChangePunchAngleByGetHit)(void* thiz, float hitPunchAngleMultiplier) = nullptr;
-void (*oWeaponFireComponent_Instant_Tick)(void* thiz, float deltaTime) = nullptr;
-
 void NewFeatures_Hook_CreateBulletLine(uintptr_t thiz, Vector3 startPos, Vector3 dir, bool isDualFire);
 void NewFeatures_Hook_CreateBulletProjectile(void* thiz, Vector3 startPos, Vector3 dir, void* weaponImpact, int itemID, int flySmokeAssetID, bool enableVirtualStartPos, Vector3 virtualStartPos);
-void NewFeatures_Hook_ChangePunchAngleByGetHit(void* thiz, float hitPunchAngleMultiplier);
-void NewFeatures_Hook_Tick(void* thiz, float deltaTime);
 
 void DrawText1(ImDrawList *draw, const std::string &text, const Vector2 &position, ImU32 color, float fontSize) {
     draw->AddText(NULL, fontSize, {position.x, position.y}, color, text.c_str());
@@ -1160,25 +1154,16 @@ void WeaponFireComponent_Instant_CreateBulletProjectile(void* thiz, Vector3 star
     SmartReloadMarkShotFired();
 }
 
-// Replacement for WeaponFireComponent_Instant::ChangePunchAngleByGetHit.
-// NOT currently installed: the candidate address (libunity.so+0xC9C0EDC) is
-// unverified - the dump notes say RVA 0xC9C10E8 - and hooking it made the game
-// flicker and crash. No Hit Flinch is handled by Patches.NoHitFlinch instead.
-void NewFeatures_Hook_ChangePunchAngleByGetHit(void* thiz, float hitPunchAngleMultiplier) {
-    // While enabled, skip the camera punch entirely instead of applying it.
-    if (Config.NewFeaturesMenu.NoHitFlinch) return;
-    if (oWeaponFireComponent_Instant_ChangePunchAngleByGetHit)
-        oWeaponFireComponent_Instant_ChangePunchAngleByGetHit(thiz, hitPunchAngleMultiplier);
-}
-
-// Replacement for WeaponFireComponent_Instant::Tick.
-// NOT currently installed: the target address (libunity.so+0xC9C0B64) is an
-// unverified guess; hooking it corrupted the game (flicker, crash ~20s).
-// Enable only after confirming the real Tick RVA in a fresh dump.
-void NewFeatures_Hook_Tick(void* thiz, float deltaTime) {
-    // Keep the breathing countdown cleared so scope sway never builds up.
-    if (Config.NewFeaturesMenu.NoDrift && thiz != nullptr)
-        *(float*)((uintptr_t)thiz + 0x774) = 0.0f; // m_AimmingBreatheCountDown
-    if (oWeaponFireComponent_Instant_Tick)
-        oWeaponFireComponent_Instant_Tick(thiz, deltaTime);
-}
+// NOTE: The NewFeatures_Hook_ChangePunchAngleByGetHit and NewFeatures_Hook_Tick
+// Dobby hooks were removed entirely. Their targets (libunity.so+0xC9C0EDC /
+// +0xC9C0B64) are correct per the GR .57 dump, but Dobby's inline trampoline on
+// these tiny shared callers corrupted game state (screen flicker, native
+// crash). The safe equivalents are memory patches in Main.cpp that toggle
+// per-frame: Patches.NoHitFlinch (@0xC9C0EDC, mov w0,#0 + ret) and
+// Patches.NoDrift (@0xC9BE4C0 UpdateBreatheTrembling, ret) - every address
+// verified against dump.cs and dump (GR .57).cs from the jeudhehs/dump
+// dataset. Reference addresses from that dump:
+//   Tick:                    0xC9C0B64 (Slot 51)
+//   ChangePunchAngleByGetHit: 0xC9C0EDC (Slot 57)
+//   UpdateBreatheTrembling:   0xC9BE4C0
+//   m_AimmingBreatheCountDown: field @ 0x774 on WeaponFireComponent_Instant

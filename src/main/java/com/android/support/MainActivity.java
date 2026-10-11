@@ -273,15 +273,33 @@ public class MainActivity extends Activity {
                     if (serverLastModified != storedLastModified) {
                         publishProgress(0);
                         File file = new File(savePath);
-                        if (file.exists()) file.delete();
+                        // Download to a temp file first so a partial/interrupted
+                        // download can never replace the working copy and crash the app.
+                        File tmpFile = new File(savePath + ".tmp");
+                        if (tmpFile.exists()) tmpFile.delete();
                         try (InputStream inputStream = httpConn.getInputStream();
-						FileOutputStream outputStream = new FileOutputStream(savePath)) {
+						FileOutputStream outputStream = new FileOutputStream(tmpFile)) {
                             while ((bytesRead = inputStream.read(buffer)) != -1) {
                                 outputStream.write(buffer, 0, bytesRead);
                                 totalBytesRead += bytesRead;
                                 currentProgress = (int) ((totalBytesRead * 100) / fileLength);
                                 publishProgress(currentProgress);
                             }
+                        }
+                        // Accept only files that start with the ELF magic (0x7F 'E' 'L' 'F').
+                        // A 403/HTML error page saved as libgspace1.so would crash System.load.
+                        try (java.io.FileInputStream elfCheck = new java.io.FileInputStream(tmpFile)) {
+                            byte[] magic = new byte[4];
+                            if (elfCheck.read(magic) != 4
+                                    || magic[0] != 0x7F || magic[1] != 'E' || magic[2] != 'L' || magic[3] != 'F') {
+                                tmpFile.delete();
+                                return false;
+                            }
+                        }
+                        file.delete();
+                        if (!tmpFile.renameTo(file)) {
+                            tmpFile.delete();
+                            return false;
                         }
                         return true;
                     } else {
@@ -308,15 +326,26 @@ public class MainActivity extends Activity {
         protected void onPostExecute(Boolean result) {
             if (neumorphicDialog != null && neumorphicDialog.isShowing()) neumorphicDialog.dismiss();
             File libFile = new File(MainActivity.this.getFilesDir().getAbsolutePath() + "/" + libname);
-            if (result) {
-                saveLastModifiedTime(serverLastModified);
-                if (libFile.exists()) {
+            // Only launch when a valid ELF library is present; System.load on a
+            // corrupted/HTML file throws UnsatifiedLinkError and kills the app.
+            boolean valid = libFile.exists() && looksLikeElf(libFile);
+            if (result) saveLastModifiedTime(serverLastModified);
+            if (valid) {
+                try {
                     System.load(libFile.getAbsolutePath());
                     startGame();
+                } catch (Throwable t) {
+                    Log.e("Download", "Failed to load " + libname, t);
                 }
-            } else if (libFile.exists()) {
-                System.load(libFile.getAbsolutePath());
-                startGame();
+            }
+        }
+
+        private boolean looksLikeElf(File f) {
+            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+                byte[] magic = new byte[4];
+                return in.read(magic) == 4 && magic[0] == 0x7F && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F';
+            } catch (IOException e) {
+                return false;
             }
         }
 

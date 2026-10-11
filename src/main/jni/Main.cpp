@@ -795,11 +795,9 @@ static std::mutex g_imguiInitMutex;
 static EGLDisplay g_imguiDisplay = EGL_NO_DISPLAY;
 static EGLContext g_imguiContext = EGL_NO_CONTEXT;
 static EGLSurface g_imguiSurface = EGL_NO_SURFACE;
-static bool g_imguiBackendReady = false;
-
-struct My_Patches {
+static bool g_imguiBackendReady = false;    struct My_Patches {
     MemoryPatch A1, grap, NoCrouch, SpeedhackX, SpeedhackX1, NoWingsuit, fpss, frame;
-    MemoryPatch NoHitFlinch;
+    MemoryPatch NoHitFlinch, NoDrift;
 } Patches;
 
 float AVIWA = 119.167f;
@@ -1928,6 +1926,9 @@ if (runtimeState.activeTab == 4) {
 
                 if (Config.NewFeaturesMenu.NoHitFlinch) Patches.NoHitFlinch.Modify();
                 else Patches.NoHitFlinch.Restore();
+
+                if (Config.NewFeaturesMenu.NoDrift) Patches.NoDrift.Modify();
+                else Patches.NoDrift.Restore();
             }
             ImGui::End();
             ImGui::PopStyleVar();
@@ -2246,15 +2247,22 @@ void Init_Thread() {
     
 
 
-    // No Hit Flinch stays a memory patch. The NewFeatures Tick /
-    // ChangePunchAngleByGetHit Dobby hooks are intentionally NOT installed:
-    // their target addresses (libunity.so+0xC9C0B64 / +0xC9C0EDC) are
-    // unverified guesses - the dump notes put ChangePunchAngleByGetHit at
-    // RVA 0xC9C10E8 - and hooking them corrupted the game (screen flicker,
-    // native crash seconds later). See DrawESP.h for the (unused) hook bodies.
     Patches.NoHitFlinch = MemoryPatch::createWithHex("libunity.so", 0xC9C0EDC,
         "00 00 80 D2 C0 03 5F D6");
 
+    // No Drift (Hardscope): kill the breathing/sway tick outright.
+    // Dump.cs (GR .57, WeaponFireComponent_Instant, TypeDefIndex 16555):
+    //   RVA 0xC9BE4C0  private void UpdateBreatheTrembling(float dt)
+    // Returning immediately means m_AimmingBreatheCountDown (field @ 0x774)
+    // never accumulates, so the scope never drifts - far safer than hooking
+    // the shared Tick(0xC9C0B64), whose Dobby trampoline corrupted the game.
+    Patches.NoDrift = MemoryPatch::createWithHex("libunity.so", 0xC9BE4C0,
+        "00 00 80 D2 C0 03 5F D6");
+
+    // Dump-verified (both dump.cs and dump (GR .57).cs from the jeudhehs/dump
+    // dataset): CreateBulletLine @ 0xC9B6F90, CreateBulletProjectile @ 0xC9C33A4.
+    // Too small to hook safely: Tick @ 0xC9C0B64, ChangePunchAngleByGetHit @
+    // 0xC9C0EDC, UpdateBreatheTrembling @ 0xC9BE4C0 - those use memory patches.
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9B6F90), (void *)&WeaponFireComponent_Instant_CreateBulletLine, (void **)&oWeaponFireComponent_Instant_CreateBulletLine);
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C33A4), (void *)&WeaponFireComponent_Instant_CreateBulletProjectile, (void **)&oWeaponFireComponent_Instant_CreateBulletProjectile);
     

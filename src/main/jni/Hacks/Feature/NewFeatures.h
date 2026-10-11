@@ -233,5 +233,6 @@ namespace NewFeatures
 // Declare external hooks that will be defined in Main.cpp
 extern void (*oWeaponFireComponent_Instant_CreateBulletLine)(uintptr_t thiz, Vector3 startPos, Vector3 dir, bool isDualFire);
 extern void (*oWeaponFireComponent_Instant_CreateBulletProjectile)(void* thiz, Vector3 startPos, Vector3 dir, void* weaponImpact, int itemID, int flySmokeAssetID, bool enableVirtualStartPos, Vector3 virtualStartPos);
-extern void (*oWeaponFireComponent_Instant_ChangePunchAngleByGetHit)(void* thiz, float hitPunchAngleMultiplier);
-extern void (*oWeaponFireComponent_Instant_Tick)(void* thiz, float deltaTime);
+// Note: the Tick / ChangePunchAngleByGetHit hook pointers were removed -
+// those features are now memory patches (Patches.NoHitFlinch / Patches.NoDrift
+// in Main.cpp), because Dobby trampolines on those game functions crashed it.
