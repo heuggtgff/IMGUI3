@@ -1159,3 +1159,22 @@ void WeaponFireComponent_Instant_CreateBulletProjectile(void* thiz, Vector3 star
     oWeaponFireComponent_Instant_CreateBulletProjectile(thiz, startPos, dir, weaponImpact, itemID, flySmokeAssetID, enableVirtualStartPos, virtualStartPos);
     SmartReloadMarkShotFired();
 }
+
+// Replacement for WeaponFireComponent_Instant::ChangePunchAngleByGetHit (libunity.so+0xC9C0EDC).
+// Installed from Main.cpp Init_Thread; owns the "No Hit Flinch" option.
+void NewFeatures_Hook_ChangePunchAngleByGetHit(void* thiz, float hitPunchAngleMultiplier) {
+    // While enabled, skip the camera punch entirely instead of applying it.
+    if (Config.NewFeaturesMenu.NoHitFlinch) return;
+    if (oWeaponFireComponent_Instant_ChangePunchAngleByGetHit)
+        oWeaponFireComponent_Instant_ChangePunchAngleByGetHit(thiz, hitPunchAngleMultiplier);
+}
+
+// Replacement for WeaponFireComponent_Instant::Tick (libunity.so+0xC9C0B64).
+// Installed from Main.cpp Init_Thread; owns the "No Drift (Hardscope)" option.
+void NewFeatures_Hook_Tick(void* thiz, float deltaTime) {
+    // Keep the breathing countdown cleared so scope sway never builds up.
+    if (Config.NewFeaturesMenu.NoDrift && thiz != nullptr)
+        *(float*)((uintptr_t)thiz + 0x774) = 0.0f; // m_AimmingBreatheCountDown
+    if (oWeaponFireComponent_Instant_Tick)
+        oWeaponFireComponent_Instant_Tick(thiz, deltaTime);
+}

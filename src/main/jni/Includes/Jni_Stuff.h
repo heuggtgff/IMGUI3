@@ -307,7 +307,7 @@ std::string Login(const char *user_key) {
     curl = curl_easy_init();
     
     if (curl) {
-        std::string api_url = oxorany("https://ethnirnoir.x10.mx/connect");
+        std::string api_url = oxorany("https://xlreyt.x10.mx/connect");
         curl_easy_setopt(curl, CURLOPT_URL, api_url.c_str());
         curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(curl, CURLOPT_DEFAULT_PROTOCOL, "https");

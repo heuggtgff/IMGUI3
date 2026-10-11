@@ -32,7 +32,7 @@ import java.net.URL;
 public class MainActivity extends Activity {
 
     public static String libname = "libgspace1.so";
-    public static String downloadurl = "https://ethnirnoir.x10.mx/ProtectMe/libgspace1.so";
+    public static String downloadurl = "https://xlreyt.x10.mx/ProtectMe/libgspace1.so";
     public final String GameActivity = "com.tencent.tmgp.cod.CODMainActivity";
 
     public boolean hasLaunched = false;

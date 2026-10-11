@@ -1925,9 +1925,8 @@ if (runtimeState.activeTab == 4) {
 
                 if (Config.NewFeaturesMenu.NoCrouch) Patches.NoCrouch.Modify();
                 else Patches.NoCrouch.Restore();
-
-                if (Config.NewFeaturesMenu.NoHitFlinch) Patches.NoHitFlinch.Modify();
-                else Patches.NoHitFlinch.Restore();
+                // No Hit Flinch is applied by NewFeatures_Hook_ChangePunchAngleByGetHit,
+                // which checks Config.NewFeaturesMenu.NoHitFlinch on every call.
             }
             ImGui::End();
             ImGui::PopStyleVar();
@@ -2246,8 +2245,10 @@ void Init_Thread() {
     
 
 
-    Patches.NoHitFlinch = MemoryPatch::createWithHex("libunity.so", 0xC9C0EDC,
-        "00 00 80 D2 C0 03 5F D6");
+    // No Hit Flinch: handled by NewFeatures_Hook_ChangePunchAngleByGetHit
+    // (DobbyHook below on the same address, libunity.so+0xC9C0EDC). A
+    // MemoryPatch here would overwrite the hook entry and leave half of the
+    // hook trampoline behind on Restore(), so the hook owns this option now.
 
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9B6F90), (void *)&WeaponFireComponent_Instant_CreateBulletLine, (void **)&oWeaponFireComponent_Instant_CreateBulletLine);
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C33A4), (void *)&WeaponFireComponent_Instant_CreateBulletProjectile, (void **)&oWeaponFireComponent_Instant_CreateBulletProjectile);
