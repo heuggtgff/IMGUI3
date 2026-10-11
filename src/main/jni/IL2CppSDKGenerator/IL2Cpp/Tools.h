@@ -1,3 +1,5 @@
+#pragma once
+
 #include <map>
 #include <jni.h>
 #include "IL2CppSDKGenerator/Dobby/dobby.h"

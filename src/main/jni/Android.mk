@@ -79,7 +79,7 @@ FILE_LIST              := $(wildcard $(LOCAL_PATH)/ImGui/*.c*)
 FILE_LIST              += $(wildcard $(LOCAL_PATH)/IL2CppSDKGenerator/IL2Cpp/*.c*)
 FILE_LIST              += $(wildcard $(LOCAL_PATH)/IL2CppSDKGenerator/KittyMemory/*.c*)
 FILE_LIST              += $(wildcard $(LOCAL_PATH)/System/Texture/*.c*)
-FILE_LIST              += $(wildcard $(LOCAL_PATH)/*.c*)
+FILE_LIST              += $(wildcard $(LOCAL_PATH)/*.c) $(wildcard $(LOCAL_PATH)/*.cpp)
 
 LOCAL_SRC_FILES        := $(FILE_LIST:$(LOCAL_PATH)/%=%) \
                               Substrate/hde64.c \
