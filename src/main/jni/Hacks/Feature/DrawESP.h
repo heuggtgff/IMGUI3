@@ -23,6 +23,15 @@ void SmartReloadMarkShotFired();
 void (*oWeaponFireComponent_Instant_CreateBulletLine)(uintptr_t thiz, Vector3 startPos, Vector3 dir, bool isDualFire) = nullptr;
 void (*oWeaponFireComponent_Instant_CreateBulletProjectile)(void* thiz, Vector3 startPos, Vector3 dir, void* weaponImpact, int itemID, int flySmokeAssetID, bool enableVirtualStartPos, Vector3 virtualStartPos) = nullptr;
 
+// New Features hooks
+void (*oWeaponFireComponent_Instant_ChangePunchAngleByGetHit)(void* thiz, float hitPunchAngleMultiplier) = nullptr;
+void (*oWeaponFireComponent_Instant_Tick)(void* thiz, float deltaTime) = nullptr;
+
+void NewFeatures_Hook_CreateBulletLine(uintptr_t thiz, Vector3 startPos, Vector3 dir, bool isDualFire);
+void NewFeatures_Hook_CreateBulletProjectile(void* thiz, Vector3 startPos, Vector3 dir, void* weaponImpact, int itemID, int flySmokeAssetID, bool enableVirtualStartPos, Vector3 virtualStartPos);
+void NewFeatures_Hook_ChangePunchAngleByGetHit(void* thiz, float hitPunchAngleMultiplier);
+void NewFeatures_Hook_Tick(void* thiz, float deltaTime);
+
 void DrawText1(ImDrawList *draw, const std::string &text, const Vector2 &position, ImU32 color, float fontSize) {
     draw->AddText(NULL, fontSize, {position.x, position.y}, color, text.c_str());
 }

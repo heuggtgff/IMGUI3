@@ -227,3 +227,26 @@ sColorsESPBOT sColorsESPBOT{0};
 };
 
 sConfig Config{0};
+
+    // ========================================================================
+    // NEW FEATURES (added for VAR3)
+    // ========================================================================
+    // Misc → No Crouch
+    // Combat → Triggerbot (with delay slider)
+    // Misc → No Hit Flinch
+    // Sniper → No Drift (Hardscope Stabilizer)
+    // ========================================================================
+    struct sNewFeaturesMenu
+    {
+        // Misc - No Crouch
+        bool NoCrouch;
+        // Combat - Triggerbot
+        bool Triggerbot;
+        int TriggerbotDelayMin;   // ms range min
+        int TriggerbotDelayMax;   // ms range max
+        // Misc - No Hit Flinch
+        bool NoHitFlinch;
+        // Sniper - No Drift / Hardscope Stabilizer
+        bool NoDrift;
+    };
+    sNewFeaturesMenu NewFeaturesMenu{0};

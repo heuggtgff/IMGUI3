@@ -65,6 +65,12 @@ void LoadConfig() {
         else if (key == "ExtraMenu.Fire") Config.ExtraMenu.Fire = (valueStr == "1");
         else if (key == "ExtraMenu.Parachute") Config.ExtraMenu.Parachute = (valueStr == "1");
         else if (key == "ExtraMenu.Diving") Config.ExtraMenu.Diving = (valueStr == "1");
+        else if (key == "NewFeatures.NoCrouch") Config.NewFeaturesMenu.NoCrouch = (valueStr == "1");
+        else if (key == "NewFeatures.Triggerbot") Config.NewFeaturesMenu.Triggerbot = (valueStr == "1");
+        else if (key == "NewFeatures.TriggerbotDelayMin") Config.NewFeaturesMenu.TriggerbotDelayMin = std::stoi(valueStr);
+        else if (key == "NewFeatures.TriggerbotDelayMax") Config.NewFeaturesMenu.TriggerbotDelayMax = std::stoi(valueStr);
+        else if (key == "NewFeatures.NoHitFlinch") Config.NewFeaturesMenu.NoHitFlinch = (valueStr == "1");
+        else if (key == "NewFeatures.NoDrift") Config.NewFeaturesMenu.NoDrift = (valueStr == "1");
         else if (key == "ExtraMenu.WallHack") Config.ExtraMenu.WallHack = (valueStr == "1");
     }
     file.close();
@@ -111,6 +117,12 @@ void SaveConfig() {
     file << "ExtraMenu.Fire " << Config.ExtraMenu.Fire << "\n";
     file << "ExtraMenu.Parachute " << Config.ExtraMenu.Parachute << "\n";
     file << "ExtraMenu.Diving " << Config.ExtraMenu.Diving << "\n";
+    file << "NewFeatures.NoCrouch " << Config.NewFeaturesMenu.NoCrouch << "\n";
+    file << "NewFeatures.Triggerbot " << Config.NewFeaturesMenu.Triggerbot << "\n";
+    file << "NewFeatures.TriggerbotDelayMin " << Config.NewFeaturesMenu.TriggerbotDelayMin << "\n";
+    file << "NewFeatures.TriggerbotDelayMax " << Config.NewFeaturesMenu.TriggerbotDelayMax << "\n";
+    file << "NewFeatures.NoHitFlinch " << Config.NewFeaturesMenu.NoHitFlinch << "\n";
+    file << "NewFeatures.NoDrift " << Config.NewFeaturesMenu.NoDrift << "\n";
     file << "ExtraMenu.WallHack " << Config.ExtraMenu.WallHack << "\n";
     
     file.close();

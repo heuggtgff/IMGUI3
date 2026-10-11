@@ -122,6 +122,14 @@ bool LoadConfiguration(const std::string& filename) {
             Config.ExtraMenu.Scope = config["ExtraMenu"]["Scope"].get<bool>();
             Config.ExtraMenu.Switch = config["ExtraMenu"]["Switch"].get<bool>();
             Config.ExtraMenu.Kinetic = config["ExtraMenu"]["Kinetic"].get<bool>();
+    if (config.contains("NewFeatures")) {
+        Config.NewFeaturesMenu.NoCrouch = config["NewFeatures"]["NoCrouch"].get<bool>();
+        Config.NewFeaturesMenu.Triggerbot = config["NewFeatures"]["Triggerbot"].get<bool>();
+        Config.NewFeaturesMenu.TriggerbotDelayMin = config["NewFeatures"]["TriggerbotDelayMin"].get<int>();
+        Config.NewFeaturesMenu.TriggerbotDelayMax = config["NewFeatures"]["TriggerbotDelayMax"].get<int>();
+        Config.NewFeaturesMenu.NoHitFlinch = config["NewFeatures"]["NoHitFlinch"].get<bool>();
+        Config.NewFeaturesMenu.NoDrift = config["NewFeatures"]["NoDrift"].get<bool>();
+    }
         }
 
         if (config.contains("isJumpAdjustmentEnabled"))

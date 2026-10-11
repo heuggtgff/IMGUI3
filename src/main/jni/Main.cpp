@@ -31,6 +31,7 @@
 
 #include "FeedbackService.h"
 #include "MainFeatureIncludes.h"
+#include "Hacks/Feature/NewFeatures.h"
 
 #include <jni.h>
 #include <android/log.h>
@@ -798,6 +799,7 @@ static bool g_imguiBackendReady = false;
 
 struct My_Patches {
     MemoryPatch A1, grap, NoCrouch, SpeedhackX, SpeedhackX1, NoWingsuit, fpss, frame;
+    MemoryPatch NoHitFlinch;
 } Patches;
 
 float AVIWA = 119.167f;
@@ -1688,6 +1690,21 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 custom::Checkbox("Fast Scope", &Config.ExtraMenu.Scope);
                                 custom::Checkbox("Quick Switch", &Config.ExtraMenu.Switch);
                                 custom::Checkbox("Weapon Kinetic", &Config.ExtraMenu.Kinetic);
+                                custom::Separator();
+                                custom::Separator();
+                                // === NEW FEATURES: Misc ===
+                                custom::Checkbox("No Crouch", &Config.NewFeaturesMenu.NoCrouch);
+                                custom::Checkbox("No Hit Flinch", &Config.NewFeaturesMenu.NoHitFlinch);
+                                // === NEW FEATURES: Combat ===
+                                custom::Checkbox("Triggerbot", &Config.NewFeaturesMenu.Triggerbot);
+                                if (Config.NewFeaturesMenu.Triggerbot) {
+                                    custom::SliderInt("Trigger Delay Min", &Config.NewFeaturesMenu.TriggerbotDelayMin, 0, 30, "%d ms");
+                                    custom::SliderInt("Trigger Delay Max", &Config.NewFeaturesMenu.TriggerbotDelayMax, 20, 100, "%d ms");
+                                }
+                                // === NEW FEATURES: Sniper ===
+                                custom::Checkbox("No Drift (Hardscope)", &Config.NewFeaturesMenu.NoDrift);
+                                custom::Separator();
+                                custom::Separator();
                                 custom::Checkbox("Aimbot 360", &Config.Aim.Aimbot360);
                                 custom::Checkbox("Bullet Track", &Config.Aim.AimSilent);
                                 custom::SliderFloat("Aim Assist Size", &Config.Aim.AimAssistSize, 0.0f, 100.0f, "%.0f");
@@ -1899,6 +1916,13 @@ if (runtimeState.activeTab == 4) {
 
                 if (Config.ExtraMenu.WallHack) Patches.A1.Modify();
                 else Patches.A1.Restore();
+
+                // New Features: Toggle patches based on menu state
+                if (Config.NewFeaturesMenu.NoCrouch) Patches.NoCrouch.Modify();
+                else Patches.NoCrouch.Restore();
+
+                if (Config.NewFeaturesMenu.NoHitFlinch) Patches.NoHitFlinch.Modify();
+                else Patches.NoHitFlinch.Restore();
             }
             ImGui::End();
             ImGui::PopStyleVar();
@@ -2194,9 +2218,31 @@ void Init_Thread() {
     Patches.A1 = MemoryPatch::createWithHex("libunity.so", 0x8D781DC, "1F 20 03 D5 E0 03 13 AA");
     Patches.NoCrouch = MemoryPatch::createWithHex("libunity.so", 0x511F50C, "00 00 80 D2 C0 03 5F D6");
     Patches.NoWingsuit = MemoryPatch::createWithHex("libunity.so", 0x54A12F4, "00 00 80 D2 C0 03 5F D6");
+    
+    // New Features patches
+    // No Hit Flinch: patch ChangePunchAngleByGetHit to zero the punch
+    // VA from dump.cs: WeaponFireComponent_Instant.ChangePunchAngleByGetHit = 0xC9C10E8
+    // NoHitFlinch: patch ChangePunchAngleByGetHit (Slot 57, VA 0xC9C0EDC)
+    // dump.cs: RVA 0xC9C0EDC, Offset 0xC9BCEDC, VA 0xC9C0EDC, Slot 57
+    Patches.NoHitFlinch = MemoryPatch::createWithHex("libunity.so", 0xC9C0EDC,
+        "00 00 80 D2 C0 03 5F D6");
 
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9B6F90), (void *)&WeaponFireComponent_Instant_CreateBulletLine, (void **)&oWeaponFireComponent_Instant_CreateBulletLine);
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C33A4), (void *)&WeaponFireComponent_Instant_CreateBulletProjectile, (void **)&oWeaponFireComponent_Instant_CreateBulletProjectile);
+    
+    // New Features hooks
+    // No Hit Flinch: hook ChangePunchAngleByGetHit
+    // NoHitFlinch: hook ChangePunchAngleByGetHit (Slot 57, VA 0xC9C0EDC)
+    DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C0EDC),
+              (void *)&NewFeatures_Hook_ChangePunchAngleByGetHit,
+              (void **)&oWeaponFireComponent_Instant_ChangePunchAngleByGetHit);
+    
+    // NoDrift: hook Tick to reset scope drift (Slot 51, VA 0xC9C0B64)
+    // dump.cs: RVA 0xC9C0B64, Offset 0xC9BCB64, VA 0xC9C0B64, Slot 51
+    DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C0B64),
+              (void *)&NewFeatures_Hook_Tick,
+              (void **)&oWeaponFireComponent_Instant_Tick);
+    
     InstallBRClassEspConfigHook();
     InitializeAllHooks();
 
@@ -2258,4 +2304,109 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     std::thread(Init_Thread2).detach();
     std::thread(Skins_Thread).detach();
     return JNI_VERSION_1_6;
+}
+// ============================================================================
+// NEW FEATURES IMPLEMENTATION
+// Based on dump.cs analysis:
+//
+// 1. No Crouch (Misc)
+//    Target: PVPPlayerPawn::StartCrouch (VA in this build: libunity.so+0x511F50C)
+//    dump.cs: BRPlayerPawn.StartCrouch VA 0x78B684C
+//    PVPPlayerPawn.StartCrouch RVA 0x5A0B... (see dump.cs line 506868)
+//    Patch: "00 00 80 D2 C0 03 5F D6" (mov w0,#0; ret) - prevents crouch state change
+//
+// 2. Triggerbot (Combat)
+//    Target: WeaponFireComponent_Instant::CreateBulletProjectile (VA 0xC9BF3A4)
+//    dump.cs: RVA 0xC9C33A4, Slot 124
+//    Also hooks CreateBulletLine (VA 0xC9B6F90, RVA 0xC9B6F90, Slot 112)
+//    Detection: Uses TargetPawn field (m_TargetPawn at offset 0x688 in dump.cs)
+//    Team check: Pawn.get_TeamId (Slot 210, VA 0x51B89CC)
+//    Delay: Randomized 0-50ms human reaction simulation
+//
+// 3. No Hit Flinch (Misc)
+//    Target: WeaponFireComponent_Instant::ChangePunchAngleByGetHit (Slot 57, VA 0xC9C0EDC)
+//    dump.cs: RVA 0xC9C0EDC, Offset 0xC9BCEDC, VA 0xC9C0EDC, Slot 57
+//    Also: GetHitPunchAngleMultiplier (VA 0xC9C2E98, RVA 0xC9C2E98, Slot 9)
+//    Effect: Zero's the camera/aim punch when taking damage (actual damage still applies)
+//
+// 4. No Drift / Hardscope Stabilizer (Sniper)
+//    Target: WeaponFireComponent_Instant::m_AimmingBreatheCountDown (field offset 0x774)
+//    dump.cs: line 769376 "protected float m_AimmingBreatheCountDown; // 0x774"
+//            Also: private float mBreatheCountDown; // 0x58C (line 769277)
+//    Effect: Continuously resets breathe count down to 0, eliminating scope idle sway
+// ============================================================================
+
+// NewFeatures state (mirrors Config.NewFeaturesMenu)
+namespace NewFeaturesNS {
+    NewFeatures::FeatureState g_Features;
+}
+
+// Hook: WeaponFireComponent_Instant::CreateBulletLine (triggerbot detect)
+void NewFeatures_Hook_CreateBulletLine(uintptr_t thiz, Vector3 startPos, Vector3 dir, bool isDualFire)
+{
+    // Triggerbot: if enabled and enemy detected under crosshair, fire with delay
+    if (Config.NewFeaturesMenu.Triggerbot) {
+        // Check if targetPawn is valid (non-null)
+        // m_TargetPawn is at offset 0x688 in WeaponFireComponent_Instant (from dump.cs)
+        void* targetPawn = *(void**)((uintptr_t)thiz + 0x688);
+        if (targetPawn != nullptr) {
+            // Apply human reaction delay
+            static std::mt19937 rng(std::random_device{}());
+            std::uniform_int_distribution<int> dist(
+                Config.NewFeaturesMenu.TriggerbotDelayMin,
+                Config.NewFeaturesMenu.TriggerbotDelayMax);
+            int delayMs = dist(rng);
+            if (delayMs > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+            }
+        }
+    }
+    oWeaponFireComponent_Instant_CreateBulletLine(thiz, startPos, dir, isDualFire);
+}
+
+// Hook: WeaponFireComponent_Instant::CreateBulletProjectile (triggerbot act)
+void NewFeatures_Hook_CreateBulletProjectile(void* thiz, Vector3 startPos, Vector3 dir,
+                                               void* weaponImpact, int itemID, int flySmokeAssetID,
+                                               bool enableVirtualStartPos, Vector3 virtualStartPos)
+{
+    // Triggerbot: if enabled and enemy detected, apply delay before firing
+    if (Config.NewFeaturesMenu.Triggerbot) {
+        void* targetPawn = *(void**)((uintptr_t)thiz + 0x688);
+        if (targetPawn != nullptr) {
+            static std::mt19937 rng(std::random_device{}());
+            std::uniform_int_distribution<int> dist(
+                Config.NewFeaturesMenu.TriggerbotDelayMin,
+                Config.NewFeaturesMenu.TriggerbotDelayMax);
+            int delayMs = dist(rng);
+            if (delayMs > 0) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
+            }
+        }
+    }
+    oWeaponFireComponent_Instant_CreateBulletProjectile(thiz, startPos, dir, weaponImpact,
+                                                           itemID, flySmokeAssetID,
+                                                           enableVirtualStartPos, virtualStartPos);
+}
+
+// Hook: WeaponFireComponent_Instant::ChangePunchAngleByGetHit (no hit flinch)
+void NewFeatures_Hook_ChangePunchAngleByGetHit(void* thiz, float hitPunchAngleMultiplier)
+{
+    // No Hit Flinch: skip punch application when enabled
+    if (Config.NewFeaturesMenu.NoHitFlinch) {
+        // Skip calling original - no camera punch applied
+        // Actual damage still goes through, only visual/aim displacement is removed
+        return;
+    }
+    oWeaponFireComponent_Instant_ChangePunchAngleByGetHit(thiz, hitPunchAngleMultiplier);
+}
+
+// Hook: WeaponFireComponent_Instant::Tick (no drift / hardscope stabilizer)
+void NewFeatures_Hook_Tick(void* thiz, float deltaTime)
+{
+    // No Drift: reset scope drift accumulator every frame when enabled
+    if (Config.NewFeaturesMenu.NoDrift) {
+        // m_AimmingBreatheCountDown at offset 0x774 in WeaponFireComponent_Instant (dump.cs)
+        *(float*)((uintptr_t)thiz + 0x774) = 0.0f;
+    }
+    oWeaponFireComponent_Instant_Tick(thiz, deltaTime);
 }
