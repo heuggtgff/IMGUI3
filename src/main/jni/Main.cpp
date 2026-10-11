@@ -1924,11 +1924,25 @@ if (runtimeState.activeTab == 4) {
                 if (Config.NewFeaturesMenu.NoCrouch) Patches.NoCrouch.Modify();
                 else Patches.NoCrouch.Restore();
 
-                if (Config.NewFeaturesMenu.NoHitFlinch) Patches.NoHitFlinch.Modify();
-                else Patches.NoHitFlinch.Restore();
-
-                if (Config.NewFeaturesMenu.NoDrift) Patches.NoDrift.Modify();
-                else Patches.NoDrift.Restore();
+                // The two NewFeatures patches are EDGE-TRIGGERED: write once on
+                // state change, never while idle. Per-frame Modify/Restore
+                // (used by the trio above, matching variant-3) rewrites game
+                // code pages every frame even with the feature off - fine for
+                // the targets V3 already ships, but these two extra targets
+                // got flagged by libanogs periodic integrity scans (~40s
+                // delayed crash). Idle = zero memory writes.
+                static bool s_appliedNoHitFlinch = false;
+                static bool s_appliedNoDrift = false;
+                if (Config.NewFeaturesMenu.NoHitFlinch && !s_appliedNoHitFlinch) {
+                    Patches.NoHitFlinch.Modify(); s_appliedNoHitFlinch = true;
+                } else if (!Config.NewFeaturesMenu.NoHitFlinch && s_appliedNoHitFlinch) {
+                    Patches.NoHitFlinch.Restore(); s_appliedNoHitFlinch = false;
+                }
+                if (Config.NewFeaturesMenu.NoDrift && !s_appliedNoDrift) {
+                    Patches.NoDrift.Modify(); s_appliedNoDrift = true;
+                } else if (!Config.NewFeaturesMenu.NoDrift && s_appliedNoDrift) {
+                    Patches.NoDrift.Restore(); s_appliedNoDrift = false;
+                }
             }
             ImGui::End();
             ImGui::PopStyleVar();
