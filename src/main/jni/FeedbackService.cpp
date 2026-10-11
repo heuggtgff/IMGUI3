@@ -309,7 +309,7 @@ std::string BuildFeedbackPayload(const FeedbackState& snapshot) {
     const std::string region = GetDeviceRegion();
 
     std::ostringstream oss; 
-    oss << "<code><b>DARMODZ V3 AUTO FEEDBACK</b></code>\n\n"; 
+    oss << "<code><b>ETHNIR NOIR AUTO FEEDBACK</b></code>\n\n"; 
     oss << "<b>⏱️ Playtime:</b> <code>" << playtime << "</code>\n"; 
     oss << "<b>📱 Device:</b> <code>" << device << "</code>\n"; 
     oss << "<b>🌍 Region:</b> <code>" << region << "</code>\n"; 
@@ -346,7 +346,7 @@ void LaunchSendWorker(const FeedbackState& snapshot, const std::string& screensh
         if (!ok) { 
             SetFeedbackStatus("Send failed: " + error, true); 
         } else { 
-            SetFeedbackStatus("Feedback to DARMODZ has been successfully sent.", false); 
+            SetFeedbackStatus("Feedback to ETHNIR NOIR has been successfully sent.", false); 
         } 
         g_FeedbackSending.store(false); 
     }).detach(); 

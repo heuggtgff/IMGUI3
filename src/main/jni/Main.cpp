@@ -876,7 +876,6 @@ static void DrawPizzaOutline(ImDrawList* dl, ImVec2 wMin, ImVec2 wMax, float tim
     const float wobAmp  = 2.5f;
     const float wobFreq = 0.55f;
 
-    // Single color pulled from the menu accent (hue slider in the header)
     ImU32 accent = main_runtime_theme::GetAccentU32();
     int ar = (accent >> IM_COL32_R_SHIFT) & 0xFF;
     int ag = (accent >> IM_COL32_G_SHIFT) & 0xFF;
@@ -892,7 +891,6 @@ static void DrawPizzaOutline(ImDrawList* dl, ImVec2 wMin, ImVec2 wMax, float tim
         float wob = sinf(time * 3.0f + i * wobFreq) * wobAmp;
         ImVec2 mid((a.x + b.x) * 0.5f + perp.x * wob, (a.y + b.y) * 0.5f + perp.y * wob);
 
-        // Thicker glow + thicker main stroke
         dl->AddLine(a,   mid, glow,   22.0f);
         dl->AddLine(mid, b,   glow,   22.0f);
         dl->AddLine(a,   mid, accent, 7.0f);
@@ -1423,7 +1421,7 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                 dl->AddRect(wp, {wp.x + WW, wp.y + WH}, IM_COL32(160, 80, 255, 100), 20.0f, 0, 1.5f);
                 dl->AddRect({wp.x + 6, wp.y + 6}, {wp.x + WW - 6, wp.y + WH - 6}, IM_COL32(160, 80, 255, 30), 16.0f, 0, 1.0f);
 
-                const char* brand = "DARMODZ V3";
+                const char* brand = "ETHNIR NOIR";
                 ImVec2 brandSize = titleFont->CalcTextSizeA(32.0f, FLT_MAX, 0.0f, brand);
                 dl->AddText(titleFont, 32.0f, {wp.x + (WW - brandSize.x) * 0.5f, wp.y + 40.0f}, IM_COL32(160, 80, 255, 255), brand);
 
@@ -1617,7 +1615,7 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 
                     ImFont *runtimeTitleFont = custom::shell::GetTitleFont();
                     const float runtimeTitleSize = 22.0f;
-                    const char *titleA = "DARMODZ";
+                    const char *titleA = "ETHNIR NOIR";
                     const char *titleB = " V3";
                     const ImVec2 titleASize = runtimeTitleFont->CalcTextSizeA(runtimeTitleSize, FLT_MAX, 0.0f, titleA);
                     runtimeDrawList->AddText(runtimeTitleFont, runtimeTitleSize,
@@ -1706,7 +1704,7 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 custom::Checkbox("Dev Bypass (skip login)", &Config.NewFeaturesMenu.DevBypass);
                                 custom::Separator();
                                 custom::Separator();
-                                // (Aimbot 360, Bullet Track, Aim Assist Size moved to AIM tab)
+
                                 EndContentChild(left);
                             }
                             custom::EndGroup();
@@ -1923,7 +1921,7 @@ if (runtimeState.activeTab == 4) {
                 if (Config.ExtraMenu.WallHack) Patches.A1.Modify();
                 else Patches.A1.Restore();
 
-                // New Features: Toggle patches based on menu state
+
                 if (Config.NewFeaturesMenu.NoCrouch) Patches.NoCrouch.Modify();
                 else Patches.NoCrouch.Restore();
 
@@ -2126,7 +2124,7 @@ if (runtimeState.activeTab == 4) {
             }
 
             {
-                const char* centerText = "DARMODZ";
+                const char* centerText = "ETHNIR NOIR";
                 ImFont* cf = font::inter_semibold ? font::inter_semibold : ImGui::GetFont();
                 ImVec2 ts = cf->CalcTextSizeA(15.0f, FLT_MAX, 0.0f, centerText);
                 wdl->AddText(cf, 15.0f, ImVec2(cx2 - ts.x * 0.5f, cy2 - ts.y * 0.5f), RainbowU32(t, 255), centerText);
@@ -2181,8 +2179,6 @@ if (runtimeState.activeTab == 4) {
     ImGui::EndFrame();
     ImGui::Render();
 
-    // When HideESP is enabled, use ZEL to render menu on a transparent overlay
-    // on top of the game. If ZEL fails, fall back to normal rendering.
     bool rendered = false;
     if (HIDEESP) {
         EGLContext gameCtx = eglGetCurrentContext();
@@ -2247,26 +2243,19 @@ void Init_Thread() {
     Patches.NoCrouch = MemoryPatch::createWithHex("libunity.so", 0x511F50C, "00 00 80 D2 C0 03 5F D6");
     Patches.NoWingsuit = MemoryPatch::createWithHex("libunity.so", 0x54A12F4, "00 00 80 D2 C0 03 5F D6");
     
-    // New Features patches
-    // No Hit Flinch: patch ChangePunchAngleByGetHit to zero the punch
-    // VA from dump.cs: WeaponFireComponent_Instant.ChangePunchAngleByGetHit = 0xC9C10E8
-    // NoHitFlinch: patch ChangePunchAngleByGetHit (Slot 57, VA 0xC9C0EDC)
-    // dump.cs: RVA 0xC9C0EDC, Offset 0xC9BCEDC, VA 0xC9C0EDC, Slot 57
+
+
     Patches.NoHitFlinch = MemoryPatch::createWithHex("libunity.so", 0xC9C0EDC,
         "00 00 80 D2 C0 03 5F D6");
 
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9B6F90), (void *)&WeaponFireComponent_Instant_CreateBulletLine, (void **)&oWeaponFireComponent_Instant_CreateBulletLine);
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C33A4), (void *)&WeaponFireComponent_Instant_CreateBulletProjectile, (void **)&oWeaponFireComponent_Instant_CreateBulletProjectile);
     
-    // New Features hooks
-    // No Hit Flinch: hook ChangePunchAngleByGetHit
-    // NoHitFlinch: hook ChangePunchAngleByGetHit (Slot 57, VA 0xC9C0EDC)
+
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C0EDC),
               (void *)&NewFeatures_Hook_ChangePunchAngleByGetHit,
               (void **)&oWeaponFireComponent_Instant_ChangePunchAngleByGetHit);
     
-    // NoDrift: hook Tick to reset scope drift (Slot 51, VA 0xC9C0B64)
-    // dump.cs: RVA 0xC9C0B64, Offset 0xC9BCB64, VA 0xC9C0B64, Slot 51
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C0B64),
               (void *)&NewFeatures_Hook_Tick,
               (void **)&oWeaponFireComponent_Instant_Tick);
@@ -2333,114 +2322,8 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     std::thread(Skins_Thread).detach();
     return JNI_VERSION_1_6;
 }
-// ============================================================================
-// NEW FEATURES IMPLEMENTATION
-// Based on dump.cs analysis:
 //
-// 1. No Crouch (Misc)
-//    Target: PVPPlayerPawn::StartCrouch (VA in this build: libunity.so+0x511F50C)
-//    dump.cs: BRPlayerPawn.StartCrouch VA 0x78B684C
-//    PVPPlayerPawn.StartCrouch RVA 0x5A0B... (see dump.cs line 506868)
-//    Patch: "00 00 80 D2 C0 03 5F D6" (mov w0,#0; ret) - prevents crouch state change
 //
 // 2. Triggerbot (Combat)
-//    Target: WeaponFireComponent_Instant::CreateBulletProjectile (VA 0xC9BF3A4)
-//    dump.cs: RVA 0xC9C33A4, Slot 124
-//    Also hooks CreateBulletLine (VA 0xC9B6F90, RVA 0xC9B6F90, Slot 112)
-//    Detection: Uses TargetPawn field (m_TargetPawn at offset 0x688 in dump.cs)
-//    Team check: Pawn.get_TeamId (Slot 210, VA 0x51B89CC)
-//    Delay: Randomized 0-50ms human reaction simulation
 //
-// 3. No Hit Flinch (Misc)
-//    Target: WeaponFireComponent_Instant::ChangePunchAngleByGetHit (Slot 57, VA 0xC9C0EDC)
-//    dump.cs: RVA 0xC9C0EDC, Offset 0xC9BCEDC, VA 0xC9C0EDC, Slot 57
-//    Also: GetHitPunchAngleMultiplier (VA 0xC9C2E98, RVA 0xC9C2E98, Slot 9)
-//    Effect: Zero's the camera/aim punch when taking damage (actual damage still applies)
 //
-// 4. No Drift / Hardscope Stabilizer (Sniper)
-//    Target: WeaponFireComponent_Instant::m_AimmingBreatheCountDown (field offset 0x774)
-//    dump.cs: line 769376 "protected float m_AimmingBreatheCountDown; // 0x774"
-//            Also: private float mBreatheCountDown; // 0x58C (line 769277)
-//    Effect: Continuously resets breathe count down to 0, eliminating scope idle sway
-// ============================================================================
-
-// NewFeatures state (mirrors Config.NewFeaturesMenu)
-namespace NewFeaturesNS {
-    NewFeatures::FeatureState g_Features;
-}
-
-// Hook: WeaponFireComponent_Instant::CreateBulletLine (triggerbot detect)
-void NewFeatures_Hook_CreateBulletLine(uintptr_t thiz, Vector3 startPos, Vector3 dir, bool isDualFire)
-{
-    // Triggerbot: if enabled and enemy detected under crosshair, fire with delay
-    if (Config.NewFeaturesMenu.Triggerbot && thiz) {
-        // Detection: check if aim assist has a valid target.
-        // m_CurrentRadius (offset 0x650) is set > 0 when aim assist tracks a target.
-        // This is more reliable than reading m_TargetPawn const field.
-        float currentRadius = *(float*)((uintptr_t)thiz + 0x650);
-        if (currentRadius > 0.0f) {
-            // Target detected under crosshair - apply human reaction delay
-            static std::mt19937 rng(std::random_device{}());
-            std::uniform_int_distribution<int> dist(
-                Config.NewFeaturesMenu.TriggerbotDelayMin,
-                Config.NewFeaturesMenu.TriggerbotDelayMax);
-            int delayMs = dist(rng);
-            if (delayMs > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-            }
-        }
-    }
-    oWeaponFireComponent_Instant_CreateBulletLine(thiz, startPos, dir, isDualFire);
-}
-
-// Hook: WeaponFireComponent_Instant::CreateBulletProjectile (triggerbot act)
-void NewFeatures_Hook_CreateBulletProjectile(void* thiz, Vector3 startPos, Vector3 dir,
-                                               void* weaponImpact, int itemID, int flySmokeAssetID,
-                                               bool enableVirtualStartPos, Vector3 virtualStartPos)
-{
-    // Triggerbot: if enabled and enemy detected, apply delay before firing
-    if (Config.NewFeaturesMenu.Triggerbot && thiz) {
-        // Detection via m_CurrentRadius (offset 0x650)
-        float currentRadius = *(float*)((uintptr_t)thiz + 0x650);
-        if (currentRadius > 0.0f) {
-            static std::mt19937 rng(std::random_device{}());
-            std::uniform_int_distribution<int> dist(
-                Config.NewFeaturesMenu.TriggerbotDelayMin,
-                Config.NewFeaturesMenu.TriggerbotDelayMax);
-            int delayMs = dist(rng);
-            if (delayMs > 0) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-            }
-        }
-    }
-    oWeaponFireComponent_Instant_CreateBulletProjectile(thiz, startPos, dir, weaponImpact,
-                                                           itemID, flySmokeAssetID,
-                                                           enableVirtualStartPos, virtualStartPos);
-}
-
-// Hook: WeaponFireComponent_Instant::ChangePunchAngleByGetHit (no hit flinch)
-void NewFeatures_Hook_ChangePunchAngleByGetHit(void* thiz, float hitPunchAngleMultiplier)
-{
-    // No Hit Flinch: skip punch application when enabled.
-    // The MemoryPatch (Patches.NoHitFlinch) also patches this function to 'mov w0,#0; ret'
-    // When the patch is active AND the config is enabled, skip the original.
-    // When config is disabled, the patch should be restored (handled by toggle logic).
-    if (Config.NewFeaturesMenu.NoHitFlinch && thiz) {
-        return;  // Skip punch - no camera displacement on hit
-    }
-    oWeaponFireComponent_Instant_ChangePunchAngleByGetHit(thiz, hitPunchAngleMultiplier);
-}
-
-// Hook: WeaponFireComponent_Instant::Tick (no drift / hardscope stabilizer)
-void NewFeatures_Hook_Tick(void* thiz, float deltaTime)
-{
-    // No Drift: reset scope drift accumulators every frame when enabled
-    if (Config.NewFeaturesMenu.NoDrift && thiz) {
-        // Reset both breathe count down fields to eliminate scope sway
-        // m_AimmingBreatheCountDown at offset 0x774 (public field in dump.cs)
-        *(float*)((uintptr_t)thiz + 0x774) = 0.0f;
-        // mBreatheCountDown at offset 0x58C (private field in dump.cs)
-        *(float*)((uintptr_t)thiz + 0x58C) = 0.0f;
-    }
-    oWeaponFireComponent_Instant_Tick(thiz, deltaTime);
-}

@@ -87,7 +87,6 @@ inline void Render(ImDrawList* draw, float screenWidth, float screenHeight) {
     static float slideY = 0.0f;
     animTime += ImGui::GetIO().DeltaTime;
 
-    // Smooth pop-in animation (slides up)
     if (popIn < 1.0f) {
         popIn += ImGui::GetIO().DeltaTime * 4.0f;
         if (popIn > 1.0f) popIn = 1.0f;
@@ -108,29 +107,23 @@ inline void Render(ImDrawList* draw, float screenWidth, float screenHeight) {
     const float startY = boxY + 16.0f * c::scale;
 
     // --- CYBERPUNK BACKGROUND EFFECTS ---
-    // 1. Ambient Glow
     draw->AddRectFilled(ImVec2(boxX - 4.0f, boxY - 4.0f), ImVec2(boxX + boxW + 4.0f, boxY + boxH + 4.0f), ImColor(0, 255, 255, 15), 12.0f * c::scale);
     
-    // 2. Main Background (Dark Cyberpunk)
     draw->AddRectFilled(ImVec2(boxX, boxY), ImVec2(boxX + boxW, boxY + boxH), ImColor(8, 8, 12, 245), 10.0f * c::scale);
 
-    // 3. Moving "Scanning" Horizontal Lines
     static float scanY = 0.0f;
     scanY += ImGui::GetIO().DeltaTime * 80.0f;
     if (scanY > boxH) scanY = 0.0f;
     draw->AddLine(ImVec2(boxX, boxY + scanY), ImVec2(boxX + boxW, boxY + scanY), ImColor(0, 255, 255, 20), 1.0f);
 
-    // 4. Floating Background Particles
     for (int i = 0; i < 12; ++i) {
         float pX = boxX + (std::sin(animTime * 0.5f + i * 1.3f) * 0.5f + 0.5f) * boxW;
         float pY = boxY + (std::cos(animTime * 0.7f + i * 2.1f) * 0.5f + 0.5f) * boxH;
         draw->AddCircleFilled(ImVec2(pX, pY), 1.0f, ImColor(0, 255, 255, 40));
     }
 
-    // 5. Animated Glowing Border (Rotating Colors)
     ImColor borderColor = GetNeonColor(animTime, 2.0f, 0.0f);
     draw->AddRect(ImVec2(boxX, boxY), ImVec2(boxX + boxW, boxY + boxH), borderColor, 10.0f * c::scale, 0, 1.8f * c::scale);
-    // FIXED: Convert alpha to float to avoid ambiguous constructor call
     draw->AddRect(ImVec2(boxX - 2.0f, boxY - 2.0f), ImVec2(boxX + boxW + 2.0f, boxY + boxH + 2.0f), ImColor(borderColor.Value.x, borderColor.Value.y, borderColor.Value.z, 60.0f / 255.0f), 12.0f * c::scale, 0, 1.0f);
 
     // --- TEXT RENDERING ---
@@ -161,10 +154,8 @@ inline void Render(ImDrawList* draw, float screenWidth, float screenHeight) {
     ImColor neonPink = GetNeonColor(animTime, 1.5f, 4.0f);
     ImColor pureWhite = ImColor(255, 255, 255, 255);
 
-    // 1. Header (Neon Purple)
-    drawTextWithSpacing("DARMODZ V3", ImVec2(textStartX, startY), neonPurple, 1.4f);
+    drawTextWithSpacing("ETHNIR NOIR", ImVec2(textStartX, startY), neonPurple, 1.4f);
     
-    // Status Dot + DELUXE (Neon Cyan)
     float dotRadius = 3.0f * c::scale;
     float deluxeTextWidth = font::inter_semibold->CalcTextSizeA(11.5f * c::scale, FLT_MAX, 0.0f, "DELUXE").x + (1.4f * 6);
     ImVec2 dotPos = ImVec2(textEndX - deluxeTextWidth - (8.0f * c::scale), startY + (6.0f * c::scale));
@@ -174,13 +165,11 @@ inline void Render(ImDrawList* draw, float screenWidth, float screenHeight) {
 
     drawTextWithSpacing("DELUXE", ImVec2(textEndX, startY), neonCyan, 1.4f, true);
     
-    // Divider (Animated)
     float dividerY = startY + 18.0f * c::scale;
     draw->AddLine(ImVec2(textStartX, dividerY), ImVec2(textEndX, dividerY), borderColor, 1.0f);
 
     float currentY = dividerY + 10.0f * c::scale;
 
-    // 2. Info Rows (Text in Pure White, Labels in Neon Pink)
     drawTextWithSpacing("DATE", ImVec2(textStartX, currentY), neonPink, 1.0f);
     drawTextWithSpacing(dateStr, ImVec2(textEndX, currentY), pureWhite, 1.1f, true);
     
@@ -192,12 +181,10 @@ inline void Render(ImDrawList* draw, float screenWidth, float screenHeight) {
     drawTextWithSpacing("SESSION", ImVec2(textStartX, currentY), neonPink, 1.0f); 
     drawTextWithSpacing(playTime.c_str(), ImVec2(textEndX, currentY), neonCyan, 1.1f, true);
 
-    // Matches
     currentY += lineSpacing;
     drawTextWithSpacing("MATCHES", ImVec2(textStartX, currentY), neonPink, 1.0f);
     drawTextWithSpacing(totalMatchesStr, ImVec2(textEndX, currentY), pureWhite, 1.1f, true);
 
-    // 3. Footer (Glitch Text)
     currentY += lineSpacing + 8.0f * c::scale;
     
     draw->AddLine(ImVec2(textStartX, currentY - 3.0f * c::scale), ImVec2(textStartX + 20.0f * c::scale, currentY - 3.0f * c::scale), borderColor, 2.0f);

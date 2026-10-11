@@ -48,7 +48,7 @@ namespace C {
 }
 
 static const char* kHex  = "0123456789ABCDEF";
-static const char* kHash = "DARMODZ LOADED SUCESSFULLY";
+static const char* kHash = "ETHNIR NOIR LOADED SUCESSFULLY";
 
 static uint32_t H32(uint32_t x) {
     x ^= x >> 16; x *= 0x7feb352dU; x ^= x >> 15; x *= 0x846ca68bU; x ^= x >> 16; return x;
@@ -396,7 +396,7 @@ inline bool RenderWindow(ImTextureID tex = nullptr) {
 
         float cy = inn.y + 24.0f;
         {
-            const char* p1 = "DARMODZ";
+            const char* p1 = "ETHNIR NOIR";
             const char* p2 = " V3";
             float s1 = disp->CalcTextSizeA(26.0f, FLT_MAX, 0.0f, p1).x;
             float s2 = disp->CalcTextSizeA(26.0f, FLT_MAX, 0.0f, p2).x;
