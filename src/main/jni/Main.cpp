@@ -2192,6 +2192,10 @@ if (runtimeState.activeTab == 4) {
         // If it fails, we fall through to normal rendering below.
     }
     if (!rendered) {
+        // Match variant-3 behavior: tear down any stale overlay environment
+        // when returning to the visible path, so the hidden surface never
+        // lingers in the display hierarchy.
+        if (ZEL_IsReady()) ZEL_Shutdown();
         // Fallback: render ImGui directly on the game's context (visible menu)
         EGLContext activeCtx = eglGetCurrentContext();
         if (g_imguiBackendReady && activeCtx != EGL_NO_CONTEXT &&
