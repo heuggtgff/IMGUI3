@@ -1699,12 +1699,6 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 // === NEW FEATURES: Misc ===
                                 custom::Checkbox("No Crouch", &Config.NewFeaturesMenu.NoCrouch);
                                 custom::Checkbox("No Hit Flinch", &Config.NewFeaturesMenu.NoHitFlinch);
-                                // === NEW FEATURES: Combat ===
-                                custom::Checkbox("Triggerbot", &Config.NewFeaturesMenu.Triggerbot);
-                                if (Config.NewFeaturesMenu.Triggerbot) {
-                                    custom::SliderInt("Trigger Delay Min", &Config.NewFeaturesMenu.TriggerbotDelayMin, 0, 30, "%d ms");
-                                    custom::SliderInt("Trigger Delay Max", &Config.NewFeaturesMenu.TriggerbotDelayMax, 20, 100, "%d ms");
-                                }
                                 // === NEW FEATURES: Sniper ===
                                 custom::Checkbox("No Drift (Hardscope)", &Config.NewFeaturesMenu.NoDrift);
                                 custom::Separator();
@@ -1712,9 +1706,7 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 custom::Checkbox("Dev Bypass (skip login)", &Config.NewFeaturesMenu.DevBypass);
                                 custom::Separator();
                                 custom::Separator();
-                                custom::Checkbox("Aimbot 360", &Config.Aim.Aimbot360);
-                                custom::Checkbox("Bullet Track", &Config.Aim.AimSilent);
-                                custom::SliderFloat("Aim Assist Size", &Config.Aim.AimAssistSize, 0.0f, 100.0f, "%.0f");
+                                // (Aimbot 360, Bullet Track, Aim Assist Size moved to AIM tab)
                                 EndContentChild(left);
                             }
                             custom::EndGroup();
@@ -1813,6 +1805,13 @@ if (runtimeState.activeTab == 4) {
                                 custom::Checkbox("Aimbot 360", &Config.Aim.Aimbot360);
                                 custom::Checkbox("Bullet Track", &Config.Aim.AimSilent);
                                 custom::SliderFloat("Aim Assist Size", &Config.Aim.AimAssistSize, 0.0f, 100.0f, "%.0f");
+                                // Triggerbot (Combat)
+                                custom::Separator();
+                                custom::Checkbox("Triggerbot", &Config.NewFeaturesMenu.Triggerbot);
+                                if (Config.NewFeaturesMenu.Triggerbot) {
+                                    custom::SliderInt("Trigger Delay Min", &Config.NewFeaturesMenu.TriggerbotDelayMin, 0, 30, "%d ms");
+                                    custom::SliderInt("Trigger Delay Max", &Config.NewFeaturesMenu.TriggerbotDelayMax, 20, 100, "%d ms");
+                                }
                                 EndContentChild(left);
                             }
                             custom::EndGroup();
@@ -2374,12 +2373,13 @@ namespace NewFeaturesNS {
 void NewFeatures_Hook_CreateBulletLine(uintptr_t thiz, Vector3 startPos, Vector3 dir, bool isDualFire)
 {
     // Triggerbot: if enabled and enemy detected under crosshair, fire with delay
-    if (Config.NewFeaturesMenu.Triggerbot) {
-        // Check if targetPawn is valid (non-null)
-        // m_TargetPawn is at offset 0x688 in WeaponFireComponent_Instant (from dump.cs)
-        void* targetPawn = *(void**)((uintptr_t)thiz + 0x688);
-        if (targetPawn != nullptr) {
-            // Apply human reaction delay
+    if (Config.NewFeaturesMenu.Triggerbot && thiz) {
+        // Detection: check if aim assist has a valid target.
+        // m_CurrentRadius (offset 0x650) is set > 0 when aim assist tracks a target.
+        // This is more reliable than reading m_TargetPawn const field.
+        float currentRadius = *(float*)((uintptr_t)thiz + 0x650);
+        if (currentRadius > 0.0f) {
+            // Target detected under crosshair - apply human reaction delay
             static std::mt19937 rng(std::random_device{}());
             std::uniform_int_distribution<int> dist(
                 Config.NewFeaturesMenu.TriggerbotDelayMin,
@@ -2399,9 +2399,10 @@ void NewFeatures_Hook_CreateBulletProjectile(void* thiz, Vector3 startPos, Vecto
                                                bool enableVirtualStartPos, Vector3 virtualStartPos)
 {
     // Triggerbot: if enabled and enemy detected, apply delay before firing
-    if (Config.NewFeaturesMenu.Triggerbot) {
-        void* targetPawn = *(void**)((uintptr_t)thiz + 0x688);
-        if (targetPawn != nullptr) {
+    if (Config.NewFeaturesMenu.Triggerbot && thiz) {
+        // Detection via m_CurrentRadius (offset 0x650)
+        float currentRadius = *(float*)((uintptr_t)thiz + 0x650);
+        if (currentRadius > 0.0f) {
             static std::mt19937 rng(std::random_device{}());
             std::uniform_int_distribution<int> dist(
                 Config.NewFeaturesMenu.TriggerbotDelayMin,
@@ -2420,11 +2421,12 @@ void NewFeatures_Hook_CreateBulletProjectile(void* thiz, Vector3 startPos, Vecto
 // Hook: WeaponFireComponent_Instant::ChangePunchAngleByGetHit (no hit flinch)
 void NewFeatures_Hook_ChangePunchAngleByGetHit(void* thiz, float hitPunchAngleMultiplier)
 {
-    // No Hit Flinch: skip punch application when enabled
-    if (Config.NewFeaturesMenu.NoHitFlinch) {
-        // Skip calling original - no camera punch applied
-        // Actual damage still goes through, only visual/aim displacement is removed
-        return;
+    // No Hit Flinch: skip punch application when enabled.
+    // The MemoryPatch (Patches.NoHitFlinch) also patches this function to 'mov w0,#0; ret'
+    // When the patch is active AND the config is enabled, skip the original.
+    // When config is disabled, the patch should be restored (handled by toggle logic).
+    if (Config.NewFeaturesMenu.NoHitFlinch && thiz) {
+        return;  // Skip punch - no camera displacement on hit
     }
     oWeaponFireComponent_Instant_ChangePunchAngleByGetHit(thiz, hitPunchAngleMultiplier);
 }
@@ -2432,10 +2434,13 @@ void NewFeatures_Hook_ChangePunchAngleByGetHit(void* thiz, float hitPunchAngleMu
 // Hook: WeaponFireComponent_Instant::Tick (no drift / hardscope stabilizer)
 void NewFeatures_Hook_Tick(void* thiz, float deltaTime)
 {
-    // No Drift: reset scope drift accumulator every frame when enabled
-    if (Config.NewFeaturesMenu.NoDrift) {
-        // m_AimmingBreatheCountDown at offset 0x774 in WeaponFireComponent_Instant (dump.cs)
+    // No Drift: reset scope drift accumulators every frame when enabled
+    if (Config.NewFeaturesMenu.NoDrift && thiz) {
+        // Reset both breathe count down fields to eliminate scope sway
+        // m_AimmingBreatheCountDown at offset 0x774 (public field in dump.cs)
         *(float*)((uintptr_t)thiz + 0x774) = 0.0f;
+        // mBreatheCountDown at offset 0x58C (private field in dump.cs)
+        *(float*)((uintptr_t)thiz + 0x58C) = 0.0f;
     }
     oWeaponFireComponent_Instant_Tick(thiz, deltaTime);
 }
