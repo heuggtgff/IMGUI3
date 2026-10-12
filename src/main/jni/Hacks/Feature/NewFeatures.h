@@ -167,7 +167,7 @@ namespace NewFeatures
         constexpr uintptr_t WeaponFire_Owner                = 0x28;  // WeaponFireComponent::m_Owner
         constexpr uintptr_t WeaponFire_ClipAmmoCount        = 0xA8;  // WeaponFireComponent::m_ClipAmmoCount
 
-        constexpr uintptr_t Pawn_IsAlive                    = 0x548; // Pawn::m_IsAlive
+        constexpr uintptr_t Pawn_IsAlive                    = 0xC29C330; // bool() Pawn::get_IsAlive() Slot 49
         constexpr uintptr_t Pawn_FirstPersonCamOffsetX      = 0x6FC; // m_FirstPersonCameraCurrentOffsetX
         constexpr uintptr_t Pawn_FirstPersonCamDestX        = 0x700; // m_FirstPersonCameraDestOffsetX
 
@@ -184,12 +184,11 @@ namespace NewFeatures
         constexpr uintptr_t HasEnemyInPort                  = 0xC9C13F8; // bool(bool)
         constexpr uintptr_t GetBreatheTremblingPos          = 0xC9BD880; // Vector2()
         constexpr uintptr_t GetIsAiming                     = 0xC9AF4E0; // bool()  (fire component ADS flag)
-        constexpr uintptr_t AmmoCanFire                     = 0xC14DF24; // bool()
-        constexpr uintptr_t StartFire                       = 0xC14C29C; // void()
+        constexpr uintptr_t AmmoCanFire                     = 0xC160CEC; // bool() Slot 58 - WeaponFireComponent_Instant.AmmoCanFire
+        constexpr uintptr_t StartFire                       = 0xC9C9364; // void() Slot 39 - WeaponFireComponent_Instant.StartFire
 
         // Weapon::Tick(float) - runs every frame, used for tick-based triggerbot
-        // Find in dump: Weapon.Tick or WeaponFireComponent_Instant.Tick
-        constexpr uintptr_t Weapon_Tick                     = 0x0; // TODO: find from dump.cs
+        constexpr uintptr_t Weapon_Tick                     = 0xC9C0B64; // void(float) Slot 51 - WeaponFireComponent_Instant.Tick
 
         constexpr uintptr_t CollectWeaponShakeOffsets       = 0x9B774C0; // WeaponShakeOffsets(float,float)
         constexpr uintptr_t UpdateFirstPersonCameraOffset   = 0x51C489C; // void(float)
@@ -233,7 +232,8 @@ namespace NewFeatures
     inline bool IsPawnAlive(void *pawn)
     {
         if (!IsReadable(pawn)) return false;
-        return *(bool *)((uintptr_t)pawn + Offsets::Pawn_IsAlive);
+        auto getIsAlive = (bool (*)(void *))UnityRva(RVA::Pawn_IsAlive);
+        return getIsAlive ? getIsAlive(pawn) : false;
     }
 
     // A hook only ever touches the local player's own weapon / components.
