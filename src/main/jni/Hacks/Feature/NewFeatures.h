@@ -228,16 +228,30 @@ namespace NewFeatures
 
     inline bool IsPawnAlive(void *pawn)
     {
-        if (!IsReadable(pawn)) return false;
-        return *(bool *)((uintptr_t)pawn + Offsets::Pawn_IsAlive);
+        if (!IsReadable(pawn)) {
+            LOGD("[Triggerbot] IsPawnAlive: pawn not readable");
+            return false;
+        }
+        bool alive = *(bool *)((uintptr_t)pawn + Offsets::Pawn_IsAlive);
+        if (!alive) {
+            LOGD("[Triggerbot] IsPawnAlive: pawn dead");
+        }
+        return alive;
     }
 
     // A hook only ever touches the local player's own weapon / components.
     inline bool IsLocalFireComponent(void *fireComponent)
     {
-        if (!IsReadable(fireComponent)) return false;
+        if (!IsReadable(fireComponent)) {
+            LOGD("[Triggerbot] IsLocalFireComponent: fireComponent not readable");
+            return false;
+        }
         void *owner = *(void **)((uintptr_t)fireComponent + Offsets::WeaponFire_Owner);
-        return owner != nullptr && owner == LocalPlayer();
+        bool isLocal = owner != nullptr && owner == LocalPlayer();
+        if (!isLocal) {
+            LOGD("[Triggerbot] IsLocalFireComponent: not local (owner=%p, local=%p)", owner, LocalPlayer());
+        }
+        return isLocal;
     }
 
     inline bool IsLocalWeaponShakeController(void *controller)
@@ -265,17 +279,33 @@ namespace NewFeatures
     // Returns true when localPawn and targetPawn are on the SAME team.
     inline bool IsSameTeam(void *localPawn, void *targetPawn)
     {
-        if (!IsReadable(localPawn) || !IsReadable(targetPawn)) return false;
-        if (localPawn == targetPawn) return true;
+        if (!IsReadable(localPawn) || !IsReadable(targetPawn)) {
+            LOGD("[Triggerbot] IsSameTeam: pawn not readable (local=%p, target=%p)", localPawn, targetPawn);
+            return false;
+        }
+        if (localPawn == targetPawn) {
+            LOGD("[Triggerbot] IsSameTeam: same pawn");
+            return true;
+        }
 
         auto isSameCamp = (bool (*)(void *, void *))UnityRva(RVA::Pawn_IsSameCamp); // Slot 84
-        if (isSameCamp != nullptr && isSameCamp(localPawn, targetPawn)) return true;
+        if (isSameCamp != nullptr && isSameCamp(localPawn, targetPawn)) {
+            LOGD("[Triggerbot] IsSameTeam: IsSameCamp returned true");
+            return true;
+        }
 
         auto getTeamId = (uint32_t (*)(void *))UnityRva(RVA::Pawn_GetTeamId);       // Slot 216
-        if (getTeamId == nullptr) return false;
+        if (getTeamId == nullptr) {
+            LOGD("[Triggerbot] IsSameTeam: getTeamId is null");
+            return false;
+        }
         const uint32_t localTeam  = getTeamId(localPawn);
         const uint32_t targetTeam = getTeamId(targetPawn);
-        return localTeam != 0 && localTeam == targetTeam;
+        bool sameTeam = localTeam != 0 && localTeam == targetTeam;
+        if (sameTeam) {
+            LOGD("[Triggerbot] IsSameTeam: same team (local=%u, target=%u)", localTeam, targetTeam);
+        }
+        return sameTeam;
     }
 
     // =====================================================================
@@ -310,11 +340,16 @@ namespace NewFeatures
             s_delayTarget = targetPawn;
             s_delayStart = now;
             s_delayMs = TriggerbotDelay();
+            LOGD("[Triggerbot] DelayElapsed: new target, delay=%dms", s_delayMs);
             return s_delayMs <= 0;
         }
         if (s_delayMs <= 0) return true;
         const auto held = std::chrono::duration_cast<std::chrono::milliseconds>(now - s_delayStart).count();
-        return held >= (long long)s_delayMs;
+        bool elapsed = held >= (long long)s_delayMs;
+        if (!elapsed) {
+            LOGD("[Triggerbot] DelayElapsed: waiting... held=%lldms, need=%dms", held, s_delayMs);
+        }
+        return elapsed;
     }
 
     inline void TriggerbotClearTarget() { s_delayTarget = nullptr; }
@@ -322,10 +357,20 @@ namespace NewFeatures
     // "Weapon ready" - the game's own check plus an ammo sanity guard.
     inline bool TriggerbotWeaponReady(void *fireComponent)
     {
-        if (!IsReadable(fireComponent)) return false;
+        if (!IsReadable(fireComponent)) {
+            LOGD("[Triggerbot] WeaponReady: fireComponent not readable");
+            return false;
+        }
         auto ammoCanFire = (bool (*)(void *))UnityRva(RVA::AmmoCanFire);
-        if (ammoCanFire != nullptr && !ammoCanFire(fireComponent)) return false;
-        if (*(int *)((uintptr_t)fireComponent + Offsets::WeaponFire_ClipAmmoCount) <= 0) return false;
+        if (ammoCanFire != nullptr && !ammoCanFire(fireComponent)) {
+            LOGD("[Triggerbot] WeaponReady: AmmoCanFire returned false");
+            return false;
+        }
+        int clipAmmo = *(int *)((uintptr_t)fireComponent + Offsets::WeaponFire_ClipAmmoCount);
+        if (clipAmmo <= 0) {
+            LOGD("[Triggerbot] WeaponReady: no ammo (clip=%d)", clipAmmo);
+            return false;
+        }
         return true;
     }
 
@@ -336,19 +381,39 @@ namespace NewFeatures
     inline bool TriggerbotInAssistRange(void *fireComponent)
     {
         float *aimAssistDis = *(float **)((uintptr_t)fireComponent + Offsets::WeaponFire_AimAssistDis);
-        if (aimAssistDis == nullptr) return true;               // weapon w/o table
+        if (aimAssistDis == nullptr) {
+            LOGD("[Triggerbot] InAssistRange: no aimAssistDis table");
+            return true;               // weapon w/o table
+        }
         const float base = aimAssistDis[0];
-        if (!(base > 0.0f)) return true;
+        if (!(base > 0.0f)) {
+            LOGD("[Triggerbot] InAssistRange: base <= 0 (%.2f)", base);
+            return true;
+        }
         const float dist = *(float *)((uintptr_t)fireComponent + Offsets::WeaponFire_TargetPawnDist);
-        if (!(dist > 0.0f)) return true;
-        return dist <= base * 10.0f;
+        if (!(dist > 0.0f)) {
+            LOGD("[Triggerbot] InAssistRange: dist <= 0 (%.2f)", dist);
+            return true;
+        }
+        bool inRange = dist <= base * 10.0f;
+        if (!inRange) {
+            LOGD("[Triggerbot] InAssistRange: out of range (dist=%.2f, base=%.2f, max=%.2f)", dist, base, base * 10.0f);
+        }
+        return inRange;
     }
 
     inline void TriggerbotFire(void *fireComponent)
     {
-        if (!TriggerbotWeaponReady(fireComponent)) return;
+        if (!TriggerbotWeaponReady(fireComponent)) {
+            LOGD("[Triggerbot] Fire: weapon not ready");
+            return;
+        }
         auto startFire = (void (*)(void *))UnityRva(RVA::StartFire);
-        if (startFire == nullptr) return;
+        if (startFire == nullptr) {
+            LOGD("[Triggerbot] Fire: StartFire is null");
+            return;
+        }
+        LOGI("[Triggerbot] Fire: calling StartFire");
         s_triggerFiring = true;
         startFire(fireComponent);
         s_triggerFiring = false;
@@ -361,15 +426,37 @@ namespace NewFeatures
     {
         if (!Config.NewFeaturesMenu.Triggerbot) return;
         if (s_triggerFiring) return;
-        if (!IsLocalFireComponent(fireComponent)) return;  // never touch remote pawns
+        if (!IsLocalFireComponent(fireComponent)) {
+            LOGD("[Triggerbot] TryFire: not local fire component");
+            return;  // never touch remote pawns
+        }
 
         void *localPawn = LocalPlayer();
-        if (!IsReadable(targetPawn) || targetPawn == localPawn) { TriggerbotClearTarget(); return; }
-        if (IsSameTeam(localPawn, targetPawn)) { TriggerbotClearTarget(); return; }   // team check
-        if (!IsPawnAlive(targetPawn)) { TriggerbotClearTarget(); return; }
-        if (!TriggerbotInAssistRange(fireComponent)) { TriggerbotClearTarget(); return; }
+        if (!IsReadable(targetPawn)) {
+            LOGD("[Triggerbot] TryFire: targetPawn not readable");
+            TriggerbotClearTarget(); return;
+        }
+        if (targetPawn == localPawn) {
+            LOGD("[Triggerbot] TryFire: targetPawn is localPawn");
+            TriggerbotClearTarget(); return;
+        }
+        if (IsSameTeam(localPawn, targetPawn)) {
+            LOGD("[Triggerbot] TryFire: same team");
+            TriggerbotClearTarget(); return; }   // team check
+        if (!IsPawnAlive(targetPawn)) {
+            LOGD("[Triggerbot] TryFire: target not alive");
+            TriggerbotClearTarget(); return;
+        }
+        if (!TriggerbotInAssistRange(fireComponent)) {
+            LOGD("[Triggerbot] TryFire: out of assist range");
+            TriggerbotClearTarget(); return;
+        }
 
-        if (!TriggerbotDelayElapsed(targetPawn)) return;   // human delay AFTER confirmation
+        if (!TriggerbotDelayElapsed(targetPawn)) {
+            LOGD("[Triggerbot] TryFire: delay not elapsed");
+            return;   // human delay AFTER confirmation
+        }
+        LOGI("[Triggerbot] TryFire: FIRING! targetPawn=%p", targetPawn);
         TriggerbotFire(fireComponent);
     }
 
@@ -503,8 +590,14 @@ namespace NewFeatures
             // game validated).
             void *targetPawn = *(void **)((uintptr_t)thiz + Offsets::WeaponFire_TargetPawn);
             void *fireTarget = (targetPawn != nullptr && targetPawn == target) ? targetPawn : target;
-            if (fireTarget != nullptr)
+            if (fireTarget != nullptr) {
+                LOGI("[Triggerbot] CheckTarget: result=true, target=%p, targetPawn=%p, fireTarget=%p", target, targetPawn, fireTarget);
                 TriggerbotTryFire(thiz, fireTarget);
+            } else {
+                LOGI("[Triggerbot] CheckTarget: result=true but fireTarget is null, target=%p, targetPawn=%p", target, targetPawn);
+            }
+        } else if (Config.NewFeaturesMenu.Triggerbot && !result) {
+            LOGD("[Triggerbot] CheckTarget: result=false, target=%p", target);
         }
         return result;
     }
@@ -523,8 +616,14 @@ namespace NewFeatures
             // shared pipeline. The team/alive/range guards in TriggerbotTryFire
             // handle the rest.
             void *targetPawn = *(void **)((uintptr_t)thiz + Offsets::WeaponFire_TargetPawn);
-            if (targetPawn != nullptr)
+            if (targetPawn != nullptr) {
+                LOGI("[Triggerbot] HasEnemyInPort: result=true, targetPawn=%p", targetPawn);
                 TriggerbotTryFire(thiz, targetPawn);
+            } else {
+                LOGI("[Triggerbot] HasEnemyInPort: result=true but targetPawn is null");
+            }
+        } else if (Config.NewFeaturesMenu.Triggerbot && !result) {
+            LOGD("[Triggerbot] HasEnemyInPort: result=false");
         }
         return result;
     }
