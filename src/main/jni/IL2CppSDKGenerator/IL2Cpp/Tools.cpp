@@ -2,6 +2,7 @@
 #include <libgen.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <time.h>
 #include <jni.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -91,38 +92,77 @@ bool Tools::PVM_WriteAddr(void *addr, void *buffer, size_t length) {
     return pvm(addr, buffer, length, true);
 }
 
-bool Tools::IsPtrValid(void *addr) {
-    if (addr == nullptr) return false;
-    uintptr_t address = reinterpret_cast<uintptr_t>(addr);
-    if (address < 0x10000) return false;
+static uint8_t tools_isvalid_buf[4] = {0,0,0,0};
 
-    static std::vector<std::pair<uintptr_t, uintptr_t>> validRanges;
-    static bool rangesCached = false;
+// ---------------------------------------------------------------------------
+// Readable-memory probe for Tools::IsPtrValid (port of V3 @c2c1e12).
+//
+// The previous implementation parsed /proc/self/maps EXACTLY ONCE and cached
+// the ranges forever. On a device that also worked, but on this build the map
+// snapshot was taken before the game had allocated its heap: every pawn /
+// MatchGame / weapon object allocated later lived outside the frozen cache,
+// so IsPtrValid() rejected every valid heap pointer permanently. The ESP drew
+// nothing, the triggerbot scanned an empty world ("Enemy=0"), and Test Fire
+// reported the very-alive local pawn as "no local pawn" - while the hook
+// heartbeat counters kept incrementing.
+//
+// Now: process_vm_readv is the cheap fast path; if it fails we re-read a
+// fresh /proc/self/maps snapshot (refreshed at most every 250 ms, binary
+// search per call) instead of trusting a startup-time cache. A pvm that is
+// blocked by SELinux therefore degrades to a correct answer, not to a
+// permanent "everything is invalid".
+// ---------------------------------------------------------------------------
+static std::vector<std::pair<uintptr_t, uintptr_t>> g_readableRanges;
+static uint64_t g_readableCacheMs = 0;
 
-    if (!rangesCached) {
-        FILE *f = fopen("/proc/self/maps", "r");
-        if (f) {
-            char line[512];
-            while (fgets(line, sizeof(line), f)) {
-                uintptr_t start, end;
-                char perms[5];
-                if (sscanf(line, "%" PRIXPTR "-%" PRIXPTR " %4s", &start, &end, perms) == 3) {
-                    if (perms[0] == 'r') {
-                        validRanges.emplace_back(start, end);
-                    }
-                }
-            }
-            fclose(f);
-            rangesCached = true;
+static uint64_t ToolsNowMs() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
+}
+
+static void ToolsRefreshReadableRanges() {
+    g_readableRanges.clear();
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (!f) return;
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        uintptr_t lo = 0, hi = 0;
+        char perms[8] = {0};
+        if (sscanf(line, "%" SCNxPTR "-%" SCNxPTR " %7s", &lo, &hi, perms) == 3 &&
+            perms[0] == 'r' && hi > lo) {
+            g_readableRanges.emplace_back(lo, hi);
         }
     }
+    fclose(f);
+}
 
-    for (const auto& range : validRanges) {
-        if (address >= range.first && address < range.second) {
-            return true;
-        }
+static bool ToolsAddrReadable(void *addr) {
+    const uintptr_t a = (uintptr_t)addr;
+    if (a < 0x10000) return false;
+    uint64_t now = ToolsNowMs();
+    if (g_readableRanges.empty() || now < g_readableCacheMs || now - g_readableCacheMs > 250) {
+        ToolsRefreshReadableRanges();
+        g_readableCacheMs = now;
+    }
+    size_t lo = 0, hi = g_readableRanges.size();
+    while (lo < hi) {
+        size_t mid = (lo + hi) / 2;
+        if (a < g_readableRanges[mid].first)      hi = mid;
+        else if (a >= g_readableRanges[mid].second) lo = mid + 1;
+        else return true;
     }
     return false;
+}
+
+bool Tools::IsPtrValid(void *addr) {
+    if (addr == nullptr) return false;
+    if (pvm(addr, tools_isvalid_buf, sizeof tools_isvalid_buf)) return true;
+    // pvm failed: either the page really is unreadable, or this device blocks
+    // process_vm_readv entirely. Confirm through a fresh /proc/self/maps
+    // instead of blindly rejecting (a blind reject silently disabled every
+    // guarded hook, ESP pass and the triggerbot).
+    return ToolsAddrReadable(addr);
 }
 
 uintptr_t Tools::GetBaseAddress(const char *name) {
