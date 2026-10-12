@@ -190,7 +190,7 @@ namespace NewFeatures
         constexpr uintptr_t Weapon_StartFire                = 0x5123C84; // void() Slot 55 - Weapon.StartFire
         constexpr uintptr_t Weapon_StopFire                 = 0x5124EAC; // void(bool) Slot 73 - Weapon.StopFire
         constexpr uintptr_t Weapon_Tick                     = 0x5114C34; // void(float) Slot 33 - Weapon.Tick (game thread heartbeat)
-        constexpr uintptr_t Pawn_get_CurrentWeapon          = 0x518BEA8; // Weapon*() - Pawn.get_CurrentWeapon
+        constexpr uintptr_t Pawn_GetCurrentWeapon           = 0x518BEA8; // Weapon*() - Pawn.get_CurrentWeapon
         constexpr uintptr_t Pawn_IsAiming                   = 0x516699C; // bool() - Pawn.IsAiming (ADS) Slot 427
         constexpr uintptr_t Pawn_get_IsFiring               = 0x51A8A38; // bool() - Pawn.get_IsFiring
         constexpr uintptr_t Gameplay_get_MatchGame          = 0x8569B10; // BaseGame*() - Gameplay.get_MatchGame
@@ -371,8 +371,10 @@ namespace NewFeatures
         auto worldToScreen = (void* (*)(void*, Vector3))UnityRva(RVA::Camera_WorldToScreenPoint);
         auto getHeadPos = (Vector3 (*)(void*))UnityRva(RVA::Pawn_get_HeadPosition);
         auto getLastPos = (Vector3 (*)(void*))UnityRva(RVA::Pawn_get_LastPawnPos);
+        auto getWidth = (int (*)())UnityRva(RVA::Screen_get_width);
+        auto getHeight = (int (*)())UnityRva(RVA::Screen_get_height);
 
-        if (!getMatchGame || !getLocalPawn || !getEnemyPawns || !getMainCamera || !worldToScreen || !getHeadPos || !getLastPos)
+        if (!getMatchGame || !getLocalPawn || !getEnemyPawns || !getMainCamera || !worldToScreen || !getHeadPos || !getLastPos || !getWidth || !getHeight)
             return 0;
 
         const uintptr_t matchGame = getMatchGame();
@@ -487,7 +489,7 @@ namespace NewFeatures
         }
 
         auto getLocalPawn = (uintptr_t (*)())UnityRva(RVA::Gameplay_get_LocalPawn);
-        auto getCurrentWeapon = (void* (*)(void*))UnityRva(RVA::Pawn_get_CurrentWeapon);
+        auto getCurrentWeapon = (void* (*)(void*))UnityRva(RVA::Pawn_GetCurrentWeapon);
         if (!getLocalPawn || !getCurrentWeapon) {
             A_FireReleaseTrigger(nullptr);
             s_dbgTriggerState = 0;
@@ -538,8 +540,8 @@ namespace NewFeatures
             ready = getIsFiring && getIsFiring(localPawn);
         }
 
-        if (ready && Config.NewFeaturesMenu.TriggerbotDelayMin > 0) {
-            if (now - g_afireLastPressTime < (double)Config.NewFeaturesMenu.TriggerbotDelayMin / 1000.0)
+        if (ready && Config.NewFeaturesMenu.TriggerbotDelay > 0) {
+            if (now - g_afireLastPressTime < (double)Config.NewFeaturesMenu.TriggerbotDelay / 1000.0)
                 ready = false;
         }
 
@@ -651,7 +653,7 @@ namespace NewFeatures
         constexpr uintptr_t get_UseGetReadyTime    = 0x50E9F60;
         constexpr uintptr_t get_SpringFireGetReady = 0x50E9F28;
         constexpr uintptr_t get_GetReadyTime       = 0x514D2C8;
-        constexpr uintptr_t LocalPawn_get_CurrentWeapon = 0x518BEA8; // Pawn::get_CurrentWeapon()
+        constexpr uintptr_t LocalPawn_GetCurrentWeapon = 0x518BEA8; // Pawn::get_CurrentWeapon()
     }
 
     // Is `weaponInstance` the weapon the local player is currently holding?
@@ -661,7 +663,7 @@ namespace NewFeatures
         if (!IsReadable(weaponInstance)) return false;
         void *localPawn = LocalPlayer();
         if (!IsReadable(localPawn)) return false;
-        auto getCurrentWeapon = (void *(*)(void *))UnityRva(FiringTiming::LocalPawn_get_CurrentWeapon);
+        auto getCurrentWeapon = (void *(*)(void *))UnityRva(FiringTiming::LocalPawn_GetCurrentWeapon);
         if (getCurrentWeapon == nullptr) return false;
         return getCurrentWeapon(localPawn) == weaponInstance;
     }
