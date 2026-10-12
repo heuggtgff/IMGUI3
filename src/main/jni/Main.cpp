@@ -30,8 +30,12 @@
 #include "oxorany/source/oxorany_include.h"
 
 #include "FeedbackService.h"
-#include "MainFeatureIncludes.h"
+// NewFeatures must be visible before MainFeatureIncludes.h: the existing
+// Feats.h firing-timing hooks (Firerate / No Sprint Fire Delay / No Fire
+// Delay) call into NewFeatures::NoFireDelayActive() /
+// NoSprintFireDelayActive() so that each dump address is hooked exactly once.
 #include "Hacks/Feature/NewFeatures.h"
+#include "MainFeatureIncludes.h"
 
 #include <jni.h>
 #include <android/log.h>
@@ -1697,7 +1701,18 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 custom::Checkbox("No Crouch", &Config.NewFeaturesMenu.NoCrouch);
                                 custom::Checkbox("No Hit Flinch", &Config.NewFeaturesMenu.NoHitFlinch);
                                 // === NEW FEATURES: Sniper ===
+                                // No Drift = breathing sway only (m_AimmingBreatheCountDown @0x774)
                                 custom::Checkbox("No Drift (Hardscope)", &Config.NewFeaturesMenu.NoDrift);
+                                // Stable Scope = movement sway (WeaponShakeController /
+                                // Pawn::UpdateFirstPersonCameraOffset) + landing impact
+                                // bounce, applied only while the local player is scoping.
+                                custom::Checkbox("Stable Scope", &Config.NewFeaturesMenu.StableScope);
+                                // === NEW FEATURES: Firing timing (see NewFeatures.h Task 3) ===
+                                // Timing-only: they shorten a delay, they never bypass ammo,
+                                // reload, fire mode, spread, recoil or any other stat.
+                                custom::Checkbox("No Sprint Fire Delay", &Config.NewFeaturesMenu.NoSprintToFireDelay);
+                                custom::Checkbox("No Hipfire Delay", &Config.NewFeaturesMenu.NoHipfireDelay);
+                                custom::Checkbox("No Fire Delay", &Config.NewFeaturesMenu.NoFireDelay);
                                 custom::Separator();
                                 // Dev / Debug options
                                 custom::Checkbox("Dev Bypass (skip login)", &Config.NewFeaturesMenu.DevBypass);
@@ -2271,7 +2286,16 @@ void Init_Thread() {
     // 0xC9C0EDC, UpdateBreatheTrembling @ 0xC9BE4C0 - those use memory patches.
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9B6F90), (void *)&WeaponFireComponent_Instant_CreateBulletLine, (void **)&oWeaponFireComponent_Instant_CreateBulletLine);
     DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C33A4), (void *)&WeaponFireComponent_Instant_CreateBulletProjectile, (void **)&oWeaponFireComponent_Instant_CreateBulletProjectile);
-    
+
+    // NewFeatures (dump-verified, see NewFeatures.h header block):
+    //   Triggerbot   -> WeaponFireComponent_Instant::CheckTarget   @0xC9C1B50
+    //                   WeaponFireComponent_Instant::HasEnemyInPort@0xC9C13F8
+    //   Stable Scope -> GetBreatheTremblingPos                      @0xC9BD880
+    //                   WeaponShakeController::CollectWeaponShakeOffsets @0x9B774C0
+    //                   Pawn::UpdateFirstPersonCameraOffset         @0x51C489C
+    //                   HitGroundComponent::OnJumpHitGround         @0x8599460
+    NewFeatures::InstallHooks();
+
     InstallBRClassEspConfigHook();
     InitializeAllHooks();
 

@@ -160,10 +160,23 @@ inline void hook_OnFlashBangExplode(void *instance, int weaponItemID, float whit
 }
 
 //-- Firerate Speed  (+ Unlimited Fly reuses these hooks)
+//
+// These three Weapon getters are also the hook points for the NewFeatures
+// firing-timing toggles (see NewFeatures.h, Task 3).  There is exactly ONE
+// hook per address - the new toggles are folded into these bodies instead of
+// installing a second trampoline on the same prologue:
+//   get_FireBoltTime    @0x51237F4 -> No Fire Delay  (pump/bolt/chamber cooldown)
+//   get_FireInterval    @0x5105C74 -> No Fire Delay  (shot-to-shot cooldown)
+//   get_DelaySprintFire @0x513CBC4 -> No Sprint Fire Delay (sprint-out timer)
+// NewFeatures::*Active() also require the instance to be the local player's
+// current weapon, so nothing is changed for remote players.
 inline float (*orig_get_FireBoltTime)(void *) = nullptr;
 inline float get_FireBoltTime(void * instance) {
     if (instance != NULL) {
         if (Config.ExtraMenu.Fire || UnlimitedFly) {
+            return 0.00001f;
+        }
+        if (NewFeatures::NoFireDelayActive(instance)) {
             return 0.00001f;
         }
     }
@@ -176,6 +189,9 @@ inline float get_FireInterval(void * instance) {
         if (Config.ExtraMenu.Fire || UnlimitedFly) {
             return 0.00001f;
         }
+        if (NewFeatures::NoFireDelayActive(instance)) {
+            return 0.00001f;
+        }
     }
     return orig_get_FireInterval(instance);
 }
@@ -184,6 +200,9 @@ inline float (*orig_get_DelaySprintFire)(void *) = nullptr;
 inline float get_DelaySprintFire(void * instance) {
     if (instance != NULL) {
         if (Config.ExtraMenu.Fire || UnlimitedFly) {
+            return 0.00001f;
+        }
+        if (NewFeatures::NoSprintFireDelayActive(instance)) {
             return 0.00001f;
         }
     }

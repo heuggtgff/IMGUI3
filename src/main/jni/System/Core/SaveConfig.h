@@ -129,6 +129,10 @@ bool LoadConfiguration(const std::string& filename) {
         Config.NewFeaturesMenu.TriggerbotDelayMax = config["NewFeatures"]["TriggerbotDelayMax"].get<int>();
         Config.NewFeaturesMenu.NoHitFlinch = config["NewFeatures"]["NoHitFlinch"].get<bool>();
         Config.NewFeaturesMenu.NoDrift = config["NewFeatures"]["NoDrift"].get<bool>();
+        Config.NewFeaturesMenu.StableScope = config["NewFeatures"]["StableScope"].get<bool>();
+        Config.NewFeaturesMenu.NoSprintToFireDelay = config["NewFeatures"]["NoSprintToFireDelay"].get<bool>();
+        Config.NewFeaturesMenu.NoHipfireDelay = config["NewFeatures"]["NoHipfireDelay"].get<bool>();
+        Config.NewFeaturesMenu.NoFireDelay = config["NewFeatures"]["NoFireDelay"].get<bool>();
         Config.NewFeaturesMenu.DevBypass = config["NewFeatures"]["DevBypass"].get<bool>();
     }
         }

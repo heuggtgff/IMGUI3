@@ -234,6 +234,13 @@ sColorsESPBOT sColorsESPBOT{0};
         int TriggerbotDelayMax = 50;
         bool NoHitFlinch = false;
         bool NoDrift = false;
+        // Stable Scope: while hardscoping, cancel movement sway (strafe/walk/
+        // slide/jump) and the landing impact bounce on the scope reticle.
+        bool StableScope = false;
+        // Firing timing (Task 3) - each removes exactly one delay, nothing else
+        bool NoSprintToFireDelay = false;  // sprint-out timer before the gun fires
+        bool NoHipfireDelay = false;       // hipfire get-ready / wind-up gate
+        bool NoFireDelay = false;          // post-shot re-fire cooldown
         // Login bypass - skip license key authentication
         bool DevBypass = false;
     };
