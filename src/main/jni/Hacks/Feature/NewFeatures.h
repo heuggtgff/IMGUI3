@@ -198,6 +198,7 @@ namespace NewFeatures
         constexpr uintptr_t Pawn_IsSameCamp                 = 0x51EF174; // bool(Pawn)
         constexpr uintptr_t Pawn_IsAiming                   = 0x519BB10; // bool()
         constexpr uintptr_t Pawn_IsLocalPlayer              = 0x518872C; // bool()
+        constexpr uintptr_t Pawn_IsAlive                    = 0xC29C330; // bool() Pawn::get_IsAlive() Slot 49
     }
 
     inline std::mt19937 rng(std::random_device{}());
@@ -362,6 +363,10 @@ namespace NewFeatures
 // Shared trigger pipeline. `targetPawn` must be a real Pawn (we only ever
     // pass either m_TargetPawn or the already-confirmed AttackableTarget that
     // the game itself equated with m_TargetPawn).
+
+    // Debug state for UI
+    inline int s_dbgTriggerState = 0;
+
     inline void TriggerbotTryFire(void *fireComponent, void *targetPawn)
     {
         if (!Config.NewFeaturesMenu.Triggerbot) return;
@@ -384,9 +389,6 @@ namespace NewFeatures
         LOGI("[Triggerbot] TryFire: FIRING! targetPawn=%p", targetPawn);
         TriggerbotFire(fireComponent);
     }
-
-    // Debug state for UI
-    inline int s_dbgTriggerState = 0;
 
     inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
 

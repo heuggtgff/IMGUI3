@@ -1921,7 +1921,7 @@ if (runtimeState.activeTab == 4) {
                                     ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "NO TARGET");
                                 }
                                 // Test fire button (verifies StartFire works)
-                                if (custom::Button("Test Fire")) {
+                                if (custom::Button("Test Fire", ImVec2(0, 0))) {
                                     void *fireComp = (void *)GamePlay::get_LocalPawn();
                                     if (fireComp) {
                                         auto startFire = (void (*)(void *))NewFeatures::UnityRva(NewFeatures::RVA::StartFire);
