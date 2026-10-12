@@ -371,11 +371,20 @@ namespace NewFeatures
         if (!IsPawnAlive(targetPawn)) { TriggerbotClearTarget(); return; }
         if (!TriggerbotInAssistRange(fireComponent)) { TriggerbotClearTarget(); return; }
 
-        if (!TriggerbotDelayElapsed(targetPawn)) return;
+        if (!TriggerbotDelayElapsed(targetPawn)) {
+            s_dbgTriggerState = 1; // target locked, waiting for delay
+            return;
+        }
 
+        s_dbgTriggerState = 2; // firing
         LOGI("[Triggerbot] TryFire: FIRING! targetPawn=%p", targetPawn);
         TriggerbotFire(fireComponent);
     }
+
+    // Debug state for UI
+    inline int s_dbgTriggerState = 0;
+
+    inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
 
     // =====================================================================
     //  STABLE SCOPE
@@ -500,19 +509,10 @@ namespace NewFeatures
                           ? oWeaponFireComponent_Instant_CheckTarget(thiz, target, startPos, rayDir, flag, unlimitedRange)
                           : false;
 
-        // Only log when enemy detected (result=true) to avoid 60fps spam
         if (result) {
-            static bool s_lastResult = false;
-            if (!s_lastResult) {
-                LOGI("[Triggerbot] CheckTarget: enemy detected, target=%p, thiz=%p", target, thiz);
-            }
-            s_lastResult = true;
-        } else {
-            static bool s_lastResult = true;
-            if (s_lastResult) {
-                LOGI("[Triggerbot] CheckTarget: no target");
-            }
-            s_lastResult = false;
+            s_dbgTriggerState = 1; // target detected
+        } else if (s_dbgTriggerState != 0) {
+            s_dbgTriggerState = 0; // lost target
         }
 
         if (result && Config.NewFeaturesMenu.Triggerbot && !s_triggerFiring) {
@@ -531,19 +531,10 @@ namespace NewFeatures
                           ? oWeaponFireComponent_Instant_HasEnemyInPort(thiz, traceAssist)
                           : false;
 
-        // Only log on state change
         if (result) {
-            static bool s_lastResult = false;
-            if (!s_lastResult) {
-                LOGI("[Triggerbot] HasEnemyInPort: enemy in port, thiz=%p", thiz);
-            }
-            s_lastResult = true;
-        } else {
-            static bool s_lastResult = true;
-            if (s_lastResult) {
-                LOGI("[Triggerbot] HasEnemyInPort: no enemy");
-            }
-            s_lastResult = false;
+            s_dbgTriggerState = 1;
+        } else if (s_dbgTriggerState == 1) {
+            s_dbgTriggerState = 0;
         }
 
         if (result && Config.NewFeaturesMenu.Triggerbot && !s_triggerFiring) {

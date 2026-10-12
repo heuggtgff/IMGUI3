@@ -1908,6 +1908,24 @@ if (runtimeState.activeTab == 4) {
                                     custom::SliderInt("Trigger Delay Min", &Config.NewFeaturesMenu.TriggerbotDelayMin, 0, 30, "%d ms");
                                     custom::SliderInt("Trigger Delay Max", &Config.NewFeaturesMenu.TriggerbotDelayMax, 20, 100, "%d ms");
                                 }
+                                // Debug status (shows in-game)
+                                ImGui::Spacing();
+                                int dbgState = NewFeatures::GetTriggerbotDebugState();
+                                if (dbgState == 2) {
+                                    ImGui::TextColored(ImVec4(0, 1, 0, 1), ">> FIRING <<");
+                                } else if (dbgState == 1) {
+                                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "TARGET LOCKED");
+                                } else {
+                                    ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "NO TARGET");
+                                }
+                                // Test fire button (verifies StartFire works)
+                                if (custom::Button("Test Fire")) {
+                                    void *fireComp = (void *)GamePlay::get_LocalPawn();
+                                    if (fireComp) {
+                                        auto startFire = (void (*)(void *))NewFeatures::UnityRva(NewFeatures::RVA::StartFire);
+                                        if (startFire) startFire(fireComp);
+                                    }
+                                }
                                 EndContentChild(left);
                             }
                             custom::EndGroup();
