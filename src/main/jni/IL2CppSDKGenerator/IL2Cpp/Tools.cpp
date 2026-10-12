@@ -11,6 +11,7 @@
 #include <openssl/err.h>
 #include <openssl/md5.h>
 #include <string>
+#include <vector>
 #include "Tools.h"
 
 #if defined(__arm__)
@@ -95,11 +96,10 @@ bool Tools::IsPtrValid(void *addr) {
     uintptr_t address = reinterpret_cast<uintptr_t>(addr);
     if (address < 0x10000) return false;
 
-    static uintptr_t cachedStart = 0;
-    static uintptr_t cachedEnd = 0;
-    static bool cacheValid = false;
+    static std::vector<std::pair<uintptr_t, uintptr_t>> validRanges;
+    static bool rangesCached = false;
 
-    if (!cacheValid) {
+    if (!rangesCached) {
         FILE *f = fopen("/proc/self/maps", "r");
         if (f) {
             char line[512];
@@ -107,20 +107,22 @@ bool Tools::IsPtrValid(void *addr) {
                 uintptr_t start, end;
                 char perms[5];
                 if (sscanf(line, "%" PRIXPTR "-%" PRIXPTR " %4s", &start, &end, perms) == 3) {
-                    if (perms[0] == 'r' && address >= start && address < end) {
-                        fclose(f);
-                        return true;
+                    if (perms[0] == 'r') {
+                        validRanges.emplace_back(start, end);
                     }
-                    if (cachedStart == 0 || start < cachedStart) cachedStart = start;
-                    if (end > cachedEnd) cachedEnd = end;
                 }
             }
             fclose(f);
-            cacheValid = true;
+            rangesCached = true;
         }
     }
 
-    return address >= cachedStart && address < cachedEnd;
+    for (const auto& range : validRanges) {
+        if (address >= range.first && address < range.second) {
+            return true;
+        }
+    }
+    return false;
 }
 
 uintptr_t Tools::GetBaseAddress(const char *name) {
