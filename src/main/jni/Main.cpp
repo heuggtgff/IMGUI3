@@ -1908,6 +1908,10 @@ if (runtimeState.activeTab == 4) {
                                     static const char* triggerModes[] = { "Always", "ADS Only", "Firing Only" };
                                     custom::Combo("Mode", &Config.NewFeaturesMenu.TriggerbotMode, triggerModes, IM_ARRAYSIZE(triggerModes));
                                     custom::SliderInt("Delay", &Config.NewFeaturesMenu.TriggerbotDelay, 0, 500, "%d ms");
+                                    // Zone width in FULL pixels around the crosshair. Default
+                                    // 40 = whatever the device rendered before; V3's own zone is
+                                    // 2.5% of screen width, so this is deliberately user-tunable.
+                                    custom::SliderInt("Radius", &Config.NewFeaturesMenu.TriggerbotRadius, 4, 240, "%d px");
                                 }
                                 // Debug status (shows in-game). A_FireRenderTick() runs the
                                 // read-only half of the trigger here on the render thread (the
@@ -1926,8 +1930,12 @@ if (runtimeState.activeTab == 4) {
                                 } else if (dbgState == 1) {
                                     ImGui::TextColored(ImVec4(1, 1, 0, 1), "TARGET LOCKED");
                                 } else {
+                                    // Per-scan verdict only: a candidate denied
+                                    // geometry this exact scan. The lifetime
+                                    // counter must not decide this headline -
+                                    // it made "WALL BETWEEN" stick forever.
                                     ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
-                                                       td.losBlocked > 0 ? "WALL BETWEEN" : "NO TARGET");
+                                                       td.losBlockedScan > 0 ? "WALL BETWEEN" : "NO TARGET");
                                 }
                                 // Test Fire: this menu runs on the render thread and the game
                                 // only reacts to StartFire on the game thread, so the click just

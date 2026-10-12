@@ -60,6 +60,12 @@ void SaveConfiguration(const std::string& filename) {
     config["isSpeedHackEnabled"] = isSpeedHackEnabled;
     config["speedHackMultiplier"] = speedHackMultiplier;
 
+    config["NewFeatures"]["Triggerbot"] = Config.NewFeaturesMenu.Triggerbot;
+    config["NewFeatures"]["TriggerbotMode"] = Config.NewFeaturesMenu.TriggerbotMode;
+    config["NewFeatures"]["TriggerbotDelay"] = Config.NewFeaturesMenu.TriggerbotDelay;
+    config["NewFeatures"]["TriggerbotRadius"] = Config.NewFeaturesMenu.TriggerbotRadius;
+    config["NewFeatures"]["NoCrouch"] = Config.NewFeaturesMenu.NoCrouch;
+
     config["menu"][0] = menu[0];
     config["menu"][1] = menu[1];
     config["menu"][2] = menu[2];
@@ -127,6 +133,8 @@ bool LoadConfiguration(const std::string& filename) {
         Config.NewFeaturesMenu.Triggerbot = config["NewFeatures"]["Triggerbot"].get<bool>();
         Config.NewFeaturesMenu.TriggerbotMode = config["NewFeatures"]["TriggerbotMode"].get<int>();
         Config.NewFeaturesMenu.TriggerbotDelay = config["NewFeatures"]["TriggerbotDelay"].get<int>();
+        if (config["NewFeatures"].contains("TriggerbotRadius"))
+            Config.NewFeaturesMenu.TriggerbotRadius = config["NewFeatures"]["TriggerbotRadius"].get<int>();
         Config.NewFeaturesMenu.NoHitFlinch = config["NewFeatures"]["NoHitFlinch"].get<bool>();
         Config.NewFeaturesMenu.NoDrift = config["NewFeatures"]["NoDrift"].get<bool>();
         Config.NewFeaturesMenu.StableScope = config["NewFeatures"]["StableScope"].get<bool>();

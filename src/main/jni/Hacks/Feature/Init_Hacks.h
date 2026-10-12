@@ -232,6 +232,7 @@ sColorsESPBOT sColorsESPBOT{0};
         bool Triggerbot = false;
         int TriggerbotMode = 0; // 0 = Always, 1 = ADS only, 2 = Firing only (matches V3)
         int TriggerbotDelay = 0; // ms
+        int TriggerbotRadius = 40; // crosshair zone width in px (V3 default is 2.5% of width)
         bool NoHitFlinch = false;
         bool NoDrift = false;
         // Stable Scope: while hardscoping, cancel movement sway (strafe/walk/

@@ -69,6 +69,7 @@ void LoadConfig() {
         else if (key == "NewFeatures.Triggerbot") Config.NewFeaturesMenu.Triggerbot = (valueStr == "1");
         else if (key == "NewFeatures.TriggerbotMode") Config.NewFeaturesMenu.TriggerbotMode = std::stoi(valueStr);
         else if (key == "NewFeatures.TriggerbotDelay") Config.NewFeaturesMenu.TriggerbotDelay = std::stoi(valueStr);
+        else if (key == "NewFeatures.TriggerbotRadius") Config.NewFeaturesMenu.TriggerbotRadius = std::stoi(valueStr);
         else if (key == "NewFeatures.NoHitFlinch") Config.NewFeaturesMenu.NoHitFlinch = (valueStr == "1");
         else if (key == "NewFeatures.NoDrift") Config.NewFeaturesMenu.NoDrift = (valueStr == "1");
         else if (key == "NewFeatures.StableScope") Config.NewFeaturesMenu.StableScope = (valueStr == "1");
@@ -125,7 +126,7 @@ void SaveConfig() {
     file << "NewFeatures.NoCrouch " << Config.NewFeaturesMenu.NoCrouch << "\n";
     file << "NewFeatures.Triggerbot " << Config.NewFeaturesMenu.Triggerbot << "\n";
     file << "NewFeatures.TriggerbotMode " << Config.NewFeaturesMenu.TriggerbotMode << "\n";
-    file << "NewFeatures.TriggerbotDelay " << Config.NewFeaturesMenu.TriggerbotDelay << "\n";
+    file << "NewFeatures.TriggerbotDelay " << Config.NewFeaturesMenu.TriggerbotDelay << "\n";    file << "NewFeatures.TriggerbotRadius " << Config.NewFeaturesMenu.TriggerbotRadius << "\n";
     file << "NewFeatures.NoHitFlinch " << Config.NewFeaturesMenu.NoHitFlinch << "\n";
     file << "NewFeatures.NoDrift " << Config.NewFeaturesMenu.NoDrift << "\n";
     file << "NewFeatures.StableScope " << Config.NewFeaturesMenu.StableScope << "\n";

@@ -403,7 +403,8 @@ namespace NewFeatures
         int    enemyCount;      // last EnemyPawns size
         int    targets;         // scans that returned a pawn
         int    fires;           // StartFire calls made by the trigger
-        int    losBlocked;      // scans rejected because geometry is in between
+        int    losBlocked;      // lifetime: candidates rejected by geometry
+        int    losBlockedScan;  // THIS scan (reset every scan, menu reads it)
         float  radiusPx;        // crosshair radius used by the last scan
         float  closestPx;       // closest enemy to the screen centre in px (any distance)
         double lastTickTime;    // steady_clock of the last heartbeat (0 = never)
@@ -424,20 +425,25 @@ namespace NewFeatures
             std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
-    // Crosshair radius in pixels: 2.5 % of the screen width, exactly V3's zone
-    // (using min(w,h) here halved it on landscape phones, which made "NO TARGET"
-    // the normal state). The aim-assist slider may widen it, never shrink it.
+    // Crosshair radius in pixels. Default is V3's zone: 2.5 % of the screen
+    // width (== 27 px on a 1600-wide render - tight by design, aimbot is the
+    // one that snaps FOR you, this only fires when YOU aim). The menu exposes
+    // a Triggerbot Radius slider in FULL pixels so a 40-px-hardcoded value can
+    // never hide legitimate targets again (device diag showed R=40 / Near=147,
+    // i.e. the zone was simply smaller than the crosshair-to-dummy distance).
     inline float A_FireCrosshairRadiusPx()
     {
         const float w = (float)get_width();
-        if (w <= 0.0f) return 64.0f;
-
-        float radius = w * 0.025f;
+        const float fallback = w > 0.0f ? w * 0.025f : 64.0f;
+        float radius = (float)Config.NewFeaturesMenu.TriggerbotRadius;
+        if (!(radius > 0.0f)) radius = fallback;          // 0/negative -> default
+        if (radius < 4.0f)   radius = 4.0f;               // degenerate guard
+        if (radius > w * 0.5f) radius = w * 0.5f;         // never the whole screen
+        // The Aimbot's Aim-Assist slider may widen the zone, never shrink it.
         if (Config.Aim.AimAssistSize > 0.0f) {
             const float fromSlider = w * (Config.Aim.AimAssistSize / 100.0f) * 0.5f;
             if (fromSlider > radius) radius = fromSlider;
         }
-        if (radius < 8.0f) radius = 8.0f;
         return radius;
     }
 
@@ -464,17 +470,33 @@ namespace NewFeatures
     constexpr size_t AF_RAYHIT_SIZE    = 0x30;   // up to m_Collider @0x28 + pad
     constexpr size_t AF_RAYHIT_DISTOFF = 0x1C;   // m_Distance for THIS build
 
+    // 0x506C118 = the FULL 6-arg overload Raycast(origin, dir, out hitInfo,
+    // maxDistance, layerMask, QueryTriggerInteraction) - letting smoke volumes,
+    // door zones and other triggers count as "wall" caused the false blocked
+    // verdicts the devices reported. QueryTriggerInteraction.Ignore == 1.
+    constexpr uintptr_t Physics_RaycastLOS_Full = 0x506C118;
+    inline bool (*fn_PhysicsRaycastFull)(Vector3, Vector3, void *, float, long long, int) = nullptr;
+
     // Returns the first-hit distance for origin->dir, -1 when clear, -2 on
     // failure/malformed (fail-closed: the caller treats that as "blocked").
     inline float A_FireRaycastDistance(const Vector3 &origin, const Vector3 &dir, float maxDist)
     {
-        if (fn_PhysicsRaycastLOS == nullptr) return -2.0f;   // no raycast -> fail closed
         unsigned char hitBuf[AF_RAYHIT_SIZE];
         memset(hitBuf, 0, sizeof hitBuf);
+        bool hit;
 
-        bool hit = fn_PhysicsRaycastLOS(origin, dir, maxDist, hitBuf);
+        if (fn_PhysicsRaycastFull != nullptr) {
+            // layerMask = all layers (0 is ALL in Unity's mask convention:
+            // every-preset layer names start at bit 0; passing ~0 sets all 32).
+            hit = fn_PhysicsRaycastFull(origin, dir, hitBuf, maxDist,
+                                        (long long)~0ll, /*QueryTriggerInteraction.Ignore=*/1);
+        } else if (fn_PhysicsRaycastLOS != nullptr) {
+            hit = fn_PhysicsRaycastLOS(origin, dir, maxDist, hitBuf);
+        } else {
+            return -2.0f;                                   // no raycast -> fail closed
+        }
+
         if (!hit) return -1.0f;                             // clear line
-
         const float d = *(const float *)(hitBuf + AF_RAYHIT_DISTOFF);
         if (!(d >= 0.0f) || !(d <= maxDist + 0.5f)) return -2.0f;  // malformed -> blocked
         return d;
@@ -502,6 +524,9 @@ namespace NewFeatures
         TriggerbotDiag &d = g_triggerDiag;
         d.enemyCount = 0;
         d.closestPx  = -1.0f;
+        d.losBlockedScan = 0;   // THIS scan only. The lifetime counter must
+                                // never drive the menu headline - that made
+                                // "WALL BETWEEN" permanent after one legit block.
 
         MatchGame *matchGame = GamePlay::get_MatchGame();
         d.matchGame = (void *)matchGame;
@@ -606,6 +631,7 @@ namespace NewFeatures
             const bool blocked = (hit >= 0.0f) || (hit == -2.0f);
             if (blocked) {
                 d.losBlocked++;
+                d.losBlockedScan++;
                 continue;                      // geometry in between -> not shootable
             }
             if (candidates[c].dist2 < bestDist) {
@@ -823,6 +849,13 @@ namespace NewFeatures
             fn_PhysicsRaycastLOS =
                 (bool (*)(Vector3, Vector3, float, void *))rayAddr;
 
+        // Prefers the strict-trigger 6-arg overload (smoke/door volumes must
+        // not count as walls); the 2-arg is the fallback.
+        auto rayFullAddr = UnityRva(Physics_RaycastLOS_Full);
+        if (Tools::IsPtrValid(rayFullAddr))
+            fn_PhysicsRaycastFull =
+                (bool (*)(Vector3, Vector3, void *, float, long long, int))rayFullAddr;
+
         auto camMainAddr = UnityRva(RVA::Camera_get_main);
         if (Tools::IsPtrValid(camMainAddr))
             fn_CameraGetMain = (void *(*)())camMainAddr;
@@ -850,9 +883,10 @@ namespace NewFeatures
                  (unsigned long long)RVA::Pawn_Tick);
         }
 
-        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p Raycast=%p",
+        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p Raycast=%p RaycastFull=%p",
              (void *)fn_Weapon_StartFire, (void *)fn_Weapon_StopFire,
-             (void *)fn_WorldToScreen, (void *)fn_PhysicsRaycastLOS);
+             (void *)fn_WorldToScreen, (void *)fn_PhysicsRaycastLOS,
+             (void *)fn_PhysicsRaycastFull);
     }
 
     // True while the game-thread heartbeat has run recently.
