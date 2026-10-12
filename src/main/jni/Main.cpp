@@ -1926,7 +1926,8 @@ if (runtimeState.activeTab == 4) {
                                 } else if (dbgState == 1) {
                                     ImGui::TextColored(ImVec4(1, 1, 0, 1), "TARGET LOCKED");
                                 } else {
-                                    ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "NO TARGET");
+                                    ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
+                                                       td.losBlocked > 0 ? "WALL BETWEEN" : "NO TARGET");
                                 }
                                 // Test Fire: this menu runs on the render thread and the game
                                 // only reacts to StartFire on the game thread, so the click just
@@ -1949,8 +1950,9 @@ if (runtimeState.activeTab == 4) {
                                         hbAlive ? "OK" : "DEAD",
                                         td.weaponTicks, td.weaponHeldTicks, td.pawnLocalTicks);
                                     ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
-                                        "Scan=%d R=%d Enemy=%d Tgt=%d Fire=%d",
-                                        td.scans, td.renderScans, td.enemyCount, td.targets, td.fires);
+                                        "Scan=%d R=%d Enemy=%d Tgt=%d Fire=%d LOSblk=%d",
+                                        td.scans, td.renderScans, td.enemyCount,
+                                        td.targets, td.fires, td.losBlocked);
                                     ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
                                         "R=%.0f Near=%.0f px", td.radiusPx,
                                         td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx));

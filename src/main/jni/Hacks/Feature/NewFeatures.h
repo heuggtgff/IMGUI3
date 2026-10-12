@@ -209,6 +209,7 @@ namespace NewFeatures
         constexpr uintptr_t Pawn_get_LastPawnPos            = 0x51B8D30; // ref object() - Pawn.get_LastPawnPos
         constexpr uintptr_t Camera_get_main                 = 0x5024010; // Camera*() - Camera.get_main
         constexpr uintptr_t Camera_WorldToScreenPoint       = 0x5023B54; // Vector3 Camera.WorldToScreenPoint(Vector3)  <- 1-arg overload (0x5023AB8 is the 2-arg one)
+        constexpr uintptr_t Physics_RaycastLOS              = 0x506C1E4; // bool(Vector3, Vector3, out RaycastHit) - 2-arg overload (dump.cs 267239)
         constexpr uintptr_t Screen_get_width                = 0x50504BC; // int() - Screen.get_width
         constexpr uintptr_t Screen_get_height               = 0x5050520; // int() - Screen.get_height
 
@@ -367,10 +368,16 @@ namespace NewFeatures
 
     // Function pointers. Weapon::Tick is the heartbeat (see the header note);
     // StartFire/StopFire are called through raw pointers, never hooked.
+    // fn_* are resolved once at install time - getAbsoluteAddress() re-opens
+    // and regex-scans /proc/self/maps on EVERY call, so resolving them per scan
+    // was the single biggest cost of the triggerbot loop.
     inline void (*orig_Weapon_Tick)(void *, float) = nullptr;
     inline void (*orig_Pawn_Tick)(void *, float) = nullptr;
     inline void (*fn_Weapon_StartFire)(void *) = nullptr;
     inline void (*fn_Weapon_StopFire)(void *, bool) = nullptr;
+    inline Vector3 (*fn_WorldToScreen)(void *, Vector3) = nullptr;  // 1-arg overload
+    inline bool (*fn_PhysicsRaycastLOS)(Vector3, Vector3, float, void *) = nullptr;
+    inline void *(*fn_CameraGetMain)() = nullptr;
 
     // State - game thread only.
     inline bool     g_afireHoldingFire       = false;
@@ -378,6 +385,7 @@ namespace NewFeatures
     inline double   g_afireLastPressTime     = -1000.0;
     inline double   g_afireLastEvalTime      = -1000.0;
     inline bool     g_afireInTick            = false;   // re-entrancy guard
+    inline bool     g_afireLosOk             = false;   // last scan: target has LOS
     inline bool     g_testFireRequest        = false;   // set by the menu (render thread)
     inline double   g_testFireRequestTime    = -1000.0;
 
@@ -395,6 +403,7 @@ namespace NewFeatures
         int    enemyCount;      // last EnemyPawns size
         int    targets;         // scans that returned a pawn
         int    fires;           // StartFire calls made by the trigger
+        int    losBlocked;      // scans rejected because geometry is in between
         float  radiusPx;        // crosshair radius used by the last scan
         float  closestPx;       // closest enemy to the screen centre in px (any distance)
         double lastTickTime;    // steady_clock of the last heartbeat (0 = never)
@@ -439,6 +448,51 @@ namespace NewFeatures
                ((Pawn *)localPawn)->m_IsAlive();
     }
 
+    // ---- Line of sight (the V3 wall check, for this build's exact layout) ---
+    // Physics.Raycast(out RaycastHit)  @0x506C1E4  - the plain 2-arg overload,
+    // END of the overload list after the 4-arg bool-returning one (dump.cs:
+    // 267226..267244). Cast per CANDIDATE inside the scan: its result only
+    // decides whether a pawn inside the zone is shootable, it cannot widen the
+    // candidate set, so total cast count is unchanged and the cost stays one
+    // ray per candidate (usually 0-1, hard cap below).
+    //
+    // RaycastHit struct layout at dump.cs line 268905 (TypeDefIndex 1838):
+    //   m_Point Vector3 @0x00, m_Normal @0x0C, m_FaceID int @0x18,
+    //   m_Distance float @0x1C, m_UV @0x20, m_Collider @0x28
+    // NOTE: V3 read the distance at +0x20; THIS build has it at 0x1C. Reading
+    // a stale-struct offset returns m_UV as "distance" - fail-closed, but wrong.
+    constexpr size_t AF_RAYHIT_SIZE    = 0x30;   // up to m_Collider @0x28 + pad
+    constexpr size_t AF_RAYHIT_DISTOFF = 0x1C;   // m_Distance for THIS build
+
+    // Returns the first-hit distance for origin->dir, -1 when clear, -2 on
+    // failure/malformed (fail-closed: the caller treats that as "blocked").
+    inline float A_FireRaycastDistance(const Vector3 &origin, const Vector3 &dir, float maxDist)
+    {
+        if (fn_PhysicsRaycastLOS == nullptr) return -2.0f;   // no raycast -> fail closed
+        unsigned char hitBuf[AF_RAYHIT_SIZE];
+        memset(hitBuf, 0, sizeof hitBuf);
+
+        bool hit = fn_PhysicsRaycastLOS(origin, dir, maxDist, hitBuf);
+        if (!hit) return -1.0f;                             // clear line
+
+        const float d = *(const float *)(hitBuf + AF_RAYHIT_DISTOFF);
+        if (!(d >= 0.0f) || !(d <= maxDist + 0.5f)) return -2.0f;  // malformed -> blocked
+        return d;
+    }
+
+    // True when the ray from the camera to the target position is NOT stopped
+    // by geometry before reaching it (0.35 m slack for skin/collider width).
+    inline bool A_FireHasLineOfSight(const Vector3 &camPos, const Vector3 &targetPos)
+    {
+        Vector3 to = targetPos - camPos;
+        const float dist = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
+        if (dist < 0.01f) return true;
+        const float inv = 1.0f / dist;
+        const Vector3 dir(to.x * inv, to.y * inv, to.z * inv);
+        const float hitDist = A_FireRaycastDistance(camPos, dir, dist);
+        return hitDist < 0.0f || hitDist >= dist - 0.35f;
+    }
+
     // Nearest live enemy whose head bone or mesh root projects inside the
     // crosshair zone and is in front of the camera. Returns 0 when there is
     // none. Uses only the accessors this build proves in-game (the ESP walks
@@ -470,13 +524,19 @@ namespace NewFeatures
         const float radiusSq = radius * radius;
         d.radiusPx = radius;
 
-        // api8 / 0x5023AB8 - the exact entry point V3's working triggerbot uses
-        // and the one this build's ESP already calls every frame.
-        auto worldToScreen = (Vector3 (*)(void *, Vector3))UnityRva(RVA::Camera_WorldToScreenPoint);
-        if (worldToScreen == nullptr) return 0;
+        // fn_WorldToScreen is resolved once at install time (getAbsoluteAddress
+        // re-opens /proc/self/maps per call - resolving per scan was a big part
+        // of the lag).
+        auto worldToScreen = fn_WorldToScreen;
+        auto camPos = cam->get_transform()->get_position();
 
-        uintptr_t best = 0;
-        float bestDist = radiusSq + 1.0f;      // strictly inside the zone
+        // ---- Phase 1: who is inside the crosshair zone? (screen-space, no ray)
+        constexpr int MAX_CANDIDATES = 16;
+        struct Candidate { Pawn *pawn; float dist2; Vector3 aimPoint; };
+        Candidate candidates[MAX_CANDIDATES];
+        int nCandidates = 0;
+        Pawn *bestNoLos = nullptr;             // nearest pawn, LOS not yet known
+        float bestNoLosDist2 = radiusSq + 1.0f;
 
         for (int i = 0; i < count; i++) {
             Pawn *pawn = items[i];
@@ -484,10 +544,12 @@ namespace NewFeatures
             if (!pawn->m_IsAlive()) continue;
 
             float d2 = -1.0f;                  // best of head/mesh for this pawn
+            Vector3 aim;
 
             Transform *headBone = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
             if (Tools::IsPtrValid((void *)headBone)) {
-                const Vector3 sc = worldToScreen(cam, headBone->get_position());
+                aim = headBone->get_position();
+                const Vector3 sc = worldToScreen(cam, aim);
                 if (sc.z > 0.0f) {             // in front of the camera
                     const float dx = sc.x - cx;
                     const float dy = sc.y - cy;
@@ -498,7 +560,8 @@ namespace NewFeatures
             if (d2 < 0.0f) {                   // head not projectable -> try the body
                 Transform *mesh = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
                 if (Tools::IsPtrValid((void *)mesh)) {
-                    const Vector3 sc = worldToScreen(cam, mesh->get_position());
+                    aim = mesh->get_position();
+                    const Vector3 sc = worldToScreen(cam, aim);
                     if (sc.z > 0.0f) {
                         const float dx = sc.x - cx;
                         const float dy = sc.y - cy;
@@ -511,11 +574,50 @@ namespace NewFeatures
 
             if (d.closestPx < 0.0f || d2 < d.closestPx) d.closestPx = d2;
 
-            if (d2 <= radiusSq && d2 < bestDist) {
-                best = (uintptr_t)pawn;
-                bestDist = d2;
+            if (d2 > radiusSq) continue;       // outside the zone, not a candidate
+
+            if (nCandidates < MAX_CANDIDATES) {
+                candidates[nCandidates].pawn = pawn;
+                candidates[nCandidates].dist2 = d2;
+                candidates[nCandidates].aimPoint = aim;
+                nCandidates++;
+            }
+            if (d2 < bestNoLosDist2) { bestNoLosDist2 = d2; bestNoLos = pawn; }
+        }
+
+        // ---- Phase 2: only candidates get the LOS ray (one ray each, usually
+        // 0-1 pawns near the crosshair; hard cap 16 so a crowd can't spike it).
+        // The nearest-shootable pawn goes noLOS; if raycasting is unavailable
+        // the nearest zone pawn goes there too (fail-open for the INDICATOR
+        // only - the fire path re-checks and fails closed).
+        uintptr_t best = 0;
+        float bestDist = radiusSq + 1.0f;
+        for (int c = 0; c < nCandidates; c++) {
+            Vector3 to = candidates[c].aimPoint - camPos;
+            const float len = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
+            if (len < 0.0001f) continue;
+            const Vector3 dir(to.x / len, to.y / len, to.z / len);
+
+            // First-hit distance within the LOS ray (a little beyond the target,
+            // for collider skins). -1 = clear, >=0 = hit, -2 = malformed (blocked).
+            const float hit = A_FireRaycastDistance(
+                camPos, dir,
+                Vector3::Distance(camPos, candidates[c].aimPoint) + 0.35f);
+            const bool blocked = (hit >= 0.0f) || (hit == -2.0f);
+            if (blocked) {
+                d.losBlocked++;
+                continue;                      // geometry in between -> not shootable
+            }
+            if (candidates[c].dist2 < bestDist) {
+                best     = (uintptr_t)candidates[c].pawn;
+                bestDist = candidates[c].dist2;
             }
         }
+
+        if (best == 0 && fn_PhysicsRaycastLOS == nullptr && bestNoLos != nullptr)
+            best = (uintptr_t)bestNoLos;
+
+        g_afireLosOk = (best != 0);            // scan verdict: this target is shootable
         if (best != 0) d.targets++;
         return best;
     }
@@ -608,7 +710,12 @@ namespace NewFeatures
         if (g_afireHoldingFire && g_afireFiringOn != (void *)held)
             A_FireReleaseTrigger(nullptr);
 
-        bool ready = A_FireFindTarget() != 0;
+        // A_FireFindTarget already LOS-checked the winning candidate this scan
+        // (g_afireLosOk). No second raycast here - shooting through walls is on
+        // the scan's verdict, and a stale-verdict window of <=10 ms is what
+        // A_FireTick's own gate absorbs.
+        const uintptr_t target = A_FireFindTarget();
+        bool ready = target != 0 && g_afireLosOk;
 
         // Modes: 0 = Always, 1 = ADS only, 2 = Firing only.
         if (ready && Config.NewFeaturesMenu.TriggerbotMode == 1) {
@@ -692,6 +799,9 @@ namespace NewFeatures
     // Dobby's 16-byte trampoline never eats a neighbouring function.
     inline void InstallTriggerbotHooks()
     {
+        // Resolve every per-scan fn pointer ONCE. getAbsoluteAddress() re-opens
+        // and regex-scans the whole /proc/self/maps text on every call; it was
+        // being called ~100x/s during scans and in every scan loop iteration.
         auto startFireAddr = UnityRva(RVA::Weapon_StartFire);
         if (Tools::IsPtrValid(startFireAddr))
             fn_Weapon_StartFire = (void (*)(void *))startFireAddr;
@@ -699,6 +809,23 @@ namespace NewFeatures
         auto stopFireAddr = UnityRva(RVA::Weapon_StopFire);
         if (Tools::IsPtrValid(stopFireAddr))
             fn_Weapon_StopFire = (void (*)(void *, bool))stopFireAddr;
+
+        auto w2sAddr = UnityRva(RVA::Camera_WorldToScreenPoint);
+        if (Tools::IsPtrValid(w2sAddr))
+            fn_WorldToScreen = (Vector3 (*)(void *, Vector3))w2sAddr;
+
+        // 0x506C1E4 = Physics.Raycast(Vector3, Vector3, out RaycastHit) - the
+        // plain 2-arg overload (dump.cs 267239-267240). RaycastHit layout for
+        // THIS build: m_Distance @0x1C (V3 read 0x20 - wrong here).
+        static_assert(RVA::Physics_RaycastLOS == 0x506C1E4, "Physics_RaycastLOS must stay 0x506C1E4 - the 2-arg out-struct overload");
+        auto rayAddr = UnityRva(RVA::Physics_RaycastLOS);
+        if (Tools::IsPtrValid(rayAddr))
+            fn_PhysicsRaycastLOS =
+                (bool (*)(Vector3, Vector3, float, void *))rayAddr;
+
+        auto camMainAddr = UnityRva(RVA::Camera_get_main);
+        if (Tools::IsPtrValid(camMainAddr))
+            fn_CameraGetMain = (void *(*)())camMainAddr;
 
         void *weaponTick = UnityRva(RVA::Weapon_Tick);
         if (Tools::IsPtrValid(weaponTick)) {
@@ -723,8 +850,9 @@ namespace NewFeatures
                  (unsigned long long)RVA::Pawn_Tick);
         }
 
-        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p",
-             (void *)fn_Weapon_StartFire, (void *)fn_Weapon_StopFire);
+        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p Raycast=%p",
+             (void *)fn_Weapon_StartFire, (void *)fn_Weapon_StopFire,
+             (void *)fn_WorldToScreen, (void *)fn_PhysicsRaycastLOS);
     }
 
     // True while the game-thread heartbeat has run recently.
