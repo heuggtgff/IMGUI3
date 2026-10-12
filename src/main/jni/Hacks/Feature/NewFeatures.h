@@ -583,28 +583,30 @@ namespace NewFeatures
     // Hook installation
     inline void InstallTriggerbotHooks()
     {
-        // Weapon::Tick
+        // Weapon::Tick - primary game-thread heartbeat for triggerbot
         Tools::Hook(UnityRva(RVA::Weapon_Tick),
                     (void *)&Hook_Weapon_Tick,
                     (void **)&orig_Weapon_Tick);
-        
-        // Weapon::StartFire
-        Tools::Hook(UnityRva(RVA::Weapon_StartFire),
-                    (void *)nullptr, // not hooking, just getting original
-                    (void **)&orig_Weapon_StartFire);
-        
-        // Weapon::StopFire
-        Tools::Hook(UnityRva(RVA::Weapon_StopFire),
-                    (void *)nullptr,
-                    (void **)&orig_Weapon_StopFire);
 
-        // TickLocalPlayer (secondary heartbeat)
+        // Weapon::StartFire - get original for calling when trigger condition met
+        auto startFireAddr = UnityRva(RVA::Weapon_StartFire);
+        if (Tools::IsPtrValid(startFireAddr)) {
+            orig_Weapon_StartFire = (void (*)(void *))startFireAddr;
+        }
+
+        // Weapon::StopFire - get original for releasing the trigger
+        auto stopFireAddr = UnityRva(RVA::Weapon_StopFire);
+        if (Tools::IsPtrValid(stopFireAddr)) {
+            orig_Weapon_StopFire = (void (*)(void *, bool))stopFireAddr;
+        }
+
+        // TickLocalPlayer (secondary heartbeat) - helps ensure triggerbot runs
         Tools::Hook(UnityRva(RVA::TickLocalPlayer),
                     (void *)&Hook_TickLocalPlayer,
                     (void **)&orig_TickLocalPlayer);
     }
 
-    inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
+inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
 
     // Layout of WeaponShakeController.WeaponShakeOffsets (private nested struct).
     struct WeaponShakeOffsets

@@ -2331,7 +2331,6 @@ if (runtimeState.activeTab == 4) {
 
     UpdateCamoOverride();
     ApplyWorldVisualsRuntime();
-    InstallBRClassEspConfigHook();
 
     auto currentTime = std::chrono::steady_clock::now();
     if (currentTime - lastScreenshotTime >= screenshotInterval) {
