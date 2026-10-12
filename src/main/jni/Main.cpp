@@ -215,9 +215,24 @@ namespace android::anwcreator::detail::framework
                 if (m) builder = env->CallObjectMethod(builder, m, (jint)f, (jint)mask);
                 return *this;
             }
-            Builder &SetSkipScreenshot(bool skip) {
-                if (skip) { constexpr uint32_t F = 0x40; SetFlags(F, F); }
-                return *this;
+            // SurfaceControl.SKIP_SCREENSHOT (0x40, AOSP API 31+) makes the
+            // layer and its children invisible to screenshots, mirroring and
+            // screen recording. It is only reachable through the builder's
+            // private setFlags(int, int) helper (see AOSP SurfaceControl.java),
+            // which JNI can call. Returns true only when the call really
+            // reached the framework, so a caller can refuse to build a
+            // "hidden" overlay that is not hidden at all.
+            bool SetSkipScreenshot(bool skip) {
+                if (!skip || !builder || !builderClass) return false;
+                constexpr int32_t FLAG_SKIP_SCREENSHOT = 0x40;
+                jmethodID m = env->GetMethodID(builderClass, "setFlags",
+                    "(II)Landroid/view/SurfaceControl$Builder;");
+                if (!m) { if (env->ExceptionCheck()) env->ExceptionClear(); return false; }
+                jobject r = env->CallObjectMethod(builder, m,
+                    (jint)FLAG_SKIP_SCREENSHOT, (jint)FLAG_SKIP_SCREENSHOT);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+                if (r) builder = r;
+                return true;
             }
             jobject Build() {
                 if (!builder) return nullptr;
@@ -283,6 +298,20 @@ namespace android::anwcreator::detail::framework
                 if (m) transaction = env->CallObjectMethod(transaction, m, c, p);
                 return *this;
             }
+            // Public @hide SurfaceControl.Transaction#setSkipScreenshot
+            // (API 31+): the framework's own way of flagging an existing layer
+            // as screenshot / screen-recording invisible. Returns true when the
+            // method exists on this Android version.
+            bool SetSkipScreenshot(jobject sc, bool skip) {
+                if (!transaction || !sc) return false;
+                jmethodID m = env->GetMethodID(transactionClass, "setSkipScreenshot",
+                    "(Landroid/view/SurfaceControl;Z)Landroid/view/SurfaceControl$Transaction;");
+                if (!m) { if (env->ExceptionCheck()) env->ExceptionClear(); return false; }
+                jobject r = env->CallObjectMethod(transaction, m, sc, (jboolean)skip);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+                if (r) transaction = r;
+                return true;
+            }
             Transaction &Remove(jobject sc) {
                 if (!transaction || !sc) return *this;
                 jmethodID m = env->GetMethodID(transactionClass, "remove", "(Landroid/view/SurfaceControl;)Landroid/view/SurfaceControl$Transaction;");
@@ -338,9 +367,11 @@ namespace android::anwcreator::detail
 {
     struct WindowContext {
         std::unique_ptr<jni::GlobalRef> surfaceControl, surface, parentSurfaceControl;
-        ANativeWindow *nativeWindow; int32_t width, height; bool skipScreenshot;
+        ANativeWindow *nativeWindow; int32_t width, height;
+        bool skipScreenshot, skipScreenshotApplied;
         WindowContext() : surfaceControl(nullptr), surface(nullptr), parentSurfaceControl(nullptr),
-                          nativeWindow(nullptr), width(0), height(0), skipScreenshot(false) {}
+                          nativeWindow(nullptr), width(0), height(0), skipScreenshot(false),
+                          skipScreenshotApplied(false) {}
         ~WindowContext() { Release(); }
         void Release() {
             if (nativeWindow) { ANativeWindow_release(nativeWindow); nativeWindow = nullptr; }
@@ -383,16 +414,22 @@ namespace android
             if (!parentSC && je.CheckException()) return nullptr;
             anwcreator::detail::framework::SurfaceControl::Builder b(je);
             if (!b.IsValid()) return nullptr;
-            b.SetName(o.name).SetBufferSize(w, h).SetFormat(1).SetOpaque(false).SetSkipScreenshot(o.skipScreenshot);
+            // Format 1 == WINDOW_FORMAT_RGBA_8888 == it can carry per-pixel
+            // alpha, which the overlay needs to stay see-through.
+            b.SetName(o.name).SetBufferSize(w, h).SetFormat(1).SetOpaque(false);
+            const bool skipViaBuilder = b.SetSkipScreenshot(o.skipScreenshot);
             if (parentSC) b.SetParent(parentSC);
             jobject lsc = b.Build();
             if (!lsc || je.CheckException()) { if (parentSC) je->DeleteLocalRef(parentSC); return nullptr; }
             auto ctx = std::make_unique<anwcreator::detail::WindowContext>();
             ctx->width = w; ctx->height = h; ctx->skipScreenshot = o.skipScreenshot;
+            bool skipViaTransaction = false;
             ctx->surfaceControl = std::make_unique<anwcreator::detail::jni::GlobalRef>(je, lsc);
             if (parentSC) ctx->parentSurfaceControl = std::make_unique<anwcreator::detail::jni::GlobalRef>(je, parentSC);
             {
                 anwcreator::detail::framework::SurfaceControl::Transaction t(je);
+                if (t.IsValid() && o.skipScreenshot)
+                    skipViaTransaction = t.SetSkipScreenshot(ctx->surfaceControl->get(), true);
                 if (t.IsValid())
                     t.SetAlpha(ctx->surfaceControl->get(), 1.0f)
                      .SetLayer(ctx->surfaceControl->get(), 0x7FFFFFFE)
@@ -411,6 +448,7 @@ namespace android
                 je->DeleteLocalRef(ls); je->DeleteLocalRef(lsc); if (parentSC) je->DeleteLocalRef(parentSC);
                 return nullptr;
             }
+            ctx->skipScreenshotApplied = o.skipScreenshot && (skipViaBuilder || skipViaTransaction);
             ANativeWindow *result = ctx->nativeWindow;
             m_windowContexts.emplace(result, std::move(ctx));
             je->DeleteLocalRef(ls); je->DeleteLocalRef(lsc); if (parentSC) je->DeleteLocalRef(parentSC);
@@ -441,6 +479,12 @@ namespace android
             if (w) *w = it->second->width;
             if (h) *h = it->second->height;
             return true;
+        }
+
+        // True only when the layer really carries SurfaceControl.SKIP_SCREENSHOT.
+        static bool SkipScreenshotApplied(ANativeWindow *nw) {
+            auto it = m_windowContexts.find(nw);
+            return it != m_windowContexts.end() && it->second->skipScreenshotApplied;
         }
 
         static void EnsureVisible(ANativeActivity *a, ANativeWindow *nw) {
@@ -524,24 +568,25 @@ namespace android {
 HideRecAImGui::HideRecAImGui(const Options& o):m_options(o){}
 HideRecAImGui::~HideRecAImGui(){UnInitEnvironment();}
 
+// WINDOW_FORMAT_RGBA_8888 == AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM == 1;
+// no other Android window format carries an alpha channel.
+static bool HideRecConfigIsTranslucent(EGLDisplay d, EGLConfig cfg) {
+    if (d == EGL_NO_DISPLAY || !cfg) return false;
+    EGLint alpha = 0, visual = 0;
+    if (eglGetConfigAttrib(d, cfg, EGL_ALPHA_SIZE, &alpha) != EGL_TRUE || alpha < 8) return false;
+    if (eglGetConfigAttrib(d, cfg, EGL_NATIVE_VISUAL_ID, &visual) != EGL_TRUE) return false;
+    return visual == 1;
+}
+
 EGLConfig HideRecAImGui::FindConfig(EGLDisplay d, EGLContext gc) {
+    (void)gc;
+    // The overlay is composited ON TOP of the game, so every pixel ImGui does
+    // not draw stays (0,0,0,0) and has to blend through to the game. A config
+    // without an alpha channel turns those pixels into opaque black and the
+    // overlay blacks the whole display out - that is the "Hide Stream black
+    // screen". Do NOT inherit the game's EGLConfig here: the game draws to an
+    // opaque window, so its config usually has EGL_ALPHA_SIZE == 0.
     if (d == EGL_NO_DISPLAY) return nullptr;
-    EGLint gid = 0;
-    if (gc != EGL_NO_CONTEXT && eglQueryContext(d, gc, EGL_CONFIG_ID, &gid) == EGL_TRUE && gid != 0) {
-        EGLint total = 0;
-        if (eglGetConfigs(d, nullptr, 0, &total) == EGL_TRUE && total > 0) {
-            std::vector<EGLConfig> cfgs((size_t)total);
-            if (eglGetConfigs(d, cfgs.data(), total, &total) == EGL_TRUE) {
-                for (int i = 0; i < total; i++) {
-                    EGLint id = 0, st = 0, rt = 0;
-                    eglGetConfigAttrib(d, cfgs[i], EGL_CONFIG_ID, &id);
-                    eglGetConfigAttrib(d, cfgs[i], EGL_SURFACE_TYPE, &st);
-                    eglGetConfigAttrib(d, cfgs[i], EGL_RENDERABLE_TYPE, &rt);
-                    if (id == gid && (st & EGL_WINDOW_BIT) && (rt & 0x40)) return cfgs[i];
-                }
-            }
-        }
-    }
     const EGLint attrs[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
         EGL_RENDERABLE_TYPE, 0x00000040,
@@ -549,7 +594,8 @@ EGLConfig HideRecAImGui::FindConfig(EGLDisplay d, EGLContext gc) {
         EGL_NONE
     };
     EGLConfig cfg = nullptr; EGLint count = 0;
-    if (eglChooseConfig(d, attrs, &cfg, 1, &count) == EGL_TRUE && count > 0 && cfg) return cfg;
+    if (eglChooseConfig(d, attrs, &cfg, 1, &count) == EGL_TRUE && count > 0 && cfg &&
+        HideRecConfigIsTranslucent(d, cfg)) return cfg;
     EGLint total = 0;
     if (eglGetConfigs(d, nullptr, 0, &total) != EGL_TRUE || total <= 0) return nullptr;
     std::vector<EGLConfig> cfgs((size_t)total);
@@ -557,8 +603,10 @@ EGLConfig HideRecAImGui::FindConfig(EGLDisplay d, EGLContext gc) {
     for (int i = 0; i < total; i++) {
         EGLint st = 0, rt = 0;
         eglGetConfigAttrib(d, cfgs[i], EGL_SURFACE_TYPE, &st);
+        if (!(st & EGL_WINDOW_BIT)) continue;
         eglGetConfigAttrib(d, cfgs[i], EGL_RENDERABLE_TYPE, &rt);
-        if ((st & EGL_WINDOW_BIT) && (rt & 0x40)) return cfgs[i];
+        if (!(rt & 0x00000040)) continue;
+        if (HideRecConfigIsTranslucent(d, cfgs[i])) return cfgs[i];
     }
     return nullptr;
 }
@@ -569,17 +617,46 @@ bool HideRecAImGui::InitEnvironment(EGLDisplay d, EGLContext gc, int32_t w, int3
     o.name = "HideRecSecure"; o.width = w; o.height = h; o.skipScreenshot = m_options.skipScreenshot;
     m_nativeWindow = ANwCreator::Create(m_options.activity, o);
     if (!m_nativeWindow) return false;
+    // SKIP_SCREENSHOT needs Android 12 (API 31) or newer. Without it the
+    // overlay hides nothing and would only sit above the game, so bail out and
+    // let the caller draw the menu normally instead.
+    if (m_options.skipScreenshot && !ANwCreator::SkipScreenshotApplied(m_nativeWindow)) {
+        LOGW("Hide Stream: SKIP_SCREENSHOT unavailable (needs Android 12+); drawing the menu normally");
+        UnInitEnvironment();
+        return false;
+    }
     m_display = d; m_gameContext = gc;
     EGLConfig cfg = FindConfig(m_display, gc);
-    if (!cfg) { UnInitEnvironment(); return false; }
+    if (!cfg) {
+        LOGW("Hide Stream: no translucent GLES3 EGL config; drawing the menu normally");
+        UnInitEnvironment();
+        return false;
+    }
     EGLint fmt = 0;
     if (eglGetConfigAttrib(m_display, cfg, EGL_NATIVE_VISUAL_ID, &fmt) != EGL_TRUE) { UnInitEnvironment(); return false; }
     ANativeWindow_setBuffersGeometry(m_nativeWindow, w, h, fmt);
+    // Last line of defence against the black screen: never present a window
+    // that cannot carry alpha, whatever the driver claims about the config.
+    if (fmt != 1 || ANativeWindow_getFormat(m_nativeWindow) != 1) {
+        LOGW("Hide Stream: overlay window format %d/%d is not RGBA_8888; drawing the menu normally",
+             (int)fmt, (int)ANativeWindow_getFormat(m_nativeWindow));
+        UnInitEnvironment();
+        return false;
+    }
     m_surface = eglCreateWindowSurface(m_display, cfg, m_nativeWindow, nullptr);
     if (m_surface == EGL_NO_SURFACE) { UnInitEnvironment(); return false; }
+    // The overlay context MUST live in the game context's share group: ImGui's
+    // shader program, font texture and vertex/index buffers were created on the
+    // game context, and GL object handles are not portable between unshared
+    // contexts. Rendering there without sharing draws nothing at all (the
+    // silently empty overlay), so a failed share is a hard failure.
     const EGLint ctxAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
-    m_overlayContext = eglCreateContext(m_display, cfg, EGL_NO_CONTEXT, ctxAttrs);
-    if (m_overlayContext == EGL_NO_CONTEXT) { UnInitEnvironment(); return false; }
+    m_overlayContext = eglCreateContext(m_display, cfg, gc, ctxAttrs);
+    if (m_overlayContext == EGL_NO_CONTEXT) {
+        LOGW("Hide Stream: could not share the EGL context with the game; drawing the menu normally");
+        UnInitEnvironment();
+        return false;
+    }
     EGLint rw = 0, rh = 0;
     if (eglQuerySurface(m_display, m_surface, EGL_WIDTH, &rw) == EGL_TRUE && rw > 0) m_screenWidth = rw; else m_screenWidth = w;
     if (eglQuerySurface(m_display, m_surface, EGL_HEIGHT, &rh) == EGL_TRUE && rh > 0) m_screenHeight = rh; else m_screenHeight = h;
@@ -618,6 +695,14 @@ bool HideRecAImGui::RenderDrawData(ImDrawData* dd, EGLDisplay gd, EGLSurface gs,
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(dd);
+    // Diagnostic: an error here means the overlay context cannot use ImGui's
+    // GL objects (share group refused by the driver, ...). Report it once
+    // instead of silently presenting an empty overlay.
+    GLenum glErr = glGetError();
+    if (glErr != GL_NO_ERROR) {
+        static bool loggedOnce = false;
+        if (!loggedOnce) { loggedOnce = true; LOGW("Hide Stream: overlay draw error 0x%X", (unsigned)glErr); }
+    }
     EGLBoolean ok = sb(m_display, m_surface);
     if (od != EGL_NO_DISPLAY && oc != EGL_NO_CONTEXT) eglMakeCurrent(od, odr, ore, oc);
     else eglMakeCurrent(m_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -2217,8 +2302,12 @@ if (runtimeState.activeTab == 4) {
             rendered = ZEL_Render(ImGui::GetDrawData(), dpy, surface, gameCtx,
                                   (android::HideRecAImGui::SwapBuffersFn)old_eglSwapBuffers);
         }
-        // ZEL_Render handles swapping its own overlay surface.
-        // If it fails, we fall through to normal rendering below.
+        // ZEL_Render swaps its own overlay surface. When it cannot present the
+        // menu there (Android < 12, no translucent EGL config, layer/context
+        // creation failed, ...) the layer has to go BEFORE the visible fallback
+        // below: a half initialised overlay is exactly what blacks the whole
+        // screen out, and it would also cover the menu the fallback draws.
+        if (!rendered) ZEL_Shutdown();
     }
     if (!rendered) {
         // Match variant-3 behavior: tear down any stale overlay environment
