@@ -133,7 +133,7 @@ bool LoadConfiguration(const std::string& filename) {
         Config.NewFeaturesMenu.NoSprintToFireDelay = config["NewFeatures"]["NoSprintToFireDelay"].get<bool>();
         Config.NewFeaturesMenu.NoHipfireDelay = config["NewFeatures"]["NoHipfireDelay"].get<bool>();
         Config.NewFeaturesMenu.NoFireDelay = config["NewFeatures"]["NoFireDelay"].get<bool>();
-        Config.NewFeaturesMenu.DevBypass = config["NewFeatures"]["DevBypass"].get<bool>();
+        // DevBypass removed (login bypass).
     }
         }
 

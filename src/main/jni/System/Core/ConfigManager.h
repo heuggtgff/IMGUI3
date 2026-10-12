@@ -75,7 +75,7 @@ void LoadConfig() {
         else if (key == "NewFeatures.NoSprintToFireDelay") Config.NewFeaturesMenu.NoSprintToFireDelay = (valueStr == "1");
         else if (key == "NewFeatures.NoHipfireDelay") Config.NewFeaturesMenu.NoHipfireDelay = (valueStr == "1");
         else if (key == "NewFeatures.NoFireDelay") Config.NewFeaturesMenu.NoFireDelay = (valueStr == "1");
-        else if (key == "NewFeatures.DevBypass") Config.NewFeaturesMenu.DevBypass = (valueStr == "1");
+        // DevBypass removed (login bypass).
         else if (key == "ExtraMenu.WallHack") Config.ExtraMenu.WallHack = (valueStr == "1");
     }
     file.close();
@@ -132,7 +132,7 @@ void SaveConfig() {
     file << "NewFeatures.NoSprintToFireDelay " << Config.NewFeaturesMenu.NoSprintToFireDelay << "\n";
     file << "NewFeatures.NoHipfireDelay " << Config.NewFeaturesMenu.NoHipfireDelay << "\n";
     file << "NewFeatures.NoFireDelay " << Config.NewFeaturesMenu.NoFireDelay << "\n";
-    file << "NewFeatures.DevBypass " << Config.NewFeaturesMenu.DevBypass << "\n";
+    // DevBypass removed (login bypass).
     file << "ExtraMenu.WallHack " << Config.ExtraMenu.WallHack << "\n";
     
     file.close();

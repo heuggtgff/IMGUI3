@@ -927,11 +927,6 @@ static int page = 1;
 static int activeTab = 1;
 bool g_LogoPreviewMode = false;
 static bool isLogin = false;
-static void InitDevBypass() {
-    if (Config.NewFeaturesMenu.DevBypass) {
-        isLogin = true;
-    }
-}
 static std::string err;
 static std::string storedKey = "";
 static char s[256];
@@ -1805,7 +1800,6 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 custom::Checkbox("No Fire Delay", &Config.NewFeaturesMenu.NoFireDelay);
                                 custom::Separator();
                                 // Dev / Debug options
-                                custom::Checkbox("Dev Bypass (skip login)", &Config.NewFeaturesMenu.DevBypass);
                                 custom::Separator();
                                 custom::Separator();
 
@@ -2498,7 +2492,7 @@ Tools::Hook((void*)KittyMemory::getAbsoluteAddress(OBFUSCATE("libanogs.so"), 0x4
 
 __attribute__((constructor))
 	void native_Init(JNIEnv *env, jclass clazz, jobject mContext) {
-	    InitDevBypass();
+	    // DevBypass removed: login bypass was an undocumented backdoor. Auth via the panel only.
 	}
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {

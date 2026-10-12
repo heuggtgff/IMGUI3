@@ -241,8 +241,6 @@ sColorsESPBOT sColorsESPBOT{0};
         bool NoSprintToFireDelay = false;  // sprint-out timer before the gun fires
         bool NoHipfireDelay = false;       // hipfire get-ready / wind-up gate
         bool NoFireDelay = false;          // post-shot re-fire cooldown
-        // Login bypass - skip license key authentication
-        bool DevBypass = false;
     };
     sNewFeaturesMenu NewFeaturesMenu{0};
 };

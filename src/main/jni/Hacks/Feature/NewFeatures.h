@@ -381,17 +381,6 @@ namespace NewFeatures
         return Config.NewFeaturesMenu.StableScope && IsLocalPlayerScoping();
     }
 
-    // Pin the breathing accumulators (0x774 / 0x5A0).  Kept from the old
-    // "No Drift" fix, but it is only one of the three sway sources.
-    inline void PinBreatheFields(void *fireComponent)
-    {
-        float *countdown = (float *)((uintptr_t)fireComponent + Offsets::WeaponFire_AimmingBreatheCD);
-        if (*countdown != 0.0f) *countdown = 0.0f;
-        float *trembling = (float *)((uintptr_t)fireComponent + Offsets::WeaponFire_BreatheTremblingPos);
-        if (trembling[0] != 0.0f) trembling[0] = 0.0f;
-        if (trembling[1] != 0.0f) trembling[1] = 0.0f;
-    }
-
     // Layout of WeaponShakeController.WeaponShakeOffsets (private nested struct).
     struct WeaponShakeOffsets
     {
@@ -506,14 +495,16 @@ namespace NewFeatures
                           : false;
 
         if (result && Config.NewFeaturesMenu.Triggerbot && !s_triggerFiring) {
-            // The game locks m_TargetPawn while running its own aim-assist /
-            // port check.  Only fire when the confirmed AttackableTarget *is*
-            // that pawn - that guarantees `target` is a real Pawn and not a
-            // destructible/vehicle, and it is the "use the game's own target
-            // detection" requirement.
+            // [Out] target is the game's OWN confirmed hit target. If CheckTarget
+            // returned true, that object is a valid AttackableTarget. Try to treat
+            // it as a Pawn: the game sets m_TargetPawn to it during the fire path,
+            // so read m_TargetPawn first; if it is already set and points at target,
+            // use it directly. Otherwise use target itself (it is the out-param the
+            // game validated).
             void *targetPawn = *(void **)((uintptr_t)thiz + Offsets::WeaponFire_TargetPawn);
-            if (targetPawn != nullptr && targetPawn == target)
-                TriggerbotTryFire(thiz, targetPawn);
+            void *fireTarget = (targetPawn != nullptr && targetPawn == target) ? targetPawn : target;
+            if (fireTarget != nullptr)
+                TriggerbotTryFire(thiz, fireTarget);
         }
         return result;
     }
@@ -525,6 +516,12 @@ namespace NewFeatures
                           : false;
 
         if (result && Config.NewFeaturesMenu.Triggerbot && !s_triggerFiring) {
+            // HasEnemyInPort is a public virtual that independently reports whether
+            // an enemy is inside the aim port. It does not write m_TargetPawn.
+            // Use the game's m_TargetPawn if it is set (fire path), otherwise
+            // fall back to the [Out]-style target from CheckTarget via the
+            // shared pipeline. The team/alive/range guards in TriggerbotTryFire
+            // handle the rest.
             void *targetPawn = *(void **)((uintptr_t)thiz + Offsets::WeaponFire_TargetPawn);
             if (targetPawn != nullptr)
                 TriggerbotTryFire(thiz, targetPawn);
@@ -537,15 +534,15 @@ namespace NewFeatures
 
     inline Vector2 Hook_WeaponFireComponent_Instant_GetBreatheTremblingPos(void *thiz)
     {
-        Vector2 pos = oWeaponFireComponent_Instant_GetBreatheTremblingPos
-                    ? oWeaponFireComponent_Instant_GetBreatheTremblingPos(thiz)
-                    : Vector2::Zero();
-
-        if (!Config.NewFeaturesMenu.StableScope) return pos;
-        if (!IsLocalFireComponent(thiz)) return pos;
-        if (!IsFireComponentScoping(thiz) && !IsLocalPlayerScoping()) return pos;
-
-        PinBreatheFields(thiz);
+        // Only override when the feature is on, this is the local player's weapon,
+        // and the local player is actually hardscoping. Outside that state return the
+        // game's value unchanged. Do NOT write to m_AimmingBreatheCountDown /
+        // m_BreatheTremblingPos here - the existing NoDrift MemoryPatch
+        // (UpdateBreatheTrembling @0xC9BE4C0 -> ret) already freezes the breathing
+        // tick, so a per-frame zero-write would fight the game and feel like lag.
+        if (!Config.NewFeaturesMenu.StableScope) return Vector2::Zero();
+        if (!IsLocalFireComponent(thiz)) return Vector2::Zero();
+        if (!IsLocalPlayerScoping()) return Vector2::Zero();
         return Vector2::Zero();
     }
 

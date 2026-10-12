@@ -174,10 +174,15 @@ inline float (*orig_get_FireBoltTime)(void *) = nullptr;
 inline float get_FireBoltTime(void * instance) {
     if (instance != NULL) {
         if (Config.ExtraMenu.Fire || UnlimitedFly) {
-            return 0.00001f;
+            return 0.05f;
         }
         if (NewFeatures::NoFireDelayActive(instance)) {
-            return 0.00001f;
+            // NoFireDelay removes the post-shot cooldown. Use a 50ms floor so
+            // fast weapons do not re-enter StartFire every frame (which freezes
+            // the render thread / feels like a split-second hitch). Ammo, reload,
+            // fire mode, spread and recoil are untouched - only the interval is
+            // shortened, never forced.
+            return 0.05f;
         }
     }
     return orig_get_FireBoltTime(instance);
@@ -187,10 +192,15 @@ inline float (*orig_get_FireInterval)(void *) = nullptr;
 inline float get_FireInterval(void * instance) {
     if (instance != NULL) {
         if (Config.ExtraMenu.Fire || UnlimitedFly) {
-            return 0.00001f;
+            return 0.05f;
         }
         if (NewFeatures::NoFireDelayActive(instance)) {
-            return 0.00001f;
+            // NoFireDelay removes the post-shot cooldown. Use a 50ms floor so
+            // fast weapons do not re-enter StartFire every frame (which freezes
+            // the render thread / feels like a split-second hitch). Ammo, reload,
+            // fire mode, spread and recoil are untouched - only the interval is
+            // shortened, never forced.
+            return 0.05f;
         }
     }
     return orig_get_FireInterval(instance);
