@@ -177,7 +177,7 @@ namespace NewFeatures
 
     // ---------------------------------------------------------------------
     // Function RVAs (relative to libunity.so)
-    // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
     namespace RVA
     {
         constexpr uintptr_t CheckTarget                     = 0xC9C1B50; // bool(AttackableTarget,Vector3,Vector3,int,float)
@@ -185,10 +185,24 @@ namespace NewFeatures
         constexpr uintptr_t GetBreatheTremblingPos          = 0xC9BD880; // Vector2()
         constexpr uintptr_t GetIsAiming                     = 0xC9AF4E0; // bool()  (fire component ADS flag)
         constexpr uintptr_t AmmoCanFire                     = 0xC160CEC; // bool() Slot 58 - WeaponFireComponent_Instant.AmmoCanFire
-        constexpr uintptr_t StartFire                       = 0xC9C9364; // void() Slot 39 - WeaponFireComponent_Instant.StartFire
 
-        // Weapon::Tick(float) - runs every frame, used for tick-based triggerbot
-        constexpr uintptr_t Weapon_Tick                     = 0xC9C0B64; // void(float) Slot 51 - WeaponFireComponent_Instant.Tick
+        // V3 working triggerbot RVAs (from IL2CPP dump)
+        constexpr uintptr_t Weapon_StartFire                = 0x5123C84; // void() Slot 55 - Weapon.StartFire
+        constexpr uintptr_t Weapon_StopFire                 = 0x5124EAC; // void(bool) Slot 73 - Weapon.StopFire
+        constexpr uintptr_t Weapon_Tick                     = 0x5114C34; // void(float) Slot 33 - Weapon.Tick (game thread heartbeat)
+        constexpr uintptr_t Pawn_get_CurrentWeapon          = 0x518BEA8; // Weapon*() - Pawn.get_CurrentWeapon
+        constexpr uintptr_t Pawn_IsAiming                   = 0x516699C; // bool() - Pawn.IsAiming (ADS) Slot 427
+        constexpr uintptr_t Pawn_get_IsFiring               = 0x51A8A38; // bool() - Pawn.get_IsFiring
+        constexpr uintptr_t Gameplay_get_MatchGame          = 0x8569B10; // BaseGame*() - Gameplay.get_MatchGame
+        constexpr uintptr_t Gameplay_get_LocalPawn          = 0x856AA08; // Pawn*() - Gameplay.get_LocalPawn
+        constexpr uintptr_t BaseGame_GetEnemyPawns          = 0x9CAFE38; // PawnList*() - BaseGame.GetEnemyPawns
+        constexpr uintptr_t Pawn_get_HeadPosition           = 0x51B86EC; // ref object() - Pawn.get_HeadPosition Slot 215
+        constexpr uintptr_t Pawn_get_LastPawnPos            = 0x51B8D30; // ref object() - Pawn.get_LastPawnPos
+        constexpr uintptr_t Camera_get_main                 = 0x5024010; // Camera*() - Camera.get_main
+        constexpr uintptr_t Camera_WorldToScreenPoint       = 0x5023B54; // ref object(Vector3) - Camera.WorldToScreenPoint
+        constexpr uintptr_t Screen_get_width                = 0x50504BC; // int() - Screen.get_width
+        constexpr uintptr_t Screen_get_height               = 0x5050520; // int() - Screen.get_height
+        constexpr uintptr_t TickLocalPlayer                 = 0x8F141B8; // void(float) - PlayerSwimmingComponent.TickLocalPlayer (secondary heartbeat)
 
         constexpr uintptr_t CollectWeaponShakeOffsets       = 0x9B774C0; // WeaponShakeOffsets(float,float)
         constexpr uintptr_t UpdateFirstPersonCameraOffset   = 0x51C489C; // void(float)
@@ -196,7 +210,6 @@ namespace NewFeatures
 
         constexpr uintptr_t Pawn_GetTeamId                  = 0x51B89CC; // uint()
         constexpr uintptr_t Pawn_IsSameCamp                 = 0x51EF174; // bool(Pawn)
-        constexpr uintptr_t Pawn_IsAiming                   = 0x519BB10; // bool()
         constexpr uintptr_t Pawn_IsLocalPlayer              = 0x518872C; // bool()
         constexpr uintptr_t Pawn_IsAlive                    = 0xC29C330; // bool() Pawn::get_IsAlive() Slot 49
     }
@@ -283,150 +296,313 @@ namespace NewFeatures
         return localTeam != 0 && localTeam == targetTeam;
     }
 
-    // =====================================================================
+// =====================================================================
     //  TRIGGERBOT
     // =====================================================================
 
-    // Humanized delay.  It is armed only AFTER the game's own target check has
-    // confirmed an enemy (the old code called TriggerbotDelay() on every
-    // CreateBulletProjectile/CreateBulletLine event, i.e. even with no target).
-    // Implemented as a millisecond timer instead of this_thread::sleep_for
-    // because we are executing inside the game's aim-assist / fire path -
-    // sleeping there would visibly stall the render thread.
-    static void *s_delayTarget = nullptr;
-    static std::chrono::steady_clock::time_point s_delayStart;
-    static int s_delayMs = 0;
-    static bool s_triggerFiring = false; // re-entrancy guard (StartFire -> ... -> CheckTarget)
+    // Re-entrancy guard (StartFire -> ... -> Tick)
+    static bool s_triggerFiring = false;
 
-    inline int TriggerbotDelay()
-    {
-        const int lo = Config.NewFeaturesMenu.TriggerbotDelayMin;
-        const int hi = Config.NewFeaturesMenu.TriggerbotDelayMax;
-        if (hi <= lo) return lo > 0 ? lo : 0;
-        std::uniform_int_distribution<int> dist(lo, hi);
-        return dist(rng);
-    }
+    // =====================================================================
+    //  V3-STYLE GAME-THREAD TRIGGERBOT (A-Fire)
+    //  Runs on game thread via Weapon::Tick hook, scans EnemyPawns list,
+    //  projects head/body to screen, fires if under crosshair.
+    //  Throttled to ~10ms. Uses Weapon.StartFire/StopFire on current weapon.
+    // =====================================================================
+    
+    // Forward declarations
+    inline void (*orig_Weapon_Tick)(void *, float) = nullptr;
+    inline void (*orig_Weapon_StartFire)(void *) = nullptr;
+    inline void (*orig_Weapon_StopFire)(void *, bool) = nullptr;
+    inline void (*orig_TickLocalPlayer)(void *, float) = nullptr;
 
-    inline bool TriggerbotDelayElapsed(void *targetPawn)
-    {
-        const auto now = std::chrono::steady_clock::now();
-        if (targetPawn != s_delayTarget) {
-            s_delayTarget = targetPawn;
-            s_delayStart = now;
-            s_delayMs = TriggerbotDelay();
-            LOGI("[Triggerbot] DelayElapsed: new target, delay=%dms", s_delayMs);
-            return s_delayMs <= 0;
-        }
-        if (s_delayMs <= 0) return true;
-        const auto held = std::chrono::duration_cast<std::chrono::milliseconds>(now - s_delayStart).count();
-        bool elapsed = held >= (long long)s_delayMs;
-        if (elapsed) {
-            LOGI("[Triggerbot] DelayElapsed: delay complete, held=%lldms", held);
-        }
-        return elapsed;
-    }
-
-    inline void TriggerbotClearTarget() { s_delayTarget = nullptr; }
-
-    // "Weapon ready" - the game's own check plus an ammo sanity guard.
-    inline bool TriggerbotWeaponReady(void *fireComponent)
-    {
-        if (!IsReadable(fireComponent)) return false;
-        auto ammoCanFire = (bool (*)(void *))UnityRva(RVA::AmmoCanFire);
-        if (ammoCanFire != nullptr && !ammoCanFire(fireComponent)) return false;
-        int clipAmmo = *(int *)((uintptr_t)fireComponent + Offsets::WeaponFire_ClipAmmoCount);
-        if (clipAmmo <= 0) return false;
-        return true;
-    }
-
-    // Loose backstop built from the dump's aim-assist table.  m_AimAssistDis
-    // (0x628) is the weapon's aim-assist radius table and m_TargetPawnDist
-    // (0x690) the distance the game measured to the locked pawn.  We only use
-    // it to reject absurd ranges; the real validation is done by CheckTarget.
-    inline bool TriggerbotInAssistRange(void *fireComponent)
-    {
-        return true; // unlimited range
-    }
-
-    inline void TriggerbotFire(void *fireComponent)
-    {
-        if (!TriggerbotWeaponReady(fireComponent)) return;
-        auto startFire = (void (*)(void *))UnityRva(RVA::StartFire);
-        if (startFire == nullptr) {
-            LOGI("[Triggerbot] Fire: StartFire is null!");
-            return;
-        }
-        s_triggerFiring = true;
-        startFire(fireComponent);
-        s_triggerFiring = false;
-    }
-// Shared trigger pipeline. `targetPawn` must be a real Pawn (we only ever
-    // pass either m_TargetPawn or the already-confirmed AttackableTarget that
-    // the game itself equated with m_TargetPawn).
+    // State (only accessed from game thread)
+    inline bool     g_afireHoldingFire   = false;
+    inline void    *g_afireFiringOn      = nullptr;
+    inline double   g_afireLastPressTime = -1000.0;
+    inline bool     g_afireReleaseRequested = false;
+    inline double   g_afireLastEvalTime     = -1000.0;
 
     // Debug state for UI
     inline int s_dbgTriggerState = 0;
 
-    inline void TriggerbotTryFire(void *fireComponent, void *targetPawn)
+    inline double A_FireNow()
     {
-        if (!Config.NewFeaturesMenu.Triggerbot) return;
-        if (s_triggerFiring) return;
-        if (!IsLocalFireComponent(fireComponent)) return;
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
 
-        void *localPawn = LocalPlayer();
+    // Crosshair radius in pixels (matches V3)
+    inline float A_FireCrosshairRadiusPx()
+    {
+        auto getWidth = (int (*)())UnityRva(RVA::Screen_get_width);
+        auto getHeight = (int (*)())UnityRva(RVA::Screen_get_height);
+        if (!getWidth || !getHeight) return 64.0f;
+        
+        const float w = (float)getWidth();
+        const float h = (float)getHeight();
+        float radius = ImMin(w, h) * 0.06f;
+        if (Config.Aim.AimAssistSize > 0.0f)
+        {
+            const float fromSlider = w * (Config.Aim.AimAssistSize / 100.0f) * 0.5f;
+            if (fromSlider > radius)
+                radius = fromSlider;
+        }
+        if (radius < 8.0f)
+            radius = 8.0f;
+        return radius;
+    }
 
-        if (!IsReadable(targetPawn) || targetPawn == localPawn) { TriggerbotClearTarget(); return; }
-        if (IsSameTeam(localPawn, targetPawn)) { TriggerbotClearTarget(); return; }
-        if (!IsPawnAlive(targetPawn)) { TriggerbotClearTarget(); return; }
-        if (!TriggerbotInAssistRange(fireComponent)) { TriggerbotClearTarget(); return; }
+    // Check if pawn pointer is valid and aligned (V3 method)
+    inline bool A_FireIsReadablePawn(uintptr_t pawnU)
+    {
+        if (pawnU == 0 || (pawnU & 0x7) != 0)
+            return false;
+        return Tools::IsPtrValid((void *) pawnU);
+    }
 
-        if (!TriggerbotDelayElapsed(targetPawn)) {
-            s_dbgTriggerState = 1; // target locked, waiting for delay
+    // Find nearest enemy under crosshair (V3 method)
+    inline uintptr_t A_FireFindTarget()
+    {
+        auto getMatchGame = (uintptr_t (*)())UnityRva(RVA::Gameplay_get_MatchGame);
+        auto getLocalPawn = (uintptr_t (*)())UnityRva(RVA::Gameplay_get_LocalPawn);
+        auto getEnemyPawns = (void* (*)(void*))UnityRva(RVA::BaseGame_GetEnemyPawns);
+        auto getMainCamera = (void* (*)())UnityRva(RVA::Camera_get_main);
+        auto worldToScreen = (void* (*)(void*, Vector3))UnityRva(RVA::Camera_WorldToScreenPoint);
+        auto getHeadPos = (Vector3 (*)(void*))UnityRva(RVA::Pawn_get_HeadPosition);
+        auto getLastPos = (Vector3 (*)(void*))UnityRva(RVA::Pawn_get_LastPawnPos);
+
+        if (!getMatchGame || !getLocalPawn || !getEnemyPawns || !getMainCamera || !worldToScreen || !getHeadPos || !getLastPos)
+            return 0;
+
+        const uintptr_t matchGame = getMatchGame();
+        if (!Tools::IsPtrValid((void *)matchGame))
+            return 0;
+
+        const uintptr_t localPawnU = getLocalPawn();
+        if (localPawnU == 0)
+            return 0;
+
+        void *enemyPawns = getEnemyPawns((void *)matchGame);
+        if (!Tools::IsPtrValid(enemyPawns))
+            return 0;
+
+        // Get List items (IL2CPP List<T> layout: items array at offset 0x10, size at 0x18)
+        uintptr_t *items = *(uintptr_t **)((uintptr_t)enemyPawns + 0x10);
+        int count = *(int *)((uintptr_t)enemyPawns + 0x18);
+        if (!Tools::IsPtrValid((void *)items) || count <= 0 || count > 1024)
+            return 0;
+
+        void *cam = getMainCamera();
+        if (!Tools::IsPtrValid(cam))
+            return 0;
+
+        const float cx = (float)getWidth() * 0.5f;
+        const float cy = (float)getHeight() * 0.5f;
+        const float radius = A_FireCrosshairRadiusPx();
+        const float radiusSq = radius * radius;
+
+        uintptr_t best = 0;
+        float bestDist = radiusSq + 1.0f;
+
+        for (int i = 0; i < count; i++)
+        {
+            const uintptr_t pawnU = items[i];
+            if (!A_FireIsReadablePawn(pawnU))
+                continue;
+
+            // Check IsAlive via getter (field offset corrupted in dump)
+            auto getIsAlive = (bool (*)(void*))UnityRva(RVA::Pawn_IsAlive);
+            if (getIsAlive && !getIsAlive((void *)pawnU))
+                continue;
+
+            Pawn *pawn = (Pawn *)pawnU;
+            const Vector3 headPos = getHeadPos(pawn);
+            const Vector3 bodyPos = getLastPos(pawn);
+
+            // World to screen for head
+            Vector3 headSc = ((Vector3 (*)(void*, Vector3))worldToScreen)(cam, headPos);
+            if (headSc.z > 0.0f)
+            {
+                const float dx = headSc.x - cx;
+                const float dy = headSc.y - cy;
+                const float d2 = dx * dx + dy * dy;
+                if (d2 <= radiusSq && d2 < bestDist)
+                {
+                    best = pawnU;
+                    bestDist = d2;
+                    continue; // head covered - don't test body
+                }
+            }
+
+            // World to screen for body
+            Vector3 bodySc = ((Vector3 (*)(void*, Vector3))worldToScreen)(cam, bodyPos);
+            if (bodySc.z > 0.0f)
+            {
+                const float dx = bodySc.x - cx;
+                const float dy = bodySc.y - cy;
+                const float d2 = dx * dx + dy * dy;
+                if (d2 <= radiusSq && d2 < bestDist)
+                {
+                    best = pawnU;
+                    bestDist = d2;
+                }
+            }
+        }
+        return best;
+    }
+
+    // Release trigger
+    inline void A_FireReleaseTrigger(void *instance)
+    {
+        if (!g_afireHoldingFire)
+            return;
+        if (instance == nullptr || instance == g_afireFiringOn) {
+            if (orig_Weapon_StopFire != nullptr && g_afireFiringOn != nullptr)
+                orig_Weapon_StopFire(g_afireFiringOn, false);
+            g_afireHoldingFire = false;
+            g_afireFiringOn = nullptr;
+        }
+    }
+
+    // Render-thread-safe release request
+    inline void A_FireRequestRelease(void)
+    {
+        g_afireReleaseRequested = true;
+    }
+
+    // Triggerbot driver (called from game thread only)
+    inline void A_FireTick(void)
+    {
+        const double now = A_FireNow();
+        if (now - g_afireLastEvalTime < 0.010) // ~10ms throttle
+            return;
+        g_afireLastEvalTime = now;
+
+        if (!Config.NewFeaturesMenu.Triggerbot || g_afireReleaseRequested) {
+            g_afireReleaseRequested = false;
+            A_FireReleaseTrigger(nullptr);
+            s_dbgTriggerState = 0;
             return;
         }
 
-        s_dbgTriggerState = 2; // firing
-        LOGI("[Triggerbot] TryFire: FIRING! targetPawn=%p", targetPawn);
-        TriggerbotFire(fireComponent);
+        auto getLocalPawn = (uintptr_t (*)())UnityRva(RVA::Gameplay_get_LocalPawn);
+        auto getCurrentWeapon = (void* (*)(void*))UnityRva(RVA::Pawn_get_CurrentWeapon);
+        if (!getLocalPawn || !getCurrentWeapon) {
+            A_FireReleaseTrigger(nullptr);
+            s_dbgTriggerState = 0;
+            return;
+        }
+
+        const uintptr_t localPawnU = getLocalPawn();
+        if (localPawnU == 0) {
+            A_FireReleaseTrigger(nullptr);
+            s_dbgTriggerState = 0;
+            return;
+        }
+
+        void *localPawn = (void *)localPawnU;
+        if (!Tools::IsPtrValid(localPawn)) {
+            A_FireReleaseTrigger(nullptr);
+            s_dbgTriggerState = 0;
+            return;
+        }
+
+        auto getIsAlive = (bool (*)(void*))UnityRva(RVA::Pawn_IsAlive);
+        if (getIsAlive && !getIsAlive(localPawn)) {
+            A_FireReleaseTrigger(nullptr);
+            s_dbgTriggerState = 0;
+            return;
+        }
+
+        void *held = getCurrentWeapon(localPawn);
+        if (!Tools::IsPtrValid(held)) {
+            A_FireReleaseTrigger(nullptr);
+            s_dbgTriggerState = 0;
+            return;
+        }
+
+        // Weapon swapped while trigger down - release old weapon first
+        if (g_afireHoldingFire && g_afireFiringOn != held)
+            A_FireReleaseTrigger(nullptr);
+
+        bool ready = A_FireFindTarget() != 0;
+
+        // Trigger modes: 0=Always, 1=ADS only, 2=Firing only
+        if (ready && Config.NewFeaturesMenu.TriggerbotMode == 1) {
+            auto isAiming = (bool (*)(void*))UnityRva(RVA::Pawn_IsAiming);
+            ready = isAiming && isAiming(localPawn);
+        }
+        else if (ready && Config.NewFeaturesMenu.TriggerbotMode == 2) {
+            auto getIsFiring = (bool (*)(void*))UnityRva(RVA::Pawn_get_IsFiring);
+            ready = getIsFiring && getIsFiring(localPawn);
+        }
+
+        if (ready && Config.NewFeaturesMenu.TriggerbotDelayMin > 0) {
+            if (now - g_afireLastPressTime < (double)Config.NewFeaturesMenu.TriggerbotDelayMin / 1000.0)
+                ready = false;
+        }
+
+        if (ready) {
+            if (!g_afireHoldingFire) {
+                if (orig_Weapon_StartFire != nullptr)
+                    orig_Weapon_StartFire(held);
+                g_afireHoldingFire = true;
+                g_afireFiringOn = held;
+                s_dbgTriggerState = 2; // firing
+            }
+            g_afireLastPressTime = now;
+        }
+        else if (g_afireHoldingFire) {
+            A_FireReleaseTrigger(nullptr);
+            s_dbgTriggerState = ready ? 1 : 0; // target locked or no target
+        }
+        else {
+            s_dbgTriggerState = ready ? 1 : 0;
+        }
+    }
+
+    // Weapon::Tick hook (primary game-thread heartbeat)
+    inline void Hook_Weapon_Tick(void *thiz, float deltaTime)
+    {
+        if (orig_Weapon_Tick != nullptr)
+            orig_Weapon_Tick(thiz, deltaTime);
+        A_FireTick();
+    }
+
+    // PlayerSwimmingComponent::TickLocalPlayer hook (secondary heartbeat)
+    inline void Hook_TickLocalPlayer(void *thiz, float deltaTime)
+    {
+        if (orig_TickLocalPlayer != nullptr)
+            orig_TickLocalPlayer(thiz, deltaTime);
+        A_FireTick();
+    }
+
+    // Hook installation
+    inline void InstallTriggerbotHooks()
+    {
+        // Weapon::Tick
+        Tools::Hook(UnityRva(RVA::Weapon_Tick),
+                    (void *)&Hook_Weapon_Tick,
+                    (void **)&orig_Weapon_Tick);
+        
+        // Weapon::StartFire
+        Tools::Hook(UnityRva(RVA::Weapon_StartFire),
+                    (void *)nullptr, // not hooking, just getting original
+                    (void **)&orig_Weapon_StartFire);
+        
+        // Weapon::StopFire
+        Tools::Hook(UnityRva(RVA::Weapon_StopFire),
+                    (void *)nullptr,
+                    (void **)&orig_Weapon_StopFire);
+
+        // TickLocalPlayer (secondary heartbeat)
+        Tools::Hook(UnityRva(RVA::TickLocalPlayer),
+                    (void *)&Hook_TickLocalPlayer,
+                    (void **)&orig_TickLocalPlayer);
     }
 
     inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
-
-    // =====================================================================
-    //  TICK-BASED TRIGGERBOT (alternative, more reliable)
-    //  Hooks Weapon::Tick(float) which runs every frame. Checks crosshair
-    //  for enemy and calls StartFire directly. Does NOT depend on
-    //  CheckTarget/HasEnemyInPort virtual methods being invoked by game.
-    // =====================================================================
-    void (*oWeapon_Tick)(void *, float) = nullptr;
-
-    inline void Hook_Weapon_Tick(void *thiz, float deltaTime)
-    {
-        // Call original first
-        if (oWeapon_Tick) oWeapon_Tick(thiz, deltaTime);
-
-        // Only run tick-based triggerbot when mode = 1
-        if (Config.NewFeaturesMenu.TriggerbotMode != 1) return;
-        if (!Config.NewFeaturesMenu.Triggerbot) return;
-        if (s_triggerFiring) return;
-        if (!IsLocalFireComponent(thiz)) return;
-
-        void *localPawn = LocalPlayer();
-        if (!IsReadable(localPawn)) return;
-        if (!IsLocalPlayerScoping()) return; // only while ADS
-
-        // Get current target from weapon's m_TargetPawn (set by game's aim-assist)
-        void *targetPawn = *(void **)((uintptr_t)thiz + Offsets::WeaponFire_TargetPawn);
-        if (!IsReadable(targetPawn) || targetPawn == localPawn) return;
-        if (IsSameTeam(localPawn, targetPawn)) return;
-        if (!IsPawnAlive(targetPawn)) return;
-
-        // Delay
-        if (!TriggerbotDelayElapsed(targetPawn)) return;
-
-        s_dbgTriggerState = 2;
-        TriggerbotFire(thiz);
-    }
 
     // Layout of WeaponShakeController.WeaponShakeOffsets (private nested struct).
     struct WeaponShakeOffsets
@@ -529,63 +705,6 @@ namespace NewFeatures
     //  Original function pointers + hook bodies
     // =====================================================================
 
-    // ---- Triggerbot ----
-    bool (*oWeaponFireComponent_Instant_CheckTarget)(void *, void *, Vector3, Vector3, int, float) = nullptr;
-    bool (*oWeaponFireComponent_Instant_HasEnemyInPort)(void *, bool) = nullptr;
-
-    inline bool Hook_WeaponFireComponent_Instant_CheckTarget(void *thiz, void *target,
-                                                             Vector3 startPos, Vector3 rayDir,
-                                                             int flag, float range)
-    {
-        // Only run CheckTarget-based triggerbot when mode = 0
-        if (Config.NewFeaturesMenu.TriggerbotMode != 0) return oWeaponFireComponent_Instant_CheckTarget ? oWeaponFireComponent_Instant_CheckTarget(thiz, target, startPos, rayDir, flag, range) : false;
-
-        // Override range to unlimited for triggerbot
-        const float unlimitedRange = 999999.0f;
-        const bool result = oWeaponFireComponent_Instant_CheckTarget
-                          ? oWeaponFireComponent_Instant_CheckTarget(thiz, target, startPos, rayDir, flag, unlimitedRange)
-                          : false;
-
-        if (result) {
-            s_dbgTriggerState = 1; // target detected
-        } else if (s_dbgTriggerState != 0) {
-            s_dbgTriggerState = 0; // lost target
-        }
-
-        if (result && Config.NewFeaturesMenu.Triggerbot && !s_triggerFiring) {
-            void *targetPawn = *(void **)((uintptr_t)thiz + Offsets::WeaponFire_TargetPawn);
-            void *fireTarget = (targetPawn != nullptr && targetPawn == target) ? targetPawn : target;
-            if (fireTarget != nullptr) {
-                TriggerbotTryFire(thiz, fireTarget);
-            }
-        }
-        return result;
-    }
-
-    inline bool Hook_WeaponFireComponent_Instant_HasEnemyInPort(void *thiz, bool traceAssist)
-    {
-        // Only run CheckTarget-based triggerbot when mode = 0
-        if (Config.NewFeaturesMenu.TriggerbotMode != 0) return oWeaponFireComponent_Instant_HasEnemyInPort ? oWeaponFireComponent_Instant_HasEnemyInPort(thiz, traceAssist) : false;
-
-        const bool result = oWeaponFireComponent_Instant_HasEnemyInPort
-                          ? oWeaponFireComponent_Instant_HasEnemyInPort(thiz, traceAssist)
-                          : false;
-
-        if (result) {
-            s_dbgTriggerState = 1;
-        } else if (s_dbgTriggerState == 1) {
-            s_dbgTriggerState = 0;
-        }
-
-        if (result && Config.NewFeaturesMenu.Triggerbot && !s_triggerFiring) {
-            void *targetPawn = *(void **)((uintptr_t)thiz + Offsets::WeaponFire_TargetPawn);
-            if (targetPawn != nullptr) {
-                TriggerbotTryFire(thiz, targetPawn);
-            }
-        }
-        return result;
-    }
-
     // ---- Stable Scope : breathing ----
     Vector2 (*oWeaponFireComponent_Instant_GetBreatheTremblingPos)(void *) = nullptr;
 
@@ -659,20 +778,8 @@ namespace NewFeatures
     // =====================================================================
     inline void InstallHooks()
     {
-        // ---- Triggerbot -------------------------------------------------
-        Tools::Hook(UnityRva(RVA::CheckTarget),
-                    (void *)&Hook_WeaponFireComponent_Instant_CheckTarget,
-                    (void **)&oWeaponFireComponent_Instant_CheckTarget);
-        Tools::Hook(UnityRva(RVA::HasEnemyInPort),
-                    (void *)&Hook_WeaponFireComponent_Instant_HasEnemyInPort,
-                    (void **)&oWeaponFireComponent_Instant_HasEnemyInPort);
-
-        // Tick-based triggerbot (alternative, more reliable)
-        if (RVA::Weapon_Tick != 0) {
-            Tools::Hook(UnityRva(RVA::Weapon_Tick),
-                        (void *)&Hook_Weapon_Tick,
-                        (void **)&oWeapon_Tick);
-        }
+        // ---- Triggerbot (V3-style game-thread) ---------------------------
+        InstallTriggerbotHooks();
 
         // ---- Stable Scope ----------------------------------------------
         Tools::Hook(UnityRva(RVA::GetBreatheTremblingPos),

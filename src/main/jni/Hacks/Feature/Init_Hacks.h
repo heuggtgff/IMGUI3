@@ -230,9 +230,8 @@ sColorsESPBOT sColorsESPBOT{0};
     {
         bool NoCrouch = false;
         bool Triggerbot = false;
-        int TriggerbotMode = 0; // 0 = CheckTarget hook, 1 = Weapon::Tick hook
-        int TriggerbotDelayMin = 0;
-        int TriggerbotDelayMax = 50;
+        int TriggerbotMode = 0; // 0 = Always, 1 = ADS only, 2 = Firing only (matches V3)
+        int TriggerbotDelay = 0; // ms
         bool NoHitFlinch = false;
         bool NoDrift = false;
         // Stable Scope: while hardscoping, cancel movement sway (strafe/walk/

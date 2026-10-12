@@ -1905,10 +1905,9 @@ if (runtimeState.activeTab == 4) {
                                 custom::Separator();
                                 custom::Checkbox("Triggerbot", &Config.NewFeaturesMenu.Triggerbot);
                                 if (Config.NewFeaturesMenu.Triggerbot) {
-                                    static const char* triggerModes[] = { "CheckTarget Hook", "Weapon::Tick Hook" };
+                                    static const char* triggerModes[] = { "Always", "ADS Only", "Firing Only" };
                                     custom::Combo("Mode", &Config.NewFeaturesMenu.TriggerbotMode, triggerModes, IM_ARRAYSIZE(triggerModes));
-                                    custom::SliderInt("Trigger Delay Min", &Config.NewFeaturesMenu.TriggerbotDelayMin, 0, 30, "%d ms");
-                                    custom::SliderInt("Trigger Delay Max", &Config.NewFeaturesMenu.TriggerbotDelayMax, 20, 100, "%d ms");
+                                    custom::SliderInt("Delay", &Config.NewFeaturesMenu.TriggerbotDelay, 0, 500, "%d ms");
                                 }
                                 // Debug status (shows in-game)
                                 ImGui::Spacing();
@@ -1920,12 +1919,19 @@ if (runtimeState.activeTab == 4) {
                                 } else {
                                     ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "NO TARGET");
                                 }
-                                // Test fire button (verifies StartFire works)
+                                // Test fire button (verifies StartFire works on current weapon)
                                 if (custom::Button("Test Fire", ImVec2(0, 0))) {
-                                    void *fireComp = (void *)GamePlay::get_LocalPawn();
-                                    if (fireComp) {
-                                        auto startFire = (void (*)(void *))NewFeatures::UnityRva(NewFeatures::RVA::StartFire);
-                                        if (startFire) startFire(fireComp);
+                                    auto getLocalPawn = (uintptr_t (*)())NewFeatures::UnityRva(NewFeatures::RVA::Gameplay_get_LocalPawn);
+                                    auto getCurrentWeapon = (void* (*)(void*))NewFeatures::UnityRva(NewFeatures::RVA::Pawn_get_CurrentWeapon);
+                                    auto startFire = (void (*)(void *))NewFeatures::UnityRva(NewFeatures::RVA::Weapon_StartFire);
+                                    if (getLocalPawn && getCurrentWeapon && startFire) {
+                                        uintptr_t localPawnU = getLocalPawn();
+                                        if (localPawnU) {
+                                            void *weapon = getCurrentWeapon((void *)localPawnU);
+                                            if (NewFeatures::Tools::IsPtrValid(weapon)) {
+                                                startFire(weapon);
+                                            }
+                                        }
                                     }
                                 }
                                 EndContentChild(left);
