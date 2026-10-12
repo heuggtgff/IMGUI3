@@ -1909,30 +1909,53 @@ if (runtimeState.activeTab == 4) {
                                     custom::Combo("Mode", &Config.NewFeaturesMenu.TriggerbotMode, triggerModes, IM_ARRAYSIZE(triggerModes));
                                     custom::SliderInt("Delay", &Config.NewFeaturesMenu.TriggerbotDelay, 0, 500, "%d ms");
                                 }
-                                // Debug status (shows in-game)
+                                // Debug status (shows in-game). A_FireRenderTick() runs the
+                                // read-only half of the trigger here on the render thread (the
+                                // same accessors the ESP already uses every frame), so the state
+                                // stays honest even if the in-game tick hook were dead - and it
+                                // reports a dead heartbeat instead of silently doing nothing.
                                 ImGui::Spacing();
+                                NewFeatures::A_FireRenderTick();
+                                NewFeatures::TriggerbotDiag& td = NewFeatures::GetTriggerbotDiag();
                                 int dbgState = NewFeatures::GetTriggerbotDebugState();
-                                if (dbgState == 2) {
+                                const bool hbAlive = NewFeatures::A_FireHeartbeatAlive();
+                                if (!hbAlive) {
+                                    ImGui::TextColored(ImVec4(1, 0.25f, 0.25f, 1), "NO GAME-THREAD TICK");
+                                } else if (dbgState == 2) {
                                     ImGui::TextColored(ImVec4(0, 1, 0, 1), ">> FIRING <<");
                                 } else if (dbgState == 1) {
                                     ImGui::TextColored(ImVec4(1, 1, 0, 1), "TARGET LOCKED");
                                 } else {
                                     ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "NO TARGET");
                                 }
-                                // Test fire button (verifies StartFire works on current weapon)
+                                // Test Fire: this menu runs on the render thread and the game
+                                // only reacts to StartFire on the game thread, so the click just
+                                // queues the request - the heartbeat runs it and reports back.
                                 if (custom::Button("Test Fire", ImVec2(0, 0))) {
-                                    auto getLocalPawn = (uintptr_t (*)())NewFeatures::UnityRva(NewFeatures::RVA::Gameplay_get_LocalPawn);
-                                    auto getCurrentWeapon = (void* (*)(void*))NewFeatures::UnityRva(NewFeatures::RVA::Pawn_GetCurrentWeapon);
-                                    auto startFire = (void (*)(void *))NewFeatures::UnityRva(NewFeatures::RVA::Weapon_StartFire);
-                                    if (getLocalPawn && getCurrentWeapon && startFire) {
-                                        uintptr_t localPawnU = getLocalPawn();
-                                        if (localPawnU) {
-                                            void *weapon = getCurrentWeapon((void *)localPawnU);
-                                            if (Tools::IsPtrValid(weapon)) {
-                                                startFire(weapon);
-                                            }
-                                        }
-                                    }
+                                    NewFeatures::g_testFireRequest = true;
+                                    NewFeatures::g_testFireRequestTime = NewFeatures::A_FireNow();
+                                    td.testFireStatus = 0;
+                                }
+                                {
+                                    const char* testTxt = "TestFire: idle";
+                                    if (td.testFireStatus == 1) testTxt = "TestFire: fired";
+                                    else if (td.testFireStatus == 2) testTxt = "TestFire: no local pawn";
+                                    else if (td.testFireStatus == 3) testTxt = "TestFire: no weapon";
+                                    else if (td.testFireStatus == 4) testTxt = "TestFire: no StartFire ptr";
+                                    else if (td.testFireStatus == 5) testTxt = "TestFire: queued, no tick";
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "%s", testTxt);
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "HB %s  wTick=%d held=%d pawn=%d",
+                                        hbAlive ? "OK" : "DEAD",
+                                        td.weaponTicks, td.weaponHeldTicks, td.pawnLocalTicks);
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "Scan=%d R=%d Enemy=%d Tgt=%d Fire=%d",
+                                        td.scans, td.renderScans, td.enemyCount, td.targets, td.fires);
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "R=%.0f Near=%.0f px", td.radiusPx,
+                                        td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx));
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "Pawn=%p Wpn=%p Match=%p", td.localPawn, td.heldWeapon, td.matchGame);
                                 }
                                 EndContentChild(left);
                             }

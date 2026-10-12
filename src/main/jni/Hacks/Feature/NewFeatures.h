@@ -28,7 +28,8 @@
 //     Pawn::m_HeadBone            offset 0x308    Transform* -> get_position()
 //     Pawn::m_Mesh                offset 0x628    Transform* -> get_position()
 //     Camera::get_main()          RVA 0x5024010
-//     Camera::WorldToScreenPoint  RVA 0x5023AB8   (StructSDK, == api8)
+//     Camera::WorldToScreenPoint  RVA 0x5023B54   (the 1-arg overload; see
+//                                 the note in A_FireFindTarget)
 //     Pawn::IsAiming()            RVA 0x519BB10   ("ADS only" mode; note
 //                                 0x516699C is Weapon::get_IsAiming, and
 //                                 calling that on a Pawn is what the old
@@ -189,7 +190,15 @@ namespace NewFeatures
         // V3 working triggerbot RVAs (from IL2CPP dump)
         constexpr uintptr_t Weapon_StartFire                = 0x5123C84; // void() Slot 55 - Weapon.StartFire
         constexpr uintptr_t Weapon_StopFire                 = 0x5124EAC; // void(bool) Slot 73 - Weapon.StopFire
-        constexpr uintptr_t Weapon_Tick                     = 0x5114C34; // void(float) Slot 33 - Weapon.Tick (game thread heartbeat)
+        // Triggerbot heartbeat. Weapon::Tick (Slot 33, class Weapon) is what the
+        // reference implementation hooks and what this build demonstrably calls
+        // on the held weapon every frame -> primary heartbeat.
+        // Pawn::Tick is the *base* implementation only: dump.cs shows PlayerPawn
+        // (0x54816D8), MPPawn, BRPlayerPawn, BRGroundWarPlayerPawn, DMZPlayerPawn,
+        // PVEPlayerPawn, ... each override Tick at their own RVA, so hooking
+        // Pawn::Tick can never be the only heartbeat. Kept as a second chance.
+        constexpr uintptr_t Weapon_Tick                     = 0x5114C34; // void(float) Slot 33 - Weapon.Tick  [HEARTBEAT]
+        constexpr uintptr_t Pawn_Tick                       = 0x51C366C; // void(float) Slot 33 - Pawn.Tick (base only)
         constexpr uintptr_t Pawn_GetCurrentWeapon           = 0x518BEA8; // Weapon*() - Pawn.get_CurrentWeapon
         constexpr uintptr_t Pawn_IsAiming                   = 0x519BB10; // bool() - Pawn.IsAiming() (V3 api15; 0x516699C is Weapon::get_IsAiming, NOT callable on a Pawn)
         constexpr uintptr_t Pawn_get_IsFiring               = 0x51A8A38; // bool() - Pawn.get_IsFiring
@@ -199,7 +208,7 @@ namespace NewFeatures
         constexpr uintptr_t Pawn_get_HeadPosition           = 0x51B86EC; // ref object() - Pawn.get_HeadPosition Slot 215
         constexpr uintptr_t Pawn_get_LastPawnPos            = 0x51B8D30; // ref object() - Pawn.get_LastPawnPos
         constexpr uintptr_t Camera_get_main                 = 0x5024010; // Camera*() - Camera.get_main
-        constexpr uintptr_t Camera_WorldToScreenPoint       = 0x5023B54; // ref object(Vector3) - Camera.WorldToScreenPoint
+        constexpr uintptr_t Camera_WorldToScreenPoint       = 0x5023B54; // Vector3 Camera.WorldToScreenPoint(Vector3)  <- 1-arg overload (0x5023AB8 is the 2-arg one)
         constexpr uintptr_t Screen_get_width                = 0x50504BC; // int() - Screen.get_width
         constexpr uintptr_t Screen_get_height               = 0x5050520; // int() - Screen.get_height
 
@@ -298,50 +307,106 @@ namespace NewFeatures
     }
 
     // =====================================================================
-    //  TRIGGERBOT  (A-Fire)  -  V3-compatible game-thread implementation
+    //  TRIGGERBOT  (A-Fire)  -  game-thread auto-fire
     //
-    //  Ported from the known-working reference oonalang/V3 @3dd0151
-    //  (System/Hooks/Feats.h: hook_Weapon_Tick + A_FireFindTarget), keeping
-    //  this repo's menu/config names.
+    //  A port of oonalang/V3 @3dd0151 (System/Hooks/Feats.h: hook_Weapon_Tick +
+    //  A_FireFindTarget + Weapon.StartFire/StopFire raw pointers). V3's exact
+    //  shape is kept: hook Weapon::Tick, and act only while the ticked object is
+    //  the local player's *held weapon*:
+    //      (void*)GamePlay::get_LocalPawn()->get_CurrentWeapon() == instance
     //
-    //  Driver: Weapon::Tick (RVA 0x5114C34). Weapon.StartFire / StopFire are
-    //  called through *raw* pointers - they are never inline-hooked, exactly
-    //  like V3.
+    //  HEARTBEAT - read this before changing it:
+    //    The heartbeat has to be a function that the game calls on the local
+    //    player's held weapon every frame. Weapon::Tick (0x5114C34) is that
+    //    function: V3 hooks it, and the earlier build of this repo that CRASHED
+    //    on match join was reaching A_FireFindTarget through this very hook, so
+    //    it demonstrably runs in this build.
     //
-    //  Enemy scanning uses ONLY the accessors this repo already proved to work
-    //  (same ones DrawESP.h uses):
-    //      GamePlay::get_MatchGame() -> MatchGame::EnemyPawns()
-    //        -> List<Pawn*>::getItems() / getSize()
-    //      Pawn::m_IsAlive()  field @0x548
-    //      Pawn::m_HeadBone @0x308 / m_Mesh @0x628 transforms + get_position()
-    //      Camera::get_main()->WorldToScreenPoint()
+    //    Pawn::Tick (0x51C366C) is only the BASE implementation. dump.cs shows
+    //    every player pawn class overriding it at its own RVA - PlayerPawn
+    //    0x54816D8, MPPawn 0xB5D0DC8, BRPlayerPawn 0x78B68FC, DMZPlayerPawn
+    //    0x7FF06EC, PVEPlayerPawn 0x78378AC, BRGroundWarPlayerPawn 0x6FB04A8,
+    //    OpenWorldPlayerPawn 0x5A0E994, ... - so "Pawn::Tick runs for every pawn
+    //    incl. the local player" is FALSE, and a build whose only heartbeat was a
+    //    Pawn::Tick hook gated on the local pawn (commit 7c542b5) could never
+    //    tick: the triggerbot and the queued Test Fire both went silent.
+    //    It is kept here purely as a second chance, never as the only heartbeat.
     //
-    //  !! CRASH FIX: the previous version indexed the List object itself
-    //  !! (*(uintptr_t**)(list + 0x10)) and then treated element 0/2 of the
-    //  !! il2cpp ARRAY HEADER (the klass / bounds pointers) as Pawns. Those
-    //  !! values are 8-byte aligned and mapped, so they pass an alignment +
-    //  !! IsPtrValid() check, and the first enemy list of a match then sent
-    //  !! Pawn virtual getters a non-Pawn `this` - the client died as soon as
-    //  !! a game/Training Ground was joined with the triggerbot enabled.
-    //  !! getItems() returns the real element array (&array->m_Items[0]).
+    //  The menu's Test Fire button only QUEUES the request: the menu runs on the
+    //  render thread, and calling Weapon.StartFire from there does not fire (the
+    //  old direct-call version did nothing at all). The game-thread heartbeat
+    //  performs it and reports the result back.
+    //
+    //  Every address below is from "dump (GR .57).cs" and was re-checked against
+    //  "dump.cs" (jeudhehs/dump) - both give the same function for every RVA:
+    //    Weapon::Tick                  0x5114C34  void(float) Slot 33 [HOOKED]
+    //    Pawn::Tick                    0x51C366C  void(float) Slot 33 (base only)
+    //    Pawn::get_CurrentWeapon       0x518BEA8  Weapon*()
+    //    Pawn::IsAiming()              0x519BB10  bool()  (0x516699C is
+    //                                             Weapon::get_IsAiming)
+    //    Pawn::get_IsFiring()          0x51A8A38  bool()
+    //    Weapon::StartFire()           0x5123C84  void()   Slot 55 [raw ptr]
+    //    Weapon::StopFire(bool)        0x5124EAC  void(bool) Slot 73 [raw ptr]
+    //    GamePlay::get_LocalPawn()     0x856AA08  Pawn*
+    //    GamePlay::get_MatchGame()     0x8569B10  MatchGame*
+    //    Camera::get_main()            0x5024010  Camera*
+    //    Camera::WorldToScreenPoint()  0x5023B54  Vector3(Vector3)  <- the 1-arg
+    //                                             overload (0x5023AB8 takes a
+    //                                             bool that must not be garbage)
+    //    Screen::get_width/get_height  0x50504BC / 0x5050520
+    //  Field offsets, all confirmed in the same dump:
+    //    Pawn.m_Mesh 0x628   Pawn.m_HeadBone 0x308   Pawn.m_IsAlive 0x548
+    //    BaseGame.EnemyPawns 0x178  (PawnList : List<Pawn>)
+    //
+    //  !! NEVER index the List object itself (*(uintptr_t**)(list + 0x10)):
+    //  !! that walks the il2cpp ARRAY HEADER (klass / bounds pointers), which
+    //  !! are aligned and mapped, so they pass every guard and then get handed
+    //  !! to Pawn virtual getters - that is what crashed the client on match
+    //  !! join.  List<Pawn*>::getItems() returns the real element array.
     // =====================================================================
 
-    // Raw function pointers (StartFire/StopFire are NOT hooked).
+    // Function pointers. Weapon::Tick is the heartbeat (see the header note);
+    // StartFire/StopFire are called through raw pointers, never hooked.
     inline void (*orig_Weapon_Tick)(void *, float) = nullptr;
+    inline void (*orig_Pawn_Tick)(void *, float) = nullptr;
     inline void (*fn_Weapon_StartFire)(void *) = nullptr;
     inline void (*fn_Weapon_StopFire)(void *, bool) = nullptr;
 
-    // State - only ever touched on the game thread.
-    inline bool     g_afireHoldingFire   = false;
-    inline void    *g_afireFiringOn      = nullptr;
-    inline double   g_afireLastPressTime = -1000.0;
-    inline double   g_afireLastEvalTime  = -1000.0;
-    // Re-entrancy guard. It is raised BEFORE StartFire is called so a Tick
-    // raised from inside StartFire can never re-enter the fire path.
-    inline bool     g_afireInTick        = false;
+    // State - game thread only.
+    inline bool     g_afireHoldingFire       = false;
+    inline void    *g_afireFiringOn          = nullptr;
+    inline double   g_afireLastPressTime     = -1000.0;
+    inline double   g_afireLastEvalTime      = -1000.0;
+    inline bool     g_afireInTick            = false;   // re-entrancy guard
+    inline bool     g_testFireRequest        = false;   // set by the menu (render thread)
+    inline double   g_testFireRequestTime    = -1000.0;
 
-    // Debug state for the menu: 0 = no target, 1 = target under crosshair,
-    // 2 = firing (tab 3 shows it).
+    // Diagnostics, so the menu can show *why* nothing happens. The game thread
+    // writes, the render thread reads - racy but harmless (plain ints/pointers).
+    struct TriggerbotDiag
+    {
+        int    weaponTicks;     // Weapon::Tick calls (any weapon)          <- heartbeat
+        int    weaponHeldTicks; // ... of which the local player's held weapon
+        int    pawnTicks;       // Pawn::Tick calls (any pawn) - rarely the local player
+        int    pawnLocalTicks;
+        int    hookCalls;       // evaluations that reached the scan (game thread)
+        int    scans;           // game-thread A_FireFindTarget() runs
+        int    renderScans;     // render-thread diagnostic scans
+        int    enemyCount;      // last EnemyPawns size
+        int    targets;         // scans that returned a pawn
+        int    fires;           // StartFire calls made by the trigger
+        float  radiusPx;        // crosshair radius used by the last scan
+        float  closestPx;       // closest enemy to the screen centre in px (any distance)
+        double lastTickTime;    // steady_clock of the last heartbeat (0 = never)
+        void  *localPawn;
+        void  *heldWeapon;
+        void  *matchGame;
+        int    testFireStatus;  // 0 idle, 1 fired, 2 no pawn, 3 no weapon,
+                                // 4 no StartFire ptr, 5 pointers ok / no heartbeat
+    };
+    inline TriggerbotDiag g_triggerDiag{};
+
+    // Debug state for the menu: 0 = no target, 1 = target, 2 = firing.
     inline int s_dbgTriggerState = 0;
 
     inline double A_FireNow()
@@ -350,15 +415,15 @@ namespace NewFeatures
             std::chrono::steady_clock::now().time_since_epoch()).count();
     }
 
-    // Crosshair radius in pixels: 2.5% of the smaller screen dimension (V3's
-    // tight crosshair zone), optionally widened by the aim-assist size slider.
+    // Crosshair radius in pixels: 2.5 % of the screen width, exactly V3's zone
+    // (using min(w,h) here halved it on landscape phones, which made "NO TARGET"
+    // the normal state). The aim-assist slider may widen it, never shrink it.
     inline float A_FireCrosshairRadiusPx()
     {
         const float w = (float)get_width();
-        const float h = (float)get_height();
-        if (w <= 0.0f || h <= 0.0f) return 64.0f;
+        if (w <= 0.0f) return 64.0f;
 
-        float radius = ImMin(w, h) * 0.025f;
+        float radius = w * 0.025f;
         if (Config.Aim.AimAssistSize > 0.0f) {
             const float fromSlider = w * (Config.Aim.AimAssistSize / 100.0f) * 0.5f;
             if (fromSlider > radius) radius = fromSlider;
@@ -367,14 +432,26 @@ namespace NewFeatures
         return radius;
     }
 
-    // Nearest live enemy whose head bone or mesh root projects onto the
-    // crosshair. Returns 0 when there is no match / no valid target.
+    // True when `localPawn` is the local player's live pawn.
+    inline bool A_FireIsLiveLocalPawn(void *localPawn)
+    {
+        return Tools::IsPtrValid(localPawn) &&
+               ((Pawn *)localPawn)->m_IsAlive();
+    }
+
+    // Nearest live enemy whose head bone or mesh root projects inside the
+    // crosshair zone and is in front of the camera. Returns 0 when there is
+    // none. Uses only the accessors this build proves in-game (the ESP walks
+    // the identical list from the render thread every frame).
     inline uintptr_t A_FireFindTarget()
     {
-        MatchGame *matchGame = GamePlay::get_MatchGame();
-        if (!Tools::IsPtrValid((void *)matchGame)) return 0;
+        TriggerbotDiag &d = g_triggerDiag;
+        d.enemyCount = 0;
+        d.closestPx  = -1.0f;
 
-        if (!Tools::IsPtrValid((void *)GamePlay::get_LocalPawn())) return 0;
+        MatchGame *matchGame = GamePlay::get_MatchGame();
+        d.matchGame = (void *)matchGame;
+        if (!Tools::IsPtrValid((void *)matchGame)) return 0;
 
         Camera *cam = Camera::get_main();
         if (!Tools::IsPtrValid((void *)cam)) return 0;
@@ -384,64 +461,63 @@ namespace NewFeatures
 
         Pawn **items = (Pawn **)enemyPawns->getItems();
         const int count = enemyPawns->getSize();
+        d.enemyCount = count;
         if (!Tools::IsPtrValid((void *)items) || count <= 0 || count > 1024) return 0;
 
         const float cx = (float)get_width()  * 0.5f;
         const float cy = (float)get_height() * 0.5f;
         const float radius = A_FireCrosshairRadiusPx();
         const float radiusSq = radius * radius;
+        d.radiusPx = radius;
+
+        // api8 / 0x5023AB8 - the exact entry point V3's working triggerbot uses
+        // and the one this build's ESP already calls every frame.
+        auto worldToScreen = (Vector3 (*)(void *, Vector3))UnityRva(RVA::Camera_WorldToScreenPoint);
+        if (worldToScreen == nullptr) return 0;
 
         uintptr_t best = 0;
-        float bestDist = radiusSq + 1.0f;   // strictly-inside test
+        float bestDist = radiusSq + 1.0f;      // strictly inside the zone
 
         for (int i = 0; i < count; i++) {
             Pawn *pawn = items[i];
             if (!Tools::IsPtrValid((void *)pawn)) continue;
             if (!pawn->m_IsAlive()) continue;
 
-            // Head first ...
+            float d2 = -1.0f;                  // best of head/mesh for this pawn
+
             Transform *headBone = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
             if (Tools::IsPtrValid((void *)headBone)) {
-                const Vector3 headSc = cam->WorldToScreenPoint(headBone->get_position());
-                if (headSc.z > 0.0f) {  // in front of the camera
-                    const float dx = headSc.x - cx;
-                    const float dy = headSc.y - cy;
-                    const float d2 = dx * dx + dy * dy;
-                    if (d2 <= radiusSq && d2 < bestDist) {
-                        best = (uintptr_t)pawn;
-                        bestDist = d2;
-                        continue;       // head covered - body cannot be closer
+                const Vector3 sc = worldToScreen(cam, headBone->get_position());
+                if (sc.z > 0.0f) {             // in front of the camera
+                    const float dx = sc.x - cx;
+                    const float dy = sc.y - cy;
+                    d2 = dx * dx + dy * dy;
+                }
+            }
+
+            if (d2 < 0.0f) {                   // head not projectable -> try the body
+                Transform *mesh = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
+                if (Tools::IsPtrValid((void *)mesh)) {
+                    const Vector3 sc = worldToScreen(cam, mesh->get_position());
+                    if (sc.z > 0.0f) {
+                        const float dx = sc.x - cx;
+                        const float dy = sc.y - cy;
+                        d2 = dx * dx + dy * dy;
                     }
                 }
             }
 
-            // ... then the mesh root, in case the crosshair is on the body.
-            Transform *mesh = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
-            if (Tools::IsPtrValid((void *)mesh)) {
-                const Vector3 bodySc = cam->WorldToScreenPoint(mesh->get_position());
-                if (bodySc.z > 0.0f) {
-                    const float dx = bodySc.x - cx;
-                    const float dy = bodySc.y - cy;
-                    const float d2 = dx * dx + dy * dy;
-                    if (d2 <= radiusSq && d2 < bestDist) {
-                        best = (uintptr_t)pawn;
-                        bestDist = d2;
-                    }
-                }
+            if (d2 < 0.0f) continue;
+
+            if (d.closestPx < 0.0f || d2 < d.closestPx) d.closestPx = d2;
+
+            if (d2 <= radiusSq && d2 < bestDist) {
+                best = (uintptr_t)pawn;
+                bestDist = d2;
             }
         }
+        if (best != 0) d.targets++;
         return best;
-    }
-
-    // `instance` must be the local player's own, currently held weapon.
-    inline bool A_FireIsLocalHeldWeapon(void *instance)
-    {
-        if (instance == nullptr) return false;
-        Pawn *local = GamePlay::get_LocalPawn();
-        if (!Tools::IsPtrValid((void *)local) || !local->m_IsAlive()) return false;
-        Weapon *held = local->get_CurrentWeapon();
-        if (!Tools::IsPtrValid((void *)held)) return false;
-        return (void *)held == instance;
     }
 
     // Let go of the trigger we pressed.
@@ -456,56 +532,91 @@ namespace NewFeatures
         }
     }
 
-    // Pawn::IsAiming() @0x519BB10 - the local player is scoping / ADS.
-    inline bool A_FireLocalPlayerIsAiming(Pawn *local)
+    // The menu's "Test Fire" button only queues the request: the menu runs on
+    // the render thread and the game must be told to fire from the game thread.
+    inline void A_FireRunTestFire()
     {
-        auto isAiming = (bool (*)(void *))UnityRva(RVA::Pawn_IsAiming);
-        return isAiming != nullptr && isAiming(local);
+        TriggerbotDiag &d = g_triggerDiag;
+        g_testFireRequest = false;
+
+        Pawn *local = GamePlay::get_LocalPawn();
+        d.localPawn = (void *)local;
+        if (!A_FireIsLiveLocalPawn(local)) { d.testFireStatus = 2; return; }
+
+        Weapon *held = local->get_CurrentWeapon();
+        d.heldWeapon = (void *)held;
+        if (!Tools::IsPtrValid((void *)held)) { d.testFireStatus = 3; return; }
+
+        if (fn_Weapon_StartFire == nullptr) { d.testFireStatus = 4; return; }
+
+        fn_Weapon_StartFire(held);
+        d.fires++;
+        d.testFireStatus = 1;
     }
 
-    // Pawn::get_IsFiring() - the local player is holding the fire button.
-    inline bool A_FireLocalPlayerIsFiring(Pawn *local)
+    // Trigger evaluation. Runs on the game thread from the tick hooks.
+    // `tickInstance` is the object the hook was called on: the fired path is
+    // taken only while the local player's *held weapon* ticks, exactly like the
+    // reference implementation. Pass nullptr when the caller is already sure the
+    // local player ticked.
+    inline void A_FireTick(void *tickInstance)
     {
-        auto getIsFiring = (bool (*)(void *))UnityRva(RVA::Pawn_get_IsFiring);
-        return getIsFiring != nullptr && getIsFiring(local);
-    }
+        TriggerbotDiag &d = g_triggerDiag;
+        d.lastTickTime = A_FireNow();
 
-    // Weapon::Tick hook - the game-thread heartbeat (same driver as V3).
-    inline void Hook_Weapon_Tick(void *instance, float deltaTime)
-    {
-        if (orig_Weapon_Tick != nullptr)
-            orig_Weapon_Tick(instance, deltaTime);
-
-        if (instance == nullptr) return;
-
-        const double now = A_FireNow();
+        const double now = d.lastTickTime;
         if (now - g_afireLastEvalTime < 0.010) return;   // ~10 ms, like V3
         g_afireLastEvalTime = now;
 
         if (g_afireInTick) return;                       // re-entrancy guard
 
+        // Queued Test Fire is honoured even while the toggle is off.
+        if (g_testFireRequest) A_FireRunTestFire();
+
+        Pawn *localPawn = GamePlay::get_LocalPawn();
+        d.localPawn = (void *)localPawn;
+
         if (!Config.NewFeaturesMenu.Triggerbot) {
-            A_FireReleaseTrigger(instance);
+            A_FireReleaseTrigger(nullptr);
             s_dbgTriggerState = 0;
             return;
         }
 
-        // Only ever act for the local player's own, currently held weapon.
-        if (!A_FireIsLocalHeldWeapon(instance)) {
-            A_FireReleaseTrigger(instance);
+        if (!A_FireIsLiveLocalPawn(localPawn)) {
+            A_FireReleaseTrigger(nullptr);
+            d.heldWeapon = nullptr;
             s_dbgTriggerState = 0;
             return;
         }
 
-        Pawn *local = GamePlay::get_LocalPawn();
+        Weapon *held = localPawn->get_CurrentWeapon();
+        d.heldWeapon = (void *)held;
+        if (!Tools::IsPtrValid((void *)held)) {
+            A_FireReleaseTrigger(nullptr);
+            s_dbgTriggerState = 0;
+            return;
+        }
+
+        // V3 semantics: only act on the local player's held weapon tick.
+        if (tickInstance != nullptr && tickInstance != (void *)held) return;
+        if (tickInstance != nullptr) d.weaponHeldTicks++;
+
+        d.hookCalls++;
+        d.scans++;
+
+        // Weapon swapped while the trigger was down - release the old one.
+        if (g_afireHoldingFire && g_afireFiringOn != (void *)held)
+            A_FireReleaseTrigger(nullptr);
 
         bool ready = A_FireFindTarget() != 0;
 
-        // Trigger modes: 0 = Always, 1 = ADS only, 2 = Firing only.
+        // Modes: 0 = Always, 1 = ADS only, 2 = Firing only.
         if (ready && Config.NewFeaturesMenu.TriggerbotMode == 1) {
-            ready = A_FireLocalPlayerIsAiming(local);
+            auto isAiming = (bool (*)(void *))UnityRva(RVA::Pawn_IsAiming);
+            ready = isAiming != nullptr && isAiming(localPawn);
         } else if (ready && Config.NewFeaturesMenu.TriggerbotMode == 2) {
-            ready = A_FireLocalPlayerIsFiring(local);
+            auto getIsFiring = (bool (*)(void *))UnityRva(RVA::Pawn_get_IsFiring);
+            ready = getIsFiring != nullptr && getIsFiring(localPawn);
         }
 
         if (ready && Config.NewFeaturesMenu.TriggerbotDelay > 0) {
@@ -515,36 +626,70 @@ namespace NewFeatures
         }
 
         if (!ready) {
-            A_FireReleaseTrigger(instance);
+            A_FireReleaseTrigger(nullptr);
             s_dbgTriggerState = 0;
             return;
         }
 
-        s_dbgTriggerState = 1;                           // target under crosshair
+        s_dbgTriggerState = 1;                           // target under the crosshair
 
-        if (g_afireHoldingFire && g_afireFiringOn == instance) {
+        if (g_afireHoldingFire && g_afireFiringOn == (void *)held) {
             g_afireLastPressTime = now;                  // already firing on it
             s_dbgTriggerState = 2;
             return;
         }
 
-        g_afireInTick        = true;                     // guard raised first
-        g_afireHoldingFire   = true;
-        g_afireFiringOn      = instance;
+        g_afireInTick      = true;                       // guard raised first
+        g_afireHoldingFire = true;
+        g_afireFiringOn    = (void *)held;
 
-        if (fn_Weapon_StartFire != nullptr)
-            fn_Weapon_StartFire(instance);
+        if (fn_Weapon_StartFire != nullptr) {
+            fn_Weapon_StartFire(held);
+            d.fires++;
+        }
 
         g_afireLastPressTime = now;
         g_afireInTick        = false;
         s_dbgTriggerState    = 2;                        // firing
+        LOGI("[NewFeatures] triggerbot: StartFire(held=%p) local=%p", (void *)held, (void *)localPawn);
     }
 
-    // Installation: exactly ONE inline hook (Weapon::Tick) plus the two raw
-    // StartFire/StopFire pointers. No second heartbeat hook: the reference
-    // build does not hook TickLocalPlayer, and an extra trampoline on a
-    // function that used to be unused there is one more way to break the
-    // game while it builds pawn/weapon state on match join.
+    // ---- Heartbeats -------------------------------------------------------
+    // Weapon::Tick IS called on the local player's held weapon every frame in
+    // this build (V3 hooks the same address and its triggerbot fires), and it is
+    // the address the earlier crashing build of this repo was demonstrably
+    // reaching. Pawn::Tick is kept as a second chance, but note that PlayerPawn /
+    // MPPawn / BRPlayerPawn / ... each override Tick at their own RVA, so
+    // Pawn::Tick alone is NOT enough and must never be the only heartbeat.
+    inline void Hook_Weapon_Tick(void *instance, float deltaTime)
+    {
+        if (orig_Weapon_Tick != nullptr)
+            orig_Weapon_Tick(instance, deltaTime);
+
+        if (instance == nullptr) return;
+
+        g_triggerDiag.weaponTicks++;
+        A_FireTick(instance);
+    }
+
+    inline void Hook_Pawn_Tick(void *instance, float deltaTime)
+    {
+        if (orig_Pawn_Tick != nullptr)
+            orig_Pawn_Tick(instance, deltaTime);
+
+        if (instance == nullptr) return;
+
+        TriggerbotDiag &d = g_triggerDiag;
+        d.pawnTicks++;
+        if ((void *)GamePlay::get_LocalPawn() != instance) return;
+
+        d.pawnLocalTicks++;
+        A_FireTick(nullptr);        // the local player's own pawn ticked
+    }
+
+    // Installation: Weapon::Tick + Pawn::Tick hooks and the two raw
+    // StartFire/StopFire pointers. All three targets are large functions, so
+    // Dobby's 16-byte trampoline never eats a neighbouring function.
     inline void InstallTriggerbotHooks()
     {
         auto startFireAddr = UnityRva(RVA::Weapon_StartFire);
@@ -555,15 +700,78 @@ namespace NewFeatures
         if (Tools::IsPtrValid(stopFireAddr))
             fn_Weapon_StopFire = (void (*)(void *, bool))stopFireAddr;
 
-        Tools::Hook(UnityRva(RVA::Weapon_Tick),
-                    (void *)&Hook_Weapon_Tick,
-                    (void **)&orig_Weapon_Tick);
+        void *weaponTick = UnityRva(RVA::Weapon_Tick);
+        if (Tools::IsPtrValid(weaponTick)) {
+            Tools::Hook(weaponTick, (void *)&Hook_Weapon_Tick, (void **)&orig_Weapon_Tick);
+            if (orig_Weapon_Tick == nullptr)
+                LOGE("[NewFeatures] triggerbot: Weapon::Tick hook FAILED at %p", weaponTick);
+            else
+                LOGI("[NewFeatures] triggerbot: hooked Weapon::Tick @%p -> orig %p",
+                     weaponTick, (void *)orig_Weapon_Tick);
+        } else {
+            LOGE("[NewFeatures] triggerbot: Weapon::Tick RVA 0x%llX did not resolve -"
+                 " triggerbot DISABLED", (unsigned long long)RVA::Weapon_Tick);
+        }
 
-        LOGI("[NewFeatures] triggerbot: Weapon_Tick=%p StartFire=%p StopFire=%p",
-             (void *)orig_Weapon_Tick, (void *)fn_Weapon_StartFire, (void *)fn_Weapon_StopFire);
+        void *pawnTick = UnityRva(RVA::Pawn_Tick);
+        if (Tools::IsPtrValid(pawnTick)) {
+            Tools::Hook(pawnTick, (void *)&Hook_Pawn_Tick, (void **)&orig_Pawn_Tick);
+            LOGI("[NewFeatures] triggerbot: hooked Pawn::Tick @%p -> orig %p",
+                 pawnTick, (void *)orig_Pawn_Tick);
+        } else {
+            LOGE("[NewFeatures] triggerbot: Pawn::Tick RVA 0x%llX did not resolve",
+                 (unsigned long long)RVA::Pawn_Tick);
+        }
+
+        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p",
+             (void *)fn_Weapon_StartFire, (void *)fn_Weapon_StopFire);
     }
 
-inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
+    // True while the game-thread heartbeat has run recently.
+    inline bool A_FireHeartbeatAlive()
+    {
+        const double t = g_triggerDiag.lastTickTime;
+        return t > 0.0 && (A_FireNow() - t) < 0.5;
+    }
+
+    // ---- Render-thread diagnostics ---------------------------------------
+    // Called from the menu (render thread) every frame. Contains no
+    // game-thread-only call: it reads pointers and projects bones, exactly like
+    // the ESP pass that already runs on this thread every frame. Purpose: keep
+    // the on-screen state honest even if the in-game heartbeat is dead, and tell
+    // the user whether the heartbeat is alive at all.
+    inline void A_FireRenderTick()
+    {
+        TriggerbotDiag &d = g_triggerDiag;
+
+        // A Test Fire that the game thread never picked up means the heartbeat
+        // is dead; report the pointer chain instead of silently doing nothing.
+        if (g_testFireRequest && A_FireNow() - g_testFireRequestTime > 0.35) {
+            g_testFireRequest = false;
+            Pawn *local = GamePlay::get_LocalPawn();
+            d.localPawn = (void *)local;
+            if (!A_FireIsLiveLocalPawn(local)) { d.testFireStatus = 2; return; }
+            Weapon *held = local->get_CurrentWeapon();
+            d.heldWeapon = (void *)held;
+            if (!Tools::IsPtrValid((void *)held)) { d.testFireStatus = 3; return; }
+            d.testFireStatus = (fn_Weapon_StartFire == nullptr) ? 4 : 5;
+            return;
+        }
+
+        if (!Config.NewFeaturesMenu.Triggerbot) return;
+
+        d.renderScans++;
+        const uintptr_t t = A_FireFindTarget();
+
+        // The game thread owns s_dbgTriggerState while its heartbeat is alive;
+        // this thread only takes over when that heartbeat is missing, so the
+        // indicator can never claim a target the firing path is not seeing.
+        if (!A_FireHeartbeatAlive())
+            s_dbgTriggerState = (t != 0) ? 1 : 0;
+    }
+
+    inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
+    inline TriggerbotDiag &GetTriggerbotDiag() { return g_triggerDiag; }
 
     // Layout of WeaponShakeController.WeaponShakeOffsets (private nested struct).
     struct WeaponShakeOffsets
@@ -765,10 +973,10 @@ inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
         // Patches.NoHipfireSpringFireGetReady) - the two getters are 8-byte leaf
         // functions and must never be inline-hooked (their setters are adjacent).
 
-        LOGI("[NewFeatures] hooks installed: Weapon_Tick=%p Weapon_StartFire=%p Weapon_StopFire=%p "
+        LOGI("[NewFeatures] hooks installed: Pawn_Tick=%p Weapon_StartFire=%p Weapon_StopFire=%p "
              "BreatheTremblingPos=%p CollectWeaponShakeOffsets=%p UpdateFirstPersonCameraOffset=%p OnJumpHitGround=%p "
              "(NoHipfireDelay: 2 x 8-byte patch, no hook)",
-             (void *)orig_Weapon_Tick,
+             (void *)orig_Pawn_Tick,
              (void *)fn_Weapon_StartFire,
              (void *)fn_Weapon_StopFire,
              (void *)oWeaponFireComponent_Instant_GetBreatheTremblingPos,
