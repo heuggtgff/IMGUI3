@@ -210,6 +210,12 @@ namespace NewFeatures
         constexpr uintptr_t Camera_get_main                 = 0x5024010; // Camera*() - Camera.get_main
         constexpr uintptr_t Camera_WorldToScreenPoint       = 0x5023B54; // Vector3 Camera.WorldToScreenPoint(Vector3)  <- 1-arg overload (0x5023AB8 is the 2-arg one)
         constexpr uintptr_t Physics_RaycastLOS              = 0x506C1E4; // bool(Vector3, Vector3, out RaycastHit) - 2-arg overload (dump.cs 267239)
+        // The game's OWN visibility answers - no raycast needed:
+        //   RecentlyRendered: was this pawn actually rendered on screen recently
+        //     (frustum + occlusion culling + render distance) - Slot 234
+        //   LastOccVisible: last frame's occlusion-culling verdict - Slot 235
+        constexpr uintptr_t Pawn_get_RecentlyRendered       = 0x51BA7E8; // bool() Slot 234 (dump.cs 796916)
+        constexpr uintptr_t Pawn_get_LastOccVisible         = 0x51BA800; // bool() Slot 235 (dump.cs 796918)
         constexpr uintptr_t Screen_get_width                = 0x50504BC; // int() - Screen.get_width
         constexpr uintptr_t Screen_get_height               = 0x5050520; // int() - Screen.get_height
 
@@ -378,6 +384,8 @@ namespace NewFeatures
     inline Vector3 (*fn_WorldToScreen)(void *, Vector3) = nullptr;  // 1-arg overload
     inline bool (*fn_PhysicsRaycastLOS)(Vector3, Vector3, float, void *) = nullptr;
     inline void *(*fn_CameraGetMain)() = nullptr;
+    inline bool (*fn_PawnRecentlyRendered)(void *) = nullptr;
+    inline bool (*fn_PawnLastOccVisible)(void *) = nullptr;
 
     // State - game thread only.
     inline bool     g_afireHoldingFire       = false;
@@ -470,12 +478,7 @@ namespace NewFeatures
     constexpr size_t AF_RAYHIT_SIZE    = 0x30;   // up to m_Collider @0x28 + pad
     constexpr size_t AF_RAYHIT_DISTOFF = 0x1C;   // m_Distance for THIS build
 
-    // 0x506C118 = the FULL 6-arg overload Raycast(origin, dir, out hitInfo,
-    // maxDistance, layerMask, QueryTriggerInteraction) - letting smoke volumes,
-    // door zones and other triggers count as "wall" caused the false blocked
-    // verdicts the devices reported. QueryTriggerInteraction.Ignore == 1.
-    constexpr uintptr_t Physics_RaycastLOS_Full = 0x506C118;
-    inline bool (*fn_PhysicsRaycastFull)(Vector3, Vector3, void *, float, long long, int) = nullptr;
+
 
     // Returns the first-hit distance for origin->dir, -1 when clear, -2 on
     // failure/malformed (fail-closed: the caller treats that as "blocked").
@@ -485,12 +488,7 @@ namespace NewFeatures
         memset(hitBuf, 0, sizeof hitBuf);
         bool hit;
 
-        if (fn_PhysicsRaycastFull != nullptr) {
-            // layerMask = all layers (0 is ALL in Unity's mask convention:
-            // every-preset layer names start at bit 0; passing ~0 sets all 32).
-            hit = fn_PhysicsRaycastFull(origin, dir, hitBuf, maxDist,
-                                        (long long)~0ll, /*QueryTriggerInteraction.Ignore=*/1);
-        } else if (fn_PhysicsRaycastLOS != nullptr) {
+        if (fn_PhysicsRaycastLOS != nullptr) {
             hit = fn_PhysicsRaycastLOS(origin, dir, maxDist, hitBuf);
         } else {
             return -2.0f;                                   // no raycast -> fail closed
@@ -618,21 +616,35 @@ namespace NewFeatures
         uintptr_t best = 0;
         float bestDist = radiusSq + 1.0f;
         for (int c = 0; c < nCandidates; c++) {
-            Vector3 to = candidates[c].aimPoint - camPos;
-            const float len = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
-            if (len < 0.0001f) continue;
-            const Vector3 dir(to.x / len, to.y / len, to.z / len);
+            // VISIBILITY check = the game's own occlusion verdict for that pawn
+            // (RecentlyRendered), with the raw raycast as the tie-breaker only
+            // when the game hasn't rendered the pawn this frame but it also
+            // doesn't say "occluded" (still respawning / spectating etc).
+            Pawn *cp = candidates[c].pawn;
+            bool visible = false;
 
-            // First-hit distance within the LOS ray (a little beyond the target,
-            // for collider skins). -1 = clear, >=0 = hit, -2 = malformed (blocked).
-            const float hit = A_FireRaycastDistance(
-                camPos, dir,
-                Vector3::Distance(camPos, candidates[c].aimPoint) + 0.35f);
-            const bool blocked = (hit >= 0.0f) || (hit == -2.0f);
-            if (blocked) {
+            if (fn_PawnRecentlyRendered != nullptr) {
+                visible = fn_PawnRecentlyRendered(cp);          // game's own answer
+                if (!visible && fn_PawnLastOccVisible != nullptr)
+                    visible = fn_PawnLastOccVisible(cp);        // 1-frame leniency
+            }
+
+            if (!visible) {
+                // Fallback: raw 2-arg raycast. Same struct layout as before,
+                // no overloads = no ABI guessing.
+                Vector3 to = candidates[c].aimPoint - camPos;
+                const float len = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
+                if (len < 0.0001f) continue;
+                const Vector3 dir(to.x / len, to.y / len, to.z / len);
+                const float hit = A_FireRaycastDistance(
+                    camPos, dir, Vector3::Distance(camPos, candidates[c].aimPoint) + 0.35f);
+                visible = (hit == -1.0f);                      // -1 = clear; blocked/malformed = invisible
+            }
+
+            if (!visible) {
                 d.losBlocked++;
                 d.losBlockedScan++;
-                continue;                      // geometry in between -> not shootable
+                continue;                      // not on screen -> not shootable
             }
             if (candidates[c].dist2 < bestDist) {
                 best     = (uintptr_t)candidates[c].pawn;
@@ -849,12 +861,14 @@ namespace NewFeatures
             fn_PhysicsRaycastLOS =
                 (bool (*)(Vector3, Vector3, float, void *))rayAddr;
 
-        // Prefers the strict-trigger 6-arg overload (smoke/door volumes must
-        // not count as walls); the 2-arg is the fallback.
-        auto rayFullAddr = UnityRva(Physics_RaycastLOS_Full);
-        if (Tools::IsPtrValid(rayFullAddr))
-            fn_PhysicsRaycastFull =
-                (bool (*)(Vector3, Vector3, void *, float, long long, int))rayFullAddr;
+        // Visibility cache getters (the game's own occlusion/frustum verdicts).
+        auto rrAddr = UnityRva(RVA::Pawn_get_RecentlyRendered);
+        if (Tools::IsPtrValid(rrAddr))
+            fn_PawnRecentlyRendered = (bool (*)(void *))rrAddr;
+
+        auto lvAddr = UnityRva(RVA::Pawn_get_LastOccVisible);
+        if (Tools::IsPtrValid(lvAddr))
+            fn_PawnLastOccVisible = (bool (*)(void *))lvAddr;
 
         auto camMainAddr = UnityRva(RVA::Camera_get_main);
         if (Tools::IsPtrValid(camMainAddr))
@@ -883,10 +897,10 @@ namespace NewFeatures
                  (unsigned long long)RVA::Pawn_Tick);
         }
 
-        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p Raycast=%p RaycastFull=%p",
+        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p Raycast=%p RecentlyRendered=%p OccVisible=%p",
              (void *)fn_Weapon_StartFire, (void *)fn_Weapon_StopFire,
              (void *)fn_WorldToScreen, (void *)fn_PhysicsRaycastLOS,
-             (void *)fn_PhysicsRaycastFull);
+             (void *)fn_PawnRecentlyRendered, (void *)fn_PawnLastOccVisible);
     }
 
     // True while the game-thread heartbeat has run recently.
