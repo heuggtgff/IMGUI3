@@ -124,8 +124,19 @@
 //        System/Hooks/Feats.h (Firerate).  We do not double-hook the same
 //        prologue (two trampolines on one address is what crashed the game
 //        before) - those three hooks call NoSprintFireDelayActive() /
-//        NoFireDelayActive() from this file instead.  The hipfire getters are
-//        fresh, unused addresses and are hooked here.
+//        NoFireDelayActive() from this file instead.
+//
+//        The two hipfire getters are NOT hooked: get_UseGetReadyTime @0x50E9F60
+//        and get_SpringFireGetReady @0x50E9F28 are 8-byte leaf getters
+//        (ldrb w0,[x0,#..] ; ret) whose *immediate* neighbours are
+//        set_UseGetReadyTime @0x50E9F68 and set_SpringFireGetReady @0x50E9F30.
+//        A64 inline hooking (hook()/HOOK_LIB) writes a 16-byte LDR/BR stub in
+//        place whenever the replacement is more than +/-128MB away, so it
+//        overwrote those setters - and the game calls them while it copies
+//        weapon data, i.e. exactly when a match is joined.  They are forced to
+//        false with 8-byte patches from Main.cpp instead (Patches.
+//        NoHipfireUseGetReadyTime / NoHipfireSpringFireGetReady), the same
+//        mechanism the repo already uses for the other tiny functions.
 //
 #include <random>
 #include <chrono>
@@ -463,24 +474,20 @@ namespace NewFeatures
     }
 
     // ---- 3.2 No Hipfire Delay -------------------------------------------
-    // Tiny bool getters -> hooked through hook()/A64HookFunction (the same
-    // path Feats.h uses for the other interval getters), not DobbyHook.
-    bool (*oWeapon_get_UseGetReadyTime)(void *) = nullptr;
-    bool (*oWeapon_get_SpringFireGetReady)(void *) = nullptr;
-
-    inline bool Hook_Weapon_get_UseGetReadyTime(void *thiz)
-    {
-        if (Config.NewFeaturesMenu.NoHipfireDelay && IsLocalWeapon(thiz) && LocalPlayerIsHipfiring())
-            return false;   // readiness delay disabled for the hipfire shot
-        return oWeapon_get_UseGetReadyTime ? oWeapon_get_UseGetReadyTime(thiz) : false;
-    }
-
-    inline bool Hook_Weapon_get_SpringFireGetReady(void *thiz)
-    {
-        if (Config.NewFeaturesMenu.NoHipfireDelay && IsLocalWeapon(thiz) && LocalPlayerIsHipfiring())
-            return false;   // weapon reports "ready" immediately while hipfiring
-        return oWeapon_get_SpringFireGetReady ? oWeapon_get_SpringFireGetReady(thiz) : false;
-    }
+    // Implemented as two 8-byte code patches in Main.cpp (hook install time),
+    // NOT as hooks - see the note in the file header.  Each getter is exactly 8
+    // bytes long, so "mov x0,#0 ; ret" rewrites the whole function and cannot
+    // touch the setter that follows it:
+    //   Weapon::get_UseGetReadyTime()    @0x50E9F60 -> false
+    //   Weapon::get_SpringFireGetReady() @0x50E9F28 -> false
+    // A code patch cannot be gated per instance, so (unlike the old hook, which
+    // only skipped the delay for the local player's own weapon while hipfiring)
+    // the gate reports "no get-ready time" for every weapon instance.  That is
+    // exactly what the option asks for and it matches how the repo's other
+    // tiny-function/global patches (NoDrift, NoHitFlinch, NoCrouch, ...) work.
+    // IsLocalWeapon() is still used by the Feats.h timing hooks above;
+    // LocalPlayerIsHipfiring() is now only a helper (kept, no longer on any
+    // hot path since the two getters are patched, not hooked).
 
     // =====================================================================
     //  Original function pointers + hook bodies
@@ -624,19 +631,19 @@ namespace NewFeatures
         // NoSprintFireDelay (3.1) and NoFireDelay (3.3) are gated inside the
         // existing Feats.h hooks for 0x513CBC4 / 0x5105C74 / 0x51237F4 - see
         // NoSprintFireDelayActive() / NoFireDelayActive() above.
-        HOOK_LIB("libunity.so", "0x50E9F60", Hook_Weapon_get_UseGetReadyTime, oWeapon_get_UseGetReadyTime);
-        HOOK_LIB("libunity.so", "0x50E9F28", Hook_Weapon_get_SpringFireGetReady, oWeapon_get_SpringFireGetReady);
+        // NoHipfireDelay is a pair of 8-byte patches, created and toggled in
+        // Main.cpp (Patches.NoHipfireUseGetReadyTime /
+        // Patches.NoHipfireSpringFireGetReady) - the two getters are 8-byte leaf
+        // functions and must never be inline-hooked (their setters are adjacent).
 
         LOGI("[NewFeatures] hooks installed: CheckTarget=%p HasEnemyInPort=%p BreatheTremblingPos=%p "
              "CollectWeaponShakeOffsets=%p UpdateFirstPersonCameraOffset=%p OnJumpHitGround=%p "
-             "UseGetReadyTime=%p SpringFireGetReady=%p",
+             "(NoHipfireDelay: 2 x 8-byte patch, no hook)",
              (void *)oWeaponFireComponent_Instant_CheckTarget,
              (void *)oWeaponFireComponent_Instant_HasEnemyInPort,
              (void *)oWeaponFireComponent_Instant_GetBreatheTremblingPos,
              (void *)oWeaponShakeController_CollectWeaponShakeOffsets,
              (void *)oPawn_UpdateFirstPersonCameraOffset,
-             (void *)oHitGroundComponent_OnJumpHitGround,
-             (void *)oWeapon_get_UseGetReadyTime,
-             (void *)oWeapon_get_SpringFireGetReady);
+             (void *)oHitGroundComponent_OnJumpHitGround);
     }
 }

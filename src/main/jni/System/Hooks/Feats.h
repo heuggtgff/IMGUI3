@@ -357,15 +357,12 @@ inline float get_UnequipTime(void* instance) {
 }
 
 //-- Red Wallhack
-bool (*orig_IsInEM3Eye)(void *instance);
-bool get_IsInEM3Eye(void *instance) {
-    if (instance != NULL) {
-        if (Config.ExtraMenu.RedWallhack) {
-            return true;
-        }
-    }
-    return orig_IsInEM3Eye(instance);
-}
+// get_IsInEM3Eye() @0x9677554 is only 8 bytes long (ldrb w0,[x0,#..]; ret) and
+// the very next function in libunity.so is set_IsInEM3Eye() @0x967755C. A64
+// inline hooking (hook()/HOOK_LIB/And64InlineHook) overwrites the target with a
+// 16-byte LDR/BR stub whenever the replacement sits further than +/-128MB away,
+// which wipes out that neighbour. The flag is forced with Patches.Em3Eye
+// (mov x0,#1 ; ret) from Main.cpp instead - exactly the 8 bytes of the getter.
 
 float (*orig_GetAccDistance)(void *instance);
 float GetAccDistance(void *instance) {
@@ -425,15 +422,10 @@ inline float hooked_CalcFinalMoveScale(void* instance) {
 }
 
 //-- Weapon Kinetic
-inline bool (*orig_get_IsKineticArmor)(void* instance) = nullptr;
-inline bool get_IsKineticArmor(void* instance) {
-    if (instance != NULL) {
-        if (Config.ExtraMenu.Kinetic) {
-            return true;
-        }
-    }
-    return orig_get_IsKineticArmor(instance);
-}
+// get_IsKineticArmor() @0x51B3D64 is only 8 bytes long and the very next
+// function is the *virtual* Pawn::get_CurrentSeatMode() @0x51B3D6C (0xAC bytes),
+// so a 16-byte inline stub here would break every seat query in the game. The
+// flag is forced with Patches.KineticArmor (mov x0,#1 ; ret) from Main.cpp.
 
 //-- Zero Recoil
 inline float (*orig_GetScaleRecoil)(void* instance) = nullptr;
@@ -752,7 +744,8 @@ inline void InitializeAllHooks() {
     HOOK_LIB("libunity.so", "0x50ED8D4", get_EquipTime, orig_get_EquipTime);
 
     //-- Red Wallhack
-    HOOK_LIB("libunity.so", "0x9677554", get_IsInEM3Eye, orig_IsInEM3Eye); 
+    //   get_IsInEM3Eye @0x9677554 is an 8-byte getter: never inline-hook it,
+    //   it stays a patch (Patches.Em3Eye, Main.cpp).
     HOOK_LIB("libunity.so", "0xAD1DD78", GetAccDistance, orig_GetAccDistance);
 
     //-- Skip Tutorial
@@ -769,7 +762,8 @@ inline void InitializeAllHooks() {
     HOOK_LIB("libunity.so", "0x51D2EB8", hooked_CalcFinalMoveScale, original_CalcFinalMoveScale);
 
     //-- Weapon Kinetic
-    HOOK_LIB("libunity.so", "0x51B3D64", get_IsKineticArmor, orig_get_IsKineticArmor);
+    //   get_IsKineticArmor @0x51B3D64 is an 8-byte getter: never inline-hook it,
+    //   it stays a patch (Patches.KineticArmor, Main.cpp).
 
     //-- Zero Recoil
     HOOK_LIB("libunity.so", "0xC9BAFF8", GetScaleRecoil, orig_GetScaleRecoil);
@@ -780,9 +774,14 @@ inline void InitializeAllHooks() {
     HOOK_LIB("libunity.so", "0xC9C76C4", DisperseBase, orig_DisperseBase);
     
     //-- Spectate
+    // NOTE: ObserverDelayManager::ProcessForDelay @0x519676C must be hooked
+    // exactly ONCE. It used to be hooked twice into the same orig pointer; the
+    // second A64 hook built its trampoline from the *already patched* prologue,
+    // so o_ProcessForDelay ended up branching back into h_ProcessForDelay, which
+    // calls o_ProcessForDelay - unbounded recursion (stack overflow / SIGSEGV)
+    // the first time the game ran ProcessForDelay.
     HOOK_LIB("libunity.so", "0x519676C", h_ProcessForDelay, o_ProcessForDelay);
     HOOK_LIB("libunity.so", "0x51966D8", h_NeedDelayProcess, o_NeedDelayProcess);
-    HOOK_LIB("libunity.so", "0x519676C", h_ProcessForDelay, o_ProcessForDelay);  
 
     //-- No smoke
     UnityObject_get_name = reinterpret_cast<String *(*)(void *)>(

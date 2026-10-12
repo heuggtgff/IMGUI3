@@ -887,6 +887,11 @@ static EGLSurface g_imguiSurface = EGL_NO_SURFACE;
 static bool g_imguiBackendReady = false;    struct My_Patches {
     MemoryPatch A1, grap, NoCrouch, SpeedhackX, SpeedhackX1, NoWingsuit, fpss, frame;
     MemoryPatch NoHitFlinch, NoDrift;
+    // 8-byte leaf getters - they can never be inline-hooked, see Feats.h /
+    // NewFeatures.h: A64 hooking writes a 16-byte stub in place and would take
+    // the *next* function in libunity.so with it.
+    MemoryPatch Em3Eye, KineticArmor;
+    MemoryPatch NoHipfireUseGetReadyTime, NoHipfireSpringFireGetReady;
 } Patches;
 
 float AVIWA = 119.167f;
@@ -2043,6 +2048,32 @@ if (runtimeState.activeTab == 4) {
                 } else if (!Config.NewFeaturesMenu.NoDrift && s_appliedNoDrift) {
                     Patches.NoDrift.Restore(); s_appliedNoDrift = false;
                 }
+
+                // Same edge-triggered pattern for the four 8-byte getters that
+                // used to be inline hooks (they are patches now, see the
+                // Patches.* creation in Init_Thread / the Feats.h comments).
+                static bool s_appliedEm3Eye = false;
+                if (Config.ExtraMenu.RedWallhack && !s_appliedEm3Eye) {
+                    Patches.Em3Eye.Modify(); s_appliedEm3Eye = true;
+                } else if (!Config.ExtraMenu.RedWallhack && s_appliedEm3Eye) {
+                    Patches.Em3Eye.Restore(); s_appliedEm3Eye = false;
+                }
+                static bool s_appliedKineticArmor = false;
+                if (Config.ExtraMenu.Kinetic && !s_appliedKineticArmor) {
+                    Patches.KineticArmor.Modify(); s_appliedKineticArmor = true;
+                } else if (!Config.ExtraMenu.Kinetic && s_appliedKineticArmor) {
+                    Patches.KineticArmor.Restore(); s_appliedKineticArmor = false;
+                }
+                static bool s_appliedNoHipfireDelay = false;
+                if (Config.NewFeaturesMenu.NoHipfireDelay && !s_appliedNoHipfireDelay) {
+                    Patches.NoHipfireUseGetReadyTime.Modify();
+                    Patches.NoHipfireSpringFireGetReady.Modify();
+                    s_appliedNoHipfireDelay = true;
+                } else if (!Config.NewFeaturesMenu.NoHipfireDelay && s_appliedNoHipfireDelay) {
+                    Patches.NoHipfireUseGetReadyTime.Restore();
+                    Patches.NoHipfireSpringFireGetReady.Restore();
+                    s_appliedNoHipfireDelay = false;
+                }
             }
             ImGui::End();
             ImGui::PopStyleVar();
@@ -2367,6 +2398,35 @@ void Init_Thread() {
     // never accumulates, so the scope never drifts - far safer than hooking
     // the shared Tick(0xC9C0B64), whose Dobby trampoline corrupted the game.
     Patches.NoDrift = MemoryPatch::createWithHex("libunity.so", 0xC9BE4C0,
+        "00 00 80 D2 C0 03 5F D6");
+
+    // ------------------------------------------------------------------
+    //  8-byte leaf getters: PATCHED, never hooked.
+    //
+    //  GR .57 dump sizes (jeudhehs/dump, "dump (GR .57).cs"); every one of
+    //  these functions is exactly 8 bytes (ldrb/ldr w0,[x0,#..] ; ret) and the
+    //  function that follows it in .text starts 8 bytes later:
+    //    get_IsInEM3Eye          @0x9677554 -> set_IsInEM3Eye @0x967755C
+    //    get_IsKineticArmor      @0x51B3D64 -> Pawn::get_CurrentSeatMode
+    //                                          @0x51B3D6C (virtual, 0xAC bytes)
+    //    get_UseGetReadyTime     @0x50E9F60 -> set_UseGetReadyTime @0x50E9F68
+    //    get_SpringFireGetReady  @0x50E9F28 -> set_SpringFireGetReady @0x50E9F30
+    //
+    //  A64HookFunction (hook()/HOOK_LIB) replaces the target with a 16-byte
+    //  "ldr x17,#8 ; br x17 ; .quad <hook>" stub whenever the replacement is
+    //  further than +/-128MB away, i.e. it overwrites the following 8 bytes -
+    //  the neighbouring setter / virtual seat query. Those neighbours are
+    //  called by the game while it initialises weapon + pawn state, which is
+    //  what made the client crash as soon as a match was joined. Patching
+    //  exactly 8 bytes cannot reach the neighbour. "00 00 80 D2 C0 03 5F D6"
+    //  = mov x0,#0 ; ret (false), "20 00 80 D2 C0 03 5F D6" = mov x0,#1 ; ret.
+    Patches.Em3Eye = MemoryPatch::createWithHex("libunity.so", 0x9677554,
+        "20 00 80 D2 C0 03 5F D6");
+    Patches.KineticArmor = MemoryPatch::createWithHex("libunity.so", 0x51B3D64,
+        "20 00 80 D2 C0 03 5F D6");
+    Patches.NoHipfireUseGetReadyTime = MemoryPatch::createWithHex("libunity.so", 0x50E9F60,
+        "00 00 80 D2 C0 03 5F D6");
+    Patches.NoHipfireSpringFireGetReady = MemoryPatch::createWithHex("libunity.so", 0x50E9F28,
         "00 00 80 D2 C0 03 5F D6");
 
     // Dump-verified (both dump.cs and dump (GR .57).cs from the jeudhehs/dump
