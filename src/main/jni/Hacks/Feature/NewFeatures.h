@@ -335,13 +335,7 @@ namespace NewFeatures
     // it to reject absurd ranges; the real validation is done by CheckTarget.
     inline bool TriggerbotInAssistRange(void *fireComponent)
     {
-        float *aimAssistDis = *(float **)((uintptr_t)fireComponent + Offsets::WeaponFire_AimAssistDis);
-        if (aimAssistDis == nullptr) return true;
-        const float base = aimAssistDis[0];
-        if (!(base > 0.0f)) return true;
-        const float dist = *(float *)((uintptr_t)fireComponent + Offsets::WeaponFire_TargetPawnDist);
-        if (!(dist > 0.0f)) return true;
-        return dist <= base * 10.0f;
+        return true; // unlimited range
     }
 
     inline void TriggerbotFire(void *fireComponent)
@@ -492,8 +486,10 @@ namespace NewFeatures
                                                              Vector3 startPos, Vector3 rayDir,
                                                              int flag, float range)
     {
+        // Override range to unlimited for triggerbot
+        const float unlimitedRange = 999999.0f;
         const bool result = oWeaponFireComponent_Instant_CheckTarget
-                          ? oWeaponFireComponent_Instant_CheckTarget(thiz, target, startPos, rayDir, flag, range)
+                          ? oWeaponFireComponent_Instant_CheckTarget(thiz, target, startPos, rayDir, flag, unlimitedRange)
                           : false;
 
         if (result && Config.NewFeaturesMenu.Triggerbot && !s_triggerFiring) {
