@@ -806,11 +806,13 @@ namespace NewFeatures
         // Patches.NoHipfireSpringFireGetReady) - the two getters are 8-byte leaf
         // functions and must never be inline-hooked (their setters are adjacent).
 
-        LOGI("[NewFeatures] hooks installed: CheckTarget=%p HasEnemyInPort=%p BreatheTremblingPos=%p "
-             "CollectWeaponShakeOffsets=%p UpdateFirstPersonCameraOffset=%p OnJumpHitGround=%p "
+        LOGI("[NewFeatures] hooks installed: Weapon_Tick=%p Weapon_StartFire=%p Weapon_StopFire=%p TickLocalPlayer=%p "
+             "BreatheTremblingPos=%p CollectWeaponShakeOffsets=%p UpdateFirstPersonCameraOffset=%p OnJumpHitGround=%p "
              "(NoHipfireDelay: 2 x 8-byte patch, no hook)",
-             (void *)oWeaponFireComponent_Instant_CheckTarget,
-             (void *)oWeaponFireComponent_Instant_HasEnemyInPort,
+             (void *)orig_Weapon_Tick,
+             (void *)orig_Weapon_StartFire,
+             (void *)orig_Weapon_StopFire,
+             (void *)orig_TickLocalPlayer,
              (void *)oWeaponFireComponent_Instant_GetBreatheTremblingPos,
              (void *)oWeaponShakeController_CollectWeaponShakeOffsets,
              (void *)oPawn_UpdateFirstPersonCameraOffset,

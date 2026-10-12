@@ -1922,13 +1922,13 @@ if (runtimeState.activeTab == 4) {
                                 // Test fire button (verifies StartFire works on current weapon)
                                 if (custom::Button("Test Fire", ImVec2(0, 0))) {
                                     auto getLocalPawn = (uintptr_t (*)())NewFeatures::UnityRva(NewFeatures::RVA::Gameplay_get_LocalPawn);
-                                    auto getCurrentWeapon = (void* (*)(void*))NewFeatures::UnityRva(NewFeatures::RVA::Pawn_get_CurrentWeapon);
+                                    auto getCurrentWeapon = (void* (*)(void*))NewFeatures::UnityRva(NewFeatures::RVA::Pawn_GetCurrentWeapon);
                                     auto startFire = (void (*)(void *))NewFeatures::UnityRva(NewFeatures::RVA::Weapon_StartFire);
                                     if (getLocalPawn && getCurrentWeapon && startFire) {
                                         uintptr_t localPawnU = getLocalPawn();
                                         if (localPawnU) {
                                             void *weapon = getCurrentWeapon((void *)localPawnU);
-                                            if (NewFeatures::Tools::IsPtrValid(weapon)) {
+                                            if (Tools::IsPtrValid(weapon)) {
                                                 startFire(weapon);
                                             }
                                         }

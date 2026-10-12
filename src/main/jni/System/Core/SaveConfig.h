@@ -125,8 +125,8 @@ bool LoadConfiguration(const std::string& filename) {
     if (config.contains("NewFeatures")) {
         Config.NewFeaturesMenu.NoCrouch = config["NewFeatures"]["NoCrouch"].get<bool>();
         Config.NewFeaturesMenu.Triggerbot = config["NewFeatures"]["Triggerbot"].get<bool>();
-        Config.NewFeaturesMenu.TriggerbotDelayMin = config["NewFeatures"]["TriggerbotDelayMin"].get<int>();
-        Config.NewFeaturesMenu.TriggerbotDelayMax = config["NewFeatures"]["TriggerbotDelayMax"].get<int>();
+        Config.NewFeaturesMenu.TriggerbotMode = config["NewFeatures"]["TriggerbotMode"].get<int>();
+        Config.NewFeaturesMenu.TriggerbotDelay = config["NewFeatures"]["TriggerbotDelay"].get<int>();
         Config.NewFeaturesMenu.NoHitFlinch = config["NewFeatures"]["NoHitFlinch"].get<bool>();
         Config.NewFeaturesMenu.NoDrift = config["NewFeatures"]["NoDrift"].get<bool>();
         Config.NewFeaturesMenu.StableScope = config["NewFeatures"]["StableScope"].get<bool>();
