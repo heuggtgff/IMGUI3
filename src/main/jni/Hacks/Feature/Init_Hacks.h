@@ -230,6 +230,7 @@ sColorsESPBOT sColorsESPBOT{0};
     {
         bool NoCrouch = false;
         bool Triggerbot = false;
+        int TriggerbotMode = 0; // 0 = CheckTarget hook, 1 = Weapon::Tick hook
         int TriggerbotDelayMin = 0;
         int TriggerbotDelayMax = 50;
         bool NoHitFlinch = false;

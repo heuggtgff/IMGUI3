@@ -187,6 +187,10 @@ namespace NewFeatures
         constexpr uintptr_t AmmoCanFire                     = 0xC14DF24; // bool()
         constexpr uintptr_t StartFire                       = 0xC14C29C; // void()
 
+        // Weapon::Tick(float) - runs every frame, used for tick-based triggerbot
+        // Find in dump: Weapon.Tick or WeaponFireComponent_Instant.Tick
+        constexpr uintptr_t Weapon_Tick                     = 0x0; // TODO: find from dump.cs
+
         constexpr uintptr_t CollectWeaponShakeOffsets       = 0x9B774C0; // WeaponShakeOffsets(float,float)
         constexpr uintptr_t UpdateFirstPersonCameraOffset   = 0x51C489C; // void(float)
         constexpr uintptr_t OnJumpHitGround                 = 0x8599460; // void(float,bool)
@@ -387,11 +391,39 @@ namespace NewFeatures
     inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
 
     // =====================================================================
-    //  STABLE SCOPE
+    //  TICK-BASED TRIGGERBOT (alternative, more reliable)
+    //  Hooks Weapon::Tick(float) which runs every frame. Checks crosshair
+    //  for enemy and calls StartFire directly. Does NOT depend on
+    //  CheckTarget/HasEnemyInPort virtual methods being invoked by game.
     // =====================================================================
-    inline bool StableScopeActive()
+    void (*oWeapon_Tick)(void *, float) = nullptr;
+
+    inline void Hook_Weapon_Tick(void *thiz, float deltaTime)
     {
-        return Config.NewFeaturesMenu.StableScope && IsLocalPlayerScoping();
+        // Call original first
+        if (oWeapon_Tick) oWeapon_Tick(thiz, deltaTime);
+
+        // Only run tick-based triggerbot when mode = 1
+        if (Config.NewFeaturesMenu.TriggerbotMode != 1) return;
+        if (!Config.NewFeaturesMenu.Triggerbot) return;
+        if (s_triggerFiring) return;
+        if (!IsLocalFireComponent(thiz)) return;
+
+        void *localPawn = LocalPlayer();
+        if (!IsReadable(localPawn)) return;
+        if (!IsLocalPlayerScoping()) return; // only while ADS
+
+        // Get current target from weapon's m_TargetPawn (set by game's aim-assist)
+        void *targetPawn = *(void **)((uintptr_t)thiz + Offsets::WeaponFire_TargetPawn);
+        if (!IsReadable(targetPawn) || targetPawn == localPawn) return;
+        if (IsSameTeam(localPawn, targetPawn)) return;
+        if (!IsPawnAlive(targetPawn)) return;
+
+        // Delay
+        if (!TriggerbotDelayElapsed(targetPawn)) return;
+
+        s_dbgTriggerState = 2;
+        TriggerbotFire(thiz);
     }
 
     // Layout of WeaponShakeController.WeaponShakeOffsets (private nested struct).
@@ -503,6 +535,9 @@ namespace NewFeatures
                                                              Vector3 startPos, Vector3 rayDir,
                                                              int flag, float range)
     {
+        // Only run CheckTarget-based triggerbot when mode = 0
+        if (Config.NewFeaturesMenu.TriggerbotMode != 0) return oWeaponFireComponent_Instant_CheckTarget ? oWeaponFireComponent_Instant_CheckTarget(thiz, target, startPos, rayDir, flag, range) : false;
+
         // Override range to unlimited for triggerbot
         const float unlimitedRange = 999999.0f;
         const bool result = oWeaponFireComponent_Instant_CheckTarget
@@ -527,6 +562,9 @@ namespace NewFeatures
 
     inline bool Hook_WeaponFireComponent_Instant_HasEnemyInPort(void *thiz, bool traceAssist)
     {
+        // Only run CheckTarget-based triggerbot when mode = 0
+        if (Config.NewFeaturesMenu.TriggerbotMode != 0) return oWeaponFireComponent_Instant_HasEnemyInPort ? oWeaponFireComponent_Instant_HasEnemyInPort(thiz, traceAssist) : false;
+
         const bool result = oWeaponFireComponent_Instant_HasEnemyInPort
                           ? oWeaponFireComponent_Instant_HasEnemyInPort(thiz, traceAssist)
                           : false;
@@ -626,6 +664,13 @@ namespace NewFeatures
         Tools::Hook(UnityRva(RVA::HasEnemyInPort),
                     (void *)&Hook_WeaponFireComponent_Instant_HasEnemyInPort,
                     (void **)&oWeaponFireComponent_Instant_HasEnemyInPort);
+
+        // Tick-based triggerbot (alternative, more reliable)
+        if (RVA::Weapon_Tick != 0) {
+            Tools::Hook(UnityRva(RVA::Weapon_Tick),
+                        (void *)&Hook_Weapon_Tick,
+                        (void **)&oWeapon_Tick);
+        }
 
         // ---- Stable Scope ----------------------------------------------
         Tools::Hook(UnityRva(RVA::GetBreatheTremblingPos),

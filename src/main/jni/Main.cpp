@@ -1905,6 +1905,8 @@ if (runtimeState.activeTab == 4) {
                                 custom::Separator();
                                 custom::Checkbox("Triggerbot", &Config.NewFeaturesMenu.Triggerbot);
                                 if (Config.NewFeaturesMenu.Triggerbot) {
+                                    static const char* triggerModes[] = { "CheckTarget Hook", "Weapon::Tick Hook" };
+                                    custom::Combo("Mode", &Config.NewFeaturesMenu.TriggerbotMode, triggerModes, IM_ARRAYSIZE(triggerModes));
                                     custom::SliderInt("Trigger Delay Min", &Config.NewFeaturesMenu.TriggerbotDelayMin, 0, 30, "%d ms");
                                     custom::SliderInt("Trigger Delay Max", &Config.NewFeaturesMenu.TriggerbotDelayMax, 20, 100, "%d ms");
                                 }
