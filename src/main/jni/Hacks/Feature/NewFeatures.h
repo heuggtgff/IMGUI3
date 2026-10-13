@@ -539,8 +539,15 @@ namespace NewFeatures
         auto camPos = cam->get_transform()->get_position();
 
         // ---- Phase 1: who is inside the crosshair zone? (screen-space, no ray)
+        //
+        // Head bone AND body centre are considered, and the one nearest the
+        // crosshair wins. The head alone used to decide the zone and the body was
+        // only tried when the head did not project at all - so an enemy whose
+        // head sat a few pixels outside the radius while their body filled the
+        // crosshair was discarded, and the trigger stayed silent while the
+        // crosshair was plainly on them.
         constexpr int MAX_CANDIDATES = 16;
-        struct Candidate { Pawn *pawn; float dist2; Vector3 aimPoint; };
+        struct Candidate { Pawn *pawn; float dist2; Vector3 headPoint, chestPoint; };
         Candidate candidates[MAX_CANDIDATES];
         int nCandidates = 0;
         Pawn *bestNoLos = nullptr;             // nearest pawn, LOS not yet known
@@ -551,13 +558,33 @@ namespace NewFeatures
             if (!Tools::IsPtrValid((void *)pawn)) continue;
             if (!pawn->m_IsAlive()) continue;
 
-            float d2 = -1.0f;                  // best of head/mesh for this pawn
-            Vector3 aim;
-
             Transform *headBone = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
-            if (Tools::IsPtrValid((void *)headBone)) {
-                aim = headBone->get_position();
-                const Vector3 sc = worldToScreen(cam, aim);
+            Transform *mesh     = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
+            const bool haveHeadBone = Tools::IsPtrValid((void *)headBone);
+            const bool haveMesh     = Tools::IsPtrValid((void *)mesh);
+            if (!haveHeadBone && !haveMesh) continue;
+
+            Vector3 headPoint(0, 0, 0), chestPoint(0, 0, 0);
+            if (haveHeadBone) headPoint = headBone->get_position();
+
+            if (haveMesh) {
+                const Vector3 root = mesh->get_position();
+                if (haveHeadBone) {
+                    // centre of mass: halfway between the model root and the head
+                    chestPoint = Vector3((root.x + headPoint.x) * 0.5f,
+                                         (root.y + headPoint.y) * 0.5f,
+                                         (root.z + headPoint.z) * 0.5f);
+                } else {
+                    chestPoint = root;         // no head bone -> the root will do
+                }
+            } else {
+                chestPoint = headPoint;        // no mesh -> both points are the head
+            }
+
+            float d2 = -1.0f;                  // best of head/body for this pawn
+
+            if (haveHeadBone) {
+                const Vector3 sc = worldToScreen(cam, headPoint);
                 if (sc.z > 0.0f) {             // in front of the camera
                     const float dx = sc.x - cx;
                     const float dy = sc.y - cy;
@@ -565,16 +592,13 @@ namespace NewFeatures
                 }
             }
 
-            if (d2 < 0.0f) {                   // head not projectable -> try the body
-                Transform *mesh = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
-                if (Tools::IsPtrValid((void *)mesh)) {
-                    aim = mesh->get_position();
-                    const Vector3 sc = worldToScreen(cam, aim);
-                    if (sc.z > 0.0f) {
-                        const float dx = sc.x - cx;
-                        const float dy = sc.y - cy;
-                        d2 = dx * dx + dy * dy;
-                    }
+            if (haveMesh) {
+                const Vector3 sc = worldToScreen(cam, chestPoint);
+                if (sc.z > 0.0f) {
+                    const float dx = sc.x - cx;
+                    const float dy = sc.y - cy;
+                    const float dc = dx * dx + dy * dy;
+                    if (d2 < 0.0f || dc < d2) d2 = dc;   // nearest point to the crosshair
                 }
             }
 
@@ -585,45 +609,53 @@ namespace NewFeatures
             if (d2 > radiusSq) continue;       // outside the zone, not a candidate
 
             if (nCandidates < MAX_CANDIDATES) {
-                candidates[nCandidates].pawn = pawn;
-                candidates[nCandidates].dist2 = d2;
-                candidates[nCandidates].aimPoint = aim;
+                candidates[nCandidates].pawn       = pawn;
+                candidates[nCandidates].dist2      = d2;
+                candidates[nCandidates].headPoint  = headPoint;
+                candidates[nCandidates].chestPoint = chestPoint;
                 nCandidates++;
             }
             if (d2 < bestNoLosDist2) { bestNoLosDist2 = d2; bestNoLos = pawn; }
         }
 
-        // ---- Phase 2: only candidates get the LOS ray (one ray each, usually
-        // 0-1 pawns near the crosshair; hard cap 16 so a crowd can't spike it).
-        // The nearest-shootable pawn goes noLOS; if raycasting is unavailable
-        // the nearest zone pawn goes there too (fail-open for the INDICATOR
-        // only - the fire path re-checks and fails closed).
+        // ---- Phase 2: visibility for the candidates only (at most two rays
+        // each, hard cap 16 so a crowd cannot spike it).
+        //
+        // A hit counts as "the target itself" when it lands within
+        // AF_AIM_TOLERANCE of the aim point, so cover still blocks while the
+        // enemy's own chest, arms or raised weapon do not. The old test accepted
+        // ONLY "the ray hit nothing at all", which classified a ray landing on
+        // the target's own collider as "WALL BETWEEN" - and since the ray to the
+        // head is regularly clipped by the body first, the trigger went silent on
+        // enemies the crosshair was sitting on.
+        constexpr float AF_AIM_TOLERANCE = 0.5f;   // metres
+
         uintptr_t best = 0;
         float bestDist = radiusSq + 1.0f;
         for (int c = 0; c < nCandidates; c++) {
-            // VISIBILITY check = the game's own occlusion verdict for that pawn
-            // (RecentlyRendered), with the raw raycast as the tie-breaker only
-            // when the game hasn't rendered the pawn this frame but it also
-            // doesn't say "occluded" (still respawning / spectating etc).
             Pawn *cp = candidates[c].pawn;
-            bool visible = false;
 
+            // 1) the game's own occlusion verdict for that pawn
+            bool visible = false;
             if (fn_PawnRecentlyRendered != nullptr) {
                 visible = fn_PawnRecentlyRendered(cp);          // game's own answer
                 if (!visible && fn_PawnLastOccVisible != nullptr)
                     visible = fn_PawnLastOccVisible(cp);        // 1-frame leniency
             }
 
-            if (!visible) {
-                // Fallback: raw 2-arg raycast. Same struct layout as before,
-                // no overloads = no ABI guessing.
-                Vector3 to = candidates[c].aimPoint - camPos;
-                const float len = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
-                if (len < 0.0001f) continue;
-                const Vector3 dir(to.x / len, to.y / len, to.z / len);
-                const float hit = A_FireRaycastDistance(
-                    camPos, dir, Vector3::Distance(camPos, candidates[c].aimPoint) + 0.35f);
-                visible = (hit == -1.0f);                      // -1 = clear; blocked/malformed = invisible
+            // 2) raw ray, tried at BOTH the head and the body centre.
+            if (!visible && fn_PhysicsRaycastLOS != nullptr) {
+                const Vector3 points[2] = { candidates[c].headPoint, candidates[c].chestPoint };
+                for (int p = 0; p < 2 && !visible; p++) {
+                    Vector3 to = points[p] - camPos;
+                    const float len = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
+                    if (len < 0.0001f) continue;
+                    const Vector3 dir(to.x / len, to.y / len, to.z / len);
+                    const float hit = A_FireRaycastDistance(camPos, dir, len + AF_AIM_TOLERANCE);
+                    // -1 = clear line, >= len-tolerance = the hit IS the target.
+                    // -2 (no raycast fn / malformed struct) stays fail-closed.
+                    visible = (hit == -1.0f) || (hit >= len - AF_AIM_TOLERANCE);
+                }
             }
 
             if (!visible) {
