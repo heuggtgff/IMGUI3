@@ -536,6 +536,7 @@ namespace NewFeatures
         // re-opens /proc/self/maps per call - resolving per scan was a big part
         // of the lag).
         auto worldToScreen = fn_WorldToScreen;
+        auto camPos = cam->get_transform()->get_position();
 
         // ---- Phase 1: who is inside the crosshair zone? (screen-space, no ray)
         //
@@ -549,6 +550,8 @@ namespace NewFeatures
         struct Candidate { Pawn *pawn; float dist2; Vector3 headPoint, chestPoint; };
         Candidate candidates[MAX_CANDIDATES];
         int nCandidates = 0;
+        Pawn *bestNoLos = nullptr;             // nearest pawn, LOS not yet known
+        float bestNoLosDist2 = radiusSq + 1.0f;
 
         for (int i = 0; i < count; i++) {
             Pawn *pawn = items[i];
@@ -612,29 +615,64 @@ namespace NewFeatures
                 candidates[nCandidates].chestPoint = chestPoint;
                 nCandidates++;
             }
+            if (d2 < bestNoLosDist2) { bestNoLosDist2 = d2; bestNoLos = pawn; }
         }
 
-        // ---- Phase 2: the candidate nearest the crosshair wins.
+        // ---- Phase 2: visibility for the candidates only (at most two rays
+        // each, hard cap 16 so a crowd cannot spike it).
         //
-        // There is deliberately NO line-of-sight / visibility gate here. The
-        // driver this triggerbot is ported from (oonalang/V3) has none, and its
-        // own comment records why: the raycast probe "fails closed" whenever the
-        // build's RaycastHit layout differs, and Pawn::get_RecentlyRendered /
-        // get_LastOccVisible are VIRTUAL (Slot 234/235) - calling the base getter
-        // on a PlayerPawn/MPPawn returns a base field the subclass never fills,
-        // i.e. false. Result: the crosshair could sit dead-centre on an enemy and
-        // EVERY frame was rejected as "WALL BETWEEN", so the trigger never fired.
-        // A triggerbot fires the instant an enemy is under the crosshair.
+        // A hit counts as "the target itself" when it lands within
+        // AF_AIM_TOLERANCE of the aim point, so cover still blocks while the
+        // enemy's own chest, arms or raised weapon do not. The old test accepted
+        // ONLY "the ray hit nothing at all", which classified a ray landing on
+        // the target's own collider as "WALL BETWEEN" - and since the ray to the
+        // head is regularly clipped by the body first, the trigger went silent on
+        // enemies the crosshair was sitting on.
+        constexpr float AF_AIM_TOLERANCE = 0.5f;   // metres
+
         uintptr_t best = 0;
         float bestDist = radiusSq + 1.0f;
         for (int c = 0; c < nCandidates; c++) {
+            Pawn *cp = candidates[c].pawn;
+
+            // 1) the game's own occlusion verdict for that pawn
+            bool visible = false;
+            if (fn_PawnRecentlyRendered != nullptr) {
+                visible = fn_PawnRecentlyRendered(cp);          // game's own answer
+                if (!visible && fn_PawnLastOccVisible != nullptr)
+                    visible = fn_PawnLastOccVisible(cp);        // 1-frame leniency
+            }
+
+            // 2) raw ray, tried at BOTH the head and the body centre.
+            if (!visible && fn_PhysicsRaycastLOS != nullptr) {
+                const Vector3 points[2] = { candidates[c].headPoint, candidates[c].chestPoint };
+                for (int p = 0; p < 2 && !visible; p++) {
+                    Vector3 to = points[p] - camPos;
+                    const float len = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
+                    if (len < 0.0001f) continue;
+                    const Vector3 dir(to.x / len, to.y / len, to.z / len);
+                    const float hit = A_FireRaycastDistance(camPos, dir, len + AF_AIM_TOLERANCE);
+                    // -1 = clear line, >= len-tolerance = the hit IS the target.
+                    // -2 (no raycast fn / malformed struct) stays fail-closed.
+                    visible = (hit == -1.0f) || (hit >= len - AF_AIM_TOLERANCE);
+                }
+            }
+
+            if (!visible) {
+                d.losBlocked++;
+                d.losBlockedScan++;
+                continue;                      // not on screen -> not shootable
+            }
             if (candidates[c].dist2 < bestDist) {
                 best     = (uintptr_t)candidates[c].pawn;
                 bestDist = candidates[c].dist2;
             }
         }
 
-        g_afireLosOk = (best != 0);            // scan verdict: a target is available
+        if (best == 0 && fn_PhysicsRaycastLOS == nullptr && bestNoLos != nullptr)
+            best = (uintptr_t)bestNoLos;
+
+        g_afireLosOk = (best != 0);            // scan verdict: this target is shootable
         if (best != 0) d.targets++;
         return best;
     }
@@ -716,15 +754,9 @@ namespace NewFeatures
             return;
         }
 
-        // Heartbeat. Weapon::Tick is the primary heartbeat, but 18 of the Weapon
-        // subclasses in this dump override Tick at their own RVA (WeaponSniper,
-        // WeaponSparrow, WNWeaponMicroMG, ...), and such a weapon never reaches
-        // this hook at all. The reference driver only acted when the ticked
-        // weapon was the held one, which left the trigger dead for any loadout
-        // whose weapon is one of those overrides. Firing `held` explicitly is
-        // safe from any game-thread Weapon::Tick call, so the pointer compare is
-        // now only a note (kept for diagnostics) - never a hard filter.
-        if (tickInstance != nullptr && tickInstance == (void *)held) d.weaponHeldTicks++;
+        // V3 semantics: only act on the local player's held weapon tick.
+        if (tickInstance != nullptr && tickInstance != (void *)held) return;
+        if (tickInstance != nullptr) d.weaponHeldTicks++;
 
         d.hookCalls++;
         d.scans++;
