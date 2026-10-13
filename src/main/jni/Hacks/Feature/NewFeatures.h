@@ -183,7 +183,6 @@ namespace NewFeatures
     {
         constexpr uintptr_t CheckTarget                     = 0xC9C1B50; // bool(AttackableTarget,Vector3,Vector3,int,float)
         constexpr uintptr_t HasEnemyInPort                  = 0xC9C13F8; // bool(bool)
-        constexpr uintptr_t GetBreatheTremblingPos          = 0xC9BD880; // Vector2()
         constexpr uintptr_t GetIsAiming                     = 0xC9AF4E0; // bool()  (fire component ADS flag)
         constexpr uintptr_t AmmoCanFire                     = 0xC160CEC; // bool() Slot 58 - WeaponFireComponent_Instant.AmmoCanFire
 
@@ -219,9 +218,8 @@ namespace NewFeatures
         constexpr uintptr_t Screen_get_width                = 0x50504BC; // int() - Screen.get_width
         constexpr uintptr_t Screen_get_height               = 0x5050520; // int() - Screen.get_height
 
-        constexpr uintptr_t CollectWeaponShakeOffsets       = 0x9B774C0; // WeaponShakeOffsets(float,float)
-        constexpr uintptr_t UpdateFirstPersonCameraOffset   = 0x51C489C; // void(float)
-        constexpr uintptr_t OnJumpHitGround                 = 0x8599460; // void(float,bool)
+        constexpr uintptr_t SlideTackle_get_UseSlideTackleLimit  = 0x8BF722C; // bool() Slot 39 - SlideTackleComponent (dump.cs 731407)
+        constexpr uintptr_t PVEArcade_get_UseSlideTackleLimit    = 0x651274C; // bool() Slot 39 - PVEArcadeSlideTackleComponent override (dump.cs 785219)
 
         constexpr uintptr_t Pawn_GetTeamId                  = 0x51B89CC; // uint()
         constexpr uintptr_t Pawn_IsSameCamp                 = 0x51EF174; // bool(Pawn)
@@ -267,7 +265,7 @@ namespace NewFeatures
         return *(bool *)((uintptr_t)pawn + Class_Pawn_m_IsAlive);
     }
 
-    // A hook only ever touches the local player's own weapon / components.
+    // A hook only ever touches the local player
     inline bool IsLocalFireComponent(void *fireComponent)
     {
         if (!IsReadable(fireComponent)) return false;
@@ -275,13 +273,8 @@ namespace NewFeatures
         return owner != nullptr && owner == LocalPlayer();
     }
 
-    inline bool IsLocalWeaponShakeController(void *controller)
-    {
-        if (!IsReadable(controller)) return false;
-        void *owner = *(void **)((uintptr_t)controller + Offsets::WeaponShake_Owner);
-        return owner != nullptr && owner == LocalPlayer();
-    }
-
+    // PawnComponent-level owner check (PawnComponent::m_Pawn @0x20): used by the
+    // No Slide Fatigue hooks (SlideTackleComponent derives from PawnComponent).
     inline bool IsLocalPawnComponent(void *component)
     {
         if (!IsReadable(component)) return false;
@@ -764,11 +757,8 @@ namespace NewFeatures
             ready = getIsFiring != nullptr && getIsFiring(localPawn);
         }
 
-        if (ready && Config.NewFeaturesMenu.TriggerbotDelay > 0) {
-            if (now - g_afireLastPressTime <
-                (double)Config.NewFeaturesMenu.TriggerbotDelay / 1000.0)
-                ready = false;
-        }
+// Delay slider removed: the trigger now fires the frame the target enters the
+        // crosshair zone (config field kept for save-file compatibility, forced to 0).
 
         if (!ready) {
             A_FireReleaseTrigger(nullptr);
@@ -949,35 +939,6 @@ namespace NewFeatures
     inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
     inline TriggerbotDiag &GetTriggerbotDiag() { return g_triggerDiag; }
 
-    // Layout of WeaponShakeController.WeaponShakeOffsets (private nested struct).
-    struct WeaponShakeOffsets
-    {
-        Vector3 rotationOffset;              // 0x00
-        Vector3 positionOffset;              // 0x0C
-        Vector3 aimRotationOffset;           // 0x18
-        Vector3 gunKickAimRotationOffset;    // 0x24
-        Vector3 crosshairOffset;             // 0x30  <- reticle / scope offset
-        Vector3 ikWeaponRootRotationOffset;  // 0x3C
-        Vector3 ikWeaponRootPositionOffset;  // 0x48
-        Vector3 pawnRootRotationOffset;      // 0x54
-        Vector3 pawnRootPositionOffset;      // 0x60
-        bool    isRotationEnd;               // 0x6C
-        bool    isPositionEnd;               // 0x6D
-    };
-
-    inline void ZeroScopeShakeOffsets(WeaponShakeOffsets &o)
-    {
-        // Clears exactly the 9 offset Vector3s (0x00..0x6B); the two state
-        // bytes at 0x6C/0x6D are left alone so the controller still knows its
-        // shake modes finished.
-        std::memset(&o, 0, 9 * sizeof(Vector3));
-    }
-
-    inline void ZeroIfNonZero(float *p)
-    {
-        if (p != nullptr && *p != 0.0f) *p = 0.0f;
-    }
-
     // =====================================================================
     //  FIRING TIMING (Task 3)
     // =====================================================================
@@ -1025,11 +986,6 @@ namespace NewFeatures
         return Config.NewFeaturesMenu.NoSprintToFireDelay && IsLocalWeapon(weaponInstance);
     }
 
-    inline bool NoFireDelayActive(void *weaponInstance)
-    {
-        return Config.NewFeaturesMenu.NoFireDelay && IsLocalWeapon(weaponInstance);
-    }
-
     // ---- 3.2 No Hipfire Delay -------------------------------------------
     // Implemented as two 8-byte code patches in Main.cpp (hook install time),
     // NOT as hooks - see the note in the file header.  Each getter is exactly 8
@@ -1049,96 +1005,56 @@ namespace NewFeatures
     // =====================================================================
     //  Original function pointers + hook bodies
     // =====================================================================
+    // Stable Scope was removed (UI feature deleted). Its four hooks
+    // (GetBreatheTremblingPos / CollectWeaponShakeOffsets /
+    // UpdateFirstPersonCameraOffset / OnJumpHitGround) are gone. Note: the old
+    // breathing hook returned Vector2::Zero() on EVERY path, which kept
+    // zeroing scope sway even with every toggle off - that was the real cause
+    // of "No Drift can't be turned off". With the hooks gone, the NoDrift
+    // MemoryPatch restore now actually restores the game behaviour.
 
-    // ---- Stable Scope : breathing ----
-    Vector2 (*oWeaponFireComponent_Instant_GetBreatheTremblingPos)(void *) = nullptr;
+    // ---- No Slide Fatigue ----------------------------------------------
+    // SlideTackleComponent::get_UseSlideTackleLimit() @RVA 0x8BF722C (Slot 39)
+    // gates the slide limit/fatigue system (m_SlideTackleLimitDecreaseRate,
+    // m_CurrentMaxIdleTime, LimitSlideTackle). Returning false disables the
+    // whole system: unlimited slides, no fatigue, no idle-time decay.
+    // PVEArcadeSlideTackleComponent overrides the same slot @0x651274C - both
+    // are hooked so the feature works in arcade/PVE matches too. Gate by the
+    // owner pawn: only the local player's component is patched.
+    bool (*oSlideTackle_get_UseSlideTackleLimit)(void *) = nullptr;
+    bool (*oPVEArcade_get_UseSlideTackleLimit)(void *) = nullptr;
 
-    inline Vector2 Hook_WeaponFireComponent_Instant_GetBreatheTremblingPos(void *thiz)
+    inline bool Hook_SlideTackle_get_UseSlideTackleLimit(void *thiz)
     {
-        // Only override when the feature is on, this is the local player's weapon,
-        // and the local player is actually hardscoping. Outside that state return the
-        // game's value unchanged. Do NOT write to m_AimmingBreatheCountDown /
-        // m_BreatheTremblingPos here - the existing NoDrift MemoryPatch
-        // (UpdateBreatheTrembling @0xC9BE4C0 -> ret) already freezes the breathing
-        // tick, so a per-frame zero-write would fight the game and feel like lag.
-        if (!Config.NewFeaturesMenu.StableScope) return Vector2::Zero();
-        if (!IsLocalFireComponent(thiz)) return Vector2::Zero();
-        if (!IsLocalPlayerScoping()) return Vector2::Zero();
-        return Vector2::Zero();
+        if (Config.NewFeaturesMenu.NoSlideFatigue && IsLocalPawnComponent(thiz))
+            return false;
+        if (oSlideTackle_get_UseSlideTackleLimit)
+            return oSlideTackle_get_UseSlideTackleLimit(thiz);
+        return true;
     }
 
-    // ---- Stable Scope : movement sway / locomotion + landing shake ----
-    WeaponShakeOffsets (*oWeaponShakeController_CollectWeaponShakeOffsets)(void *, float, float) = nullptr;
-
-    inline WeaponShakeOffsets Hook_WeaponShakeController_CollectWeaponShakeOffsets(void *thiz, float deltaTime, float weight)
+    inline bool Hook_PVEArcade_get_UseSlideTackleLimit(void *thiz)
     {
-        WeaponShakeOffsets offsets{};
-        if (oWeaponShakeController_CollectWeaponShakeOffsets)
-            offsets = oWeaponShakeController_CollectWeaponShakeOffsets(thiz, deltaTime, weight);
-
-        if (!Config.NewFeaturesMenu.StableScope) return offsets;
-        if (!IsLocalWeaponShakeController(thiz)) return offsets;   // local player only
-        if (!IsLocalPlayerScoping()) return offsets;               // only while hardscoping
-
-        // Zero the visual offsets so strafing / walking / sliding / the land
-        // shake mode cannot move the reticle away from screen center.
-        ZeroScopeShakeOffsets(offsets);
-        return offsets;
+        if (Config.NewFeaturesMenu.NoSlideFatigue && IsLocalPawnComponent(thiz))
+            return false;
+        if (oPVEArcade_get_UseSlideTackleLimit)
+            return oPVEArcade_get_UseSlideTackleLimit(thiz);
+        return true;
     }
 
-    // ---- Stable Scope : lateral 1P camera shift while strafing ----
-    void (*oPawn_UpdateFirstPersonCameraOffset)(void *, float) = nullptr;
-
-    inline void Hook_Pawn_UpdateFirstPersonCameraOffset(void *thiz, float deltaTime)
-    {
-        if (oPawn_UpdateFirstPersonCameraOffset)
-            oPawn_UpdateFirstPersonCameraOffset(thiz, deltaTime);
-
-        if (!Config.NewFeaturesMenu.StableScope) return;
-        if (thiz == nullptr || thiz != LocalPlayer()) return;
-        if (!IsLocalPlayerScoping()) return;
-
-        ZeroIfNonZero((float *)((uintptr_t)thiz + Offsets::Pawn_FirstPersonCamOffsetX));
-        ZeroIfNonZero((float *)((uintptr_t)thiz + Offsets::Pawn_FirstPersonCamDestX));
-    }
-
-    // ---- Stable Scope : landing impact ----
-    void (*oHitGroundComponent_OnJumpHitGround)(void *, float, bool) = nullptr;
-
-    inline void Hook_HitGroundComponent_OnJumpHitGround(void *thiz, float fLandHeight, bool bIsUltLanding)
-    {
-        // Swallow the landing camera punch while hardscoping so the crosshair
-        // does not dip and spring back.  Outside that state the game behaves
-        // exactly as before.
-        if (Config.NewFeaturesMenu.StableScope &&
-            IsLocalPawnComponent(thiz) && IsLocalPlayerScoping())
-            return;
-
-        if (oHitGroundComponent_OnJumpHitGround)
-            oHitGroundComponent_OnJumpHitGround(thiz, fLandHeight, bIsUltLanding);
-    }
-
-    // =====================================================================
-    //  Hook installation (called from Main.cpp, Init_Thread)
     // =====================================================================
     inline void InstallHooks()
     {
         // ---- Triggerbot (V3-style game-thread) ---------------------------
         InstallTriggerbotHooks();
 
-        // ---- Stable Scope ----------------------------------------------
-        Tools::Hook(UnityRva(RVA::GetBreatheTremblingPos),
-                    (void *)&Hook_WeaponFireComponent_Instant_GetBreatheTremblingPos,
-                    (void **)&oWeaponFireComponent_Instant_GetBreatheTremblingPos);
-        Tools::Hook(UnityRva(RVA::CollectWeaponShakeOffsets),
-                    (void *)&Hook_WeaponShakeController_CollectWeaponShakeOffsets,
-                    (void **)&oWeaponShakeController_CollectWeaponShakeOffsets);
-        Tools::Hook(UnityRva(RVA::UpdateFirstPersonCameraOffset),
-                    (void *)&Hook_Pawn_UpdateFirstPersonCameraOffset,
-                    (void **)&oPawn_UpdateFirstPersonCameraOffset);
-        Tools::Hook(UnityRva(RVA::OnJumpHitGround),
-                    (void *)&Hook_HitGroundComponent_OnJumpHitGround,
-                    (void **)&oHitGroundComponent_OnJumpHitGround);
+        // ---- No Slide Fatigue -------------------------------------------
+        Tools::Hook(UnityRva(RVA::SlideTackle_get_UseSlideTackleLimit),
+                    (void *)&Hook_SlideTackle_get_UseSlideTackleLimit,
+                    (void **)&oSlideTackle_get_UseSlideTackleLimit);
+        Tools::Hook(UnityRva(RVA::PVEArcade_get_UseSlideTackleLimit),
+                    (void *)&Hook_PVEArcade_get_UseSlideTackleLimit,
+                    (void **)&oPVEArcade_get_UseSlideTackleLimit);
 
         // ---- Firing timing : 3.2 No Hipfire Delay -----------------------
         // NoSprintFireDelay (3.1) and NoFireDelay (3.3) are gated inside the
@@ -1150,14 +1066,11 @@ namespace NewFeatures
         // functions and must never be inline-hooked (their setters are adjacent).
 
         LOGI("[NewFeatures] hooks installed: Pawn_Tick=%p Weapon_StartFire=%p Weapon_StopFire=%p "
-             "BreatheTremblingPos=%p CollectWeaponShakeOffsets=%p UpdateFirstPersonCameraOffset=%p OnJumpHitGround=%p "
-             "(NoHipfireDelay: 2 x 8-byte patch, no hook)",
+             "SlideLimit=%p PVEArcadeSlideLimit=%p (NoHipfireDelay: 2 x 8-byte patch)",
              (void *)orig_Pawn_Tick,
              (void *)fn_Weapon_StartFire,
              (void *)fn_Weapon_StopFire,
-             (void *)oWeaponFireComponent_Instant_GetBreatheTremblingPos,
-             (void *)oWeaponShakeController_CollectWeaponShakeOffsets,
-             (void *)oPawn_UpdateFirstPersonCameraOffset,
-             (void *)oHitGroundComponent_OnJumpHitGround);
+             (void *)oSlideTackle_get_UseSlideTackleLimit,
+             (void *)oPVEArcade_get_UseSlideTackleLimit);
     }
 }

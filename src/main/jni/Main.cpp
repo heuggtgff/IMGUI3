@@ -1780,6 +1780,11 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 custom::Checkbox("Fast Scope", &Config.ExtraMenu.Scope);
                                 custom::Checkbox("Quick Switch", &Config.ExtraMenu.Switch);
                                 custom::Checkbox("Weapon Kinetic", &Config.ExtraMenu.Kinetic);
+                                // === NEW FEATURES: Home ===
+                                // No Slide Fatigue: remove the slide limit/fatigue system
+                                // (SlideTackleComponent::get_UseSlideTackleLimit -> false,
+                                // local pawn only). Unlimited slides, no idle-time decay.
+                                custom::Checkbox("No Slide Fatigue", &Config.NewFeaturesMenu.NoSlideFatigue);
                                 custom::Separator();
                                 custom::Separator();
                                 // === NEW FEATURES: Misc ===
@@ -1787,17 +1792,13 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 custom::Checkbox("No Hit Flinch", &Config.NewFeaturesMenu.NoHitFlinch);
                                 // === NEW FEATURES: Sniper ===
                                 // No Drift = breathing sway only (m_AimmingBreatheCountDown @0x774)
+                                // NOTE: the old broken disable came from Stable Scope's
+                                // always-zero breathe hook (removed with that feature).
                                 custom::Checkbox("No Drift (Hardscope)", &Config.NewFeaturesMenu.NoDrift);
-                                // Stable Scope = movement sway (WeaponShakeController /
-                                // Pawn::UpdateFirstPersonCameraOffset) + landing impact
-                                // bounce, applied only while the local player is scoping.
-                                custom::Checkbox("Stable Scope", &Config.NewFeaturesMenu.StableScope);
-                                // === NEW FEATURES: Firing timing (see NewFeatures.h Task 3) ===
-                                // Timing-only: they shorten a delay, they never bypass ammo,
-                                // reload, fire mode, spread, recoil or any other stat.
+                                // === NEW FEATURES: Firing timing ===
+                                // (No Fire Delay and Stable Scope removed per request.)
                                 custom::Checkbox("No Sprint Fire Delay", &Config.NewFeaturesMenu.NoSprintToFireDelay);
                                 custom::Checkbox("No Hipfire Delay", &Config.NewFeaturesMenu.NoHipfireDelay);
-                                custom::Checkbox("No Fire Delay", &Config.NewFeaturesMenu.NoFireDelay);
                                 custom::Separator();
                                 // Dev / Debug options
                                 custom::Separator();
@@ -1907,7 +1908,6 @@ if (runtimeState.activeTab == 4) {
                                 if (Config.NewFeaturesMenu.Triggerbot) {
                                     static const char* triggerModes[] = { "Always", "ADS Only", "Firing Only" };
                                     custom::Combo("Mode", &Config.NewFeaturesMenu.TriggerbotMode, triggerModes, IM_ARRAYSIZE(triggerModes));
-                                    custom::SliderInt("Delay", &Config.NewFeaturesMenu.TriggerbotDelay, 0, 500, "%d ms");
                                     // Zone width in FULL pixels around the crosshair. Default
                                     // 40 = whatever the device rendered before; V3's own zone is
                                     // 2.5% of screen width, so this is deliberately user-tunable.
@@ -2091,15 +2091,21 @@ if (runtimeState.activeTab == 4) {
                 // delayed crash). Idle = zero memory writes.
                 static bool s_appliedNoHitFlinch = false;
                 static bool s_appliedNoDrift = false;
+                // The applied-flags only flip when the memory write actually
+                // succeeded - otherwise a failed Restore() left the patch live
+                // forever with the UI claiming it was off (the old "No Drift
+                // won't stop" bug, together with the removed Stable Scope
+                // always-zero breathe hook). Running every frame is safe:
+                // KittyMemory skips the write while patched state matches.
                 if (Config.NewFeaturesMenu.NoHitFlinch && !s_appliedNoHitFlinch) {
-                    Patches.NoHitFlinch.Modify(); s_appliedNoHitFlinch = true;
+                    if (Patches.NoHitFlinch.Modify()) s_appliedNoHitFlinch = true;
                 } else if (!Config.NewFeaturesMenu.NoHitFlinch && s_appliedNoHitFlinch) {
-                    Patches.NoHitFlinch.Restore(); s_appliedNoHitFlinch = false;
+                    if (Patches.NoHitFlinch.Restore()) s_appliedNoHitFlinch = false;
                 }
                 if (Config.NewFeaturesMenu.NoDrift && !s_appliedNoDrift) {
-                    Patches.NoDrift.Modify(); s_appliedNoDrift = true;
+                    if (Patches.NoDrift.Modify()) s_appliedNoDrift = true;
                 } else if (!Config.NewFeaturesMenu.NoDrift && s_appliedNoDrift) {
-                    Patches.NoDrift.Restore(); s_appliedNoDrift = false;
+                    if (Patches.NoDrift.Restore()) s_appliedNoDrift = false;
                 }
 
                 // Same edge-triggered pattern for the four 8-byte getters that
@@ -2107,25 +2113,25 @@ if (runtimeState.activeTab == 4) {
                 // Patches.* creation in Init_Thread / the Feats.h comments).
                 static bool s_appliedEm3Eye = false;
                 if (Config.ExtraMenu.RedWallhack && !s_appliedEm3Eye) {
-                    Patches.Em3Eye.Modify(); s_appliedEm3Eye = true;
+                    if (Patches.Em3Eye.Modify()) s_appliedEm3Eye = true;
                 } else if (!Config.ExtraMenu.RedWallhack && s_appliedEm3Eye) {
-                    Patches.Em3Eye.Restore(); s_appliedEm3Eye = false;
+                    if (Patches.Em3Eye.Restore()) s_appliedEm3Eye = false;
                 }
                 static bool s_appliedKineticArmor = false;
                 if (Config.ExtraMenu.Kinetic && !s_appliedKineticArmor) {
-                    Patches.KineticArmor.Modify(); s_appliedKineticArmor = true;
+                    if (Patches.KineticArmor.Modify()) s_appliedKineticArmor = true;
                 } else if (!Config.ExtraMenu.Kinetic && s_appliedKineticArmor) {
-                    Patches.KineticArmor.Restore(); s_appliedKineticArmor = false;
+                    if (Patches.KineticArmor.Restore()) s_appliedKineticArmor = false;
                 }
                 static bool s_appliedNoHipfireDelay = false;
                 if (Config.NewFeaturesMenu.NoHipfireDelay && !s_appliedNoHipfireDelay) {
-                    Patches.NoHipfireUseGetReadyTime.Modify();
-                    Patches.NoHipfireSpringFireGetReady.Modify();
-                    s_appliedNoHipfireDelay = true;
+                    const bool ok = Patches.NoHipfireUseGetReadyTime.Modify()
+                                 && Patches.NoHipfireSpringFireGetReady.Modify();
+                    if (ok) s_appliedNoHipfireDelay = true;
                 } else if (!Config.NewFeaturesMenu.NoHipfireDelay && s_appliedNoHipfireDelay) {
-                    Patches.NoHipfireUseGetReadyTime.Restore();
-                    Patches.NoHipfireSpringFireGetReady.Restore();
-                    s_appliedNoHipfireDelay = false;
+                    const bool ok = Patches.NoHipfireUseGetReadyTime.Restore()
+                                 && Patches.NoHipfireSpringFireGetReady.Restore();
+                    if (ok) s_appliedNoHipfireDelay = false;
                 }
             }
             ImGui::End();

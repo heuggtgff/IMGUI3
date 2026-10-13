@@ -165,23 +165,15 @@ inline void hook_OnFlashBangExplode(void *instance, int weaponItemID, float whit
 // firing-timing toggles (see NewFeatures.h, Task 3).  There is exactly ONE
 // hook per address - the new toggles are folded into these bodies instead of
 // installing a second trampoline on the same prologue:
-//   get_FireBoltTime    @0x51237F4 -> No Fire Delay  (pump/bolt/chamber cooldown)
-//   get_FireInterval    @0x5105C74 -> No Fire Delay  (shot-to-shot cooldown)
+//   get_FireBoltTime    @0x51237F4 (No Fire Delay feature removed per request)
+//   get_FireInterval    @0x5105C74 (No Fire Delay feature removed per request)
 //   get_DelaySprintFire @0x513CBC4 -> No Sprint Fire Delay (sprint-out timer)
-// NewFeatures::*Active() also require the instance to be the local player's
+// NewFeatures::NoSprintFireDelayActive() requires the instance to be the local player's
 // current weapon, so nothing is changed for remote players.
 inline float (*orig_get_FireBoltTime)(void *) = nullptr;
 inline float get_FireBoltTime(void * instance) {
     if (instance != NULL) {
         if (Config.ExtraMenu.Fire || UnlimitedFly) {
-            return 0.05f;
-        }
-        if (NewFeatures::NoFireDelayActive(instance)) {
-            // NoFireDelay removes the post-shot cooldown. Use a 50ms floor so
-            // fast weapons do not re-enter StartFire every frame (which freezes
-            // the render thread / feels like a split-second hitch). Ammo, reload,
-            // fire mode, spread and recoil are untouched - only the interval is
-            // shortened, never forced.
             return 0.05f;
         }
     }
@@ -192,14 +184,6 @@ inline float (*orig_get_FireInterval)(void *) = nullptr;
 inline float get_FireInterval(void * instance) {
     if (instance != NULL) {
         if (Config.ExtraMenu.Fire || UnlimitedFly) {
-            return 0.05f;
-        }
-        if (NewFeatures::NoFireDelayActive(instance)) {
-            // NoFireDelay removes the post-shot cooldown. Use a 50ms floor so
-            // fast weapons do not re-enter StartFire every frame (which freezes
-            // the render thread / feels like a split-second hitch). Ammo, reload,
-            // fire mode, spread and recoil are untouched - only the interval is
-            // shortened, never forced.
             return 0.05f;
         }
     }

@@ -231,17 +231,19 @@ sColorsESPBOT sColorsESPBOT{0};
         bool NoCrouch = false;
         bool Triggerbot = false;
         int TriggerbotMode = 0; // 0 = Always, 1 = ADS only, 2 = Firing only (matches V3)
-        int TriggerbotDelay = 0; // ms
+        // TriggerbotDelay removed: the trigger fires the frame the target enters
+        // the crosshair zone. The field name is kept only as a save-file no-op.
+        int TriggerbotDelay = 0; // ms (UNUSED - forced 0; UI/logic removed)
         int TriggerbotRadius = 40; // crosshair zone width in px (V3 default is 2.5% of width)
         bool NoHitFlinch = false;
         bool NoDrift = false;
-        // Stable Scope: while hardscoping, cancel movement sway (strafe/walk/
-        // slide/jump) and the landing impact bounce on the scope reticle.
-        bool StableScope = false;
-        // Firing timing (Task 3) - each removes exactly one delay, nothing else
+        // No Slide Fatigue: SlideTackleComponent::get_UseSlideTackleLimit -> false
+        // (local pawn only) - unlimited slides, no slide idle/fatigue decay.
+        bool NoSlideFatigue = false;
+        // Firing timing - each removes exactly one delay, nothing else
         bool NoSprintToFireDelay = false;  // sprint-out timer before the gun fires
         bool NoHipfireDelay = false;       // hipfire get-ready / wind-up gate
-        bool NoFireDelay = false;          // post-shot re-fire cooldown
+        // NoFireDelay removed (per request). field dropped from config struct.
     };
     sNewFeaturesMenu NewFeaturesMenu{0};
 };
