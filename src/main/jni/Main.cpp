@@ -1972,6 +1972,8 @@ if (runtimeState.activeTab == 4) {
                                     ImGui::TextColored(muted, "LOS ok rend=%d occ=%d ray=%d | block=%d bad=%d noFn=%d",
                                         td.okRendered, td.okOccVisible, td.okRay,
                                         td.rejRayBlocked, td.rejRayInvalid, td.rejNoVerdict);
+                                    ImGui::TextColored(muted, "aim crossOk=%d crossOff=%d",
+                                        td.crosshairOk, td.rejCrosshairOff);
                                     ImGui::TextColored(muted, "out tgt=%d fire=%d gateBlk=%d losBlk=%d/%d",
                                         td.targets, td.fires, td.gateBlocks,
                                         td.losBlockedScan, td.losBlocked);
@@ -1985,6 +1987,15 @@ if (runtimeState.activeTab == 4) {
                                     if (hbAlive && td.weaponTicks > 0 && td.weaponHeldTicks == 0)
                                         ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
                                             "held weapon never ticks (Tick overridden) - heartbeat miss");
+
+                                    // Crosshair-on-cover explainer: when every in-zone pawn is on
+                                    // screen but none of them sits under the actual aim ray, say it
+                                    // plainly - the zone caught a peeker, the crosshair rests on
+                                    // cover (truck corner, wall edge,...) and the trigger correctly
+                                    // refuses to fire there.
+                                    if (hbAlive && td.stage == NewFeatures::AF_STAGE_CROSSHAIR_ON_WALL)
+                                        ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1),
+                                            "enemy visible on screen but crosshair is on cover - move the crosshair ONTO the enemy");
 
                                     // Test Fire: this menu runs on the render thread and the game
                                     // only reacts to StartFire on the game thread, so the click just

@@ -395,7 +395,10 @@ namespace NewFeatures
         AF_STAGE_NO_ENEMIES,        // the enemy list is empty / implausible size
         AF_STAGE_NO_CANDIDATES,     // nobody projected: dead / no bones / behind camera
         AF_STAGE_OUT_OF_ZONE,       // projected, but nobody inside Triggerbot Radius
-        AF_STAGE_LOS_BLOCKED        // inside the zone, the visibility gate refused
+        AF_STAGE_LOS_BLOCKED,       // inside the zone, the visibility gate refused
+        AF_STAGE_CROSSHAIR_ON_WALL  // in-zone pawn(s) visible on screen, but the
+                                    // actual aim ray lands on cover first - the
+                                    // crosshair is NOT on the pawn
     };
 
     // Diagnostics, so the menu can show *why* nothing happens. The game thread
@@ -441,6 +444,9 @@ namespace NewFeatures
         int    rejRayBlocked;   // ... refused: raw ray stopped by real geometry
         int    rejRayInvalid;   // ... refused: malformed hit struct (-2)
         int    rejNoVerdict;    // ... refused: no game verdict AND no raycast fn
+        int    rejCrosshairOff; // ... visible on screen, but the crosshair ray
+                                //     lands on cover before reaching them
+        int    crosshairOk;     // ... confirmed under the actual aim ray
         int    gateBlocks;      // lifetime: ticks the ACTIVE-mode gate refused
         int    lastGateBlocked; // 1 = the mode gate refused the most recent tick
     };
@@ -522,6 +528,30 @@ namespace NewFeatures
         return d;
     }
 
+    // Crosshair-rays check: TRUE when the pawn is under the actual aim ray.
+    // The frustum/occlusion getters say "the pawn is on my screen somewhere";
+    // they say nothing about what the CROSSHAIR line lands on. When a player
+    // peeks from behind cover, their screen-space projection still passes
+    // RecentlyRendered - and if the zone radius is generous, the trigger pulled
+    // the trigger while the crosshair was physically sitting on the truck/wall
+    // next to them. Distances defeat this: a pawn 1 m behind the wall that
+    // holds the crosshair yields ~2x the ray's hit distance; a pawn the
+    // crosshair really is on yields hit >= pawnDist - tolerance.
+    inline bool A_FireCrosshairHitsPawn(const Vector3 &camPos, const Vector3 &pawnPos)
+    {
+        Vector3 to = pawnPos - camPos;
+        const float pawnDist = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
+        if (pawnDist < 0.01f) return true;
+        const float inv = 1.0f / pawnDist;
+        const Vector3 dir(to.x * inv, to.y * inv, to.z * inv);
+        const float hit = A_FireRaycastDistance(camPos, dir, pawnDist + 0.35f);
+        if (hit == -2.0f) return true;              // raycast unavailable/malformed:
+                                                    // keep the getter verdict, don't
+                                                    // veto on missing data
+        // Clear line, or the first thing hit IS this pawn's collider: on target.
+        return hit == -1.0f || hit >= pawnDist - 0.5f;
+    }
+
     // True when the ray from the camera to the target position is NOT stopped
     // by geometry before reaching it (0.35 m slack for skin/collider width).
     inline bool A_FireHasLineOfSight(const Vector3 &camPos, const Vector3 &targetPos)
@@ -561,6 +591,8 @@ namespace NewFeatures
         d.rejRayBlocked= 0;
         d.rejRayInvalid= 0;
         d.rejNoVerdict = 0;
+        d.rejCrosshairOff = 0;
+        d.crosshairOk  = 0;
 
         MatchGame *matchGame = GamePlay::get_MatchGame();
         d.matchGame = (void *)matchGame;
@@ -615,6 +647,9 @@ namespace NewFeatures
         int nCandidates = 0;
         Pawn *bestNoLos = nullptr;             // nearest pawn, LOS not yet known
         float bestNoLosDist2 = radiusSq + 1.0f;
+        bool losGateRejected = false;          // per-scan: some candidate failed "on screen"
+        bool crosshairRejected = false;        // per-scan: some candidate was on screen
+                                               // but the crosshair ray hit cover first
 
         for (int i = 0; i < count; i++) {
             Pawn *pawn = items[i];
@@ -743,9 +778,31 @@ namespace NewFeatures
                 if      (fn_PhysicsRaycastLOS == nullptr) d.rejNoVerdict++;   // fail closed
                 else if (rayVerdict == -2)                d.rejRayInvalid++;
                 else                                      d.rejRayBlocked++;
+                losGateRejected = true;
                 continue;                      // not on screen -> not shootable
             }
-            if      (byRendered) d.okRendered++;
+
+            // 3) CROSSHAIR-RAYS check: "visible on screen" is not "under the aim
+            //    ray". A pawn peeking from behind cover projects into the zone
+            //    and passes RecentlyRendered while the crosshair physically
+            //    rests on the cover between the camera and them - that is what
+            //    made the trigger fire while picturing a target on the truck's
+            //    corner. Only the pawn(s) the crosshair actually points at
+            //    survive this; each costs exactly one extra ray per PAWN, not
+            //    per frame, and only for pawns that are already visible.
+            if (fn_PhysicsRaycastLOS != nullptr) {
+                const bool headOn  = A_FireCrosshairHitsPawn(camPos, candidates[c].headPoint);
+                const bool chestOn = A_FireCrosshairHitsPawn(camPos, candidates[c].chestPoint);
+                if (!headOn && !chestOn) {
+                    d.rejCrosshairOff++;
+                    d.losBlockedScan++;
+                    crosshairRejected = true;
+                    continue;
+                }
+            }
+            d.crosshairOk++;
+
+            if (byRendered) d.okRendered++;
             else if (byOcc)      d.okOccVisible++;
             else                 d.okRay++;
             if (candidates[c].dist2 < bestDist) {
@@ -755,8 +812,14 @@ namespace NewFeatures
         }
 
         // ---- Where this scan stopped (the menu's headline reason) ----------
-        if (best != 0)             d.stage = AF_STAGE_OK;
-        else if (d.candInZone > 0) d.stage = AF_STAGE_LOS_BLOCKED;
+        if (best != 0)
+            d.stage = AF_STAGE_OK;
+        else if (d.candInZone > 0 && crosshairRejected && !losGateRejected)
+            d.stage = AF_STAGE_CROSSHAIR_ON_WALL;   // on screen, but not under the
+                                                    // aim ray - the headline is
+                                                    // cover, never a phantom wall
+        else if (d.candInZone > 0)
+            d.stage = AF_STAGE_LOS_BLOCKED;
         else if (d.candTotal > 0)  d.stage = AF_STAGE_OUT_OF_ZONE;
         else                       d.stage = AF_STAGE_NO_CANDIDATES;
 
@@ -1097,6 +1160,8 @@ namespace NewFeatures
             case AF_STAGE_NO_CANDIDATES: return "nobody projected (dead / no bones / behind cam)";
             case AF_STAGE_OUT_OF_ZONE:   return "enemy visible but OUTSIDE the radius";
             case AF_STAGE_LOS_BLOCKED:   return "in zone, visibility gate refused";
+            case AF_STAGE_CROSSHAIR_ON_WALL:
+                                         return "crosshair on cover, not on enemy";
             default:                     return "?";
         }
     }
@@ -1119,9 +1184,11 @@ namespace NewFeatures
              d.enemyCount, d.candTotal, d.candInZone, d.candOutZone);
         LOGI("[AFire] skip dead=%d noBones=%d behindCam=%d",
              d.candDead, d.candNoBones, d.candBehindCam);
-        LOGI("[AFire] los okRendered=%d okOcc=%d okRay=%d rejBlocked=%d rejInvalid(-2)=%d rejNoFn=%d losBlocked(scan/life)=%d/%d",
+        LOGI("[AFire] los okRendered=%d okOcc=%d okRay=%d rejBlocked=%d rejInvalid(-2)=%d rejNoFn=%d "
+             "crossOk=%d crossOff=%d losBlocked(scan/life)=%d/%d",
              d.okRendered, d.okOccVisible, d.okRay, d.rejRayBlocked,
-             d.rejRayInvalid, d.rejNoVerdict, d.losBlockedScan, d.losBlocked);
+             d.rejRayInvalid, d.rejNoVerdict, d.crosshairOk, d.rejCrosshairOff,
+             d.losBlockedScan, d.losBlocked);
         LOGI("[AFire] out targets=%d fires=%d gateBlocks=%d lastGateBlocked=%d testFire=%d",
              d.targets, d.fires, d.gateBlocks, d.lastGateBlocked, d.testFireStatus);
         LOGI("[AFire] ptrs pawn=%p held=%p match=%p w2s=%p ray=%p rendered=%p occ=%p startFire=%p stopFire=%p",
