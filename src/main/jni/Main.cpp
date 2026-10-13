@@ -892,6 +892,10 @@ static bool g_imguiBackendReady = false;    struct My_Patches {
     // the *next* function in libunity.so with it.
     MemoryPatch Em3Eye, KineticArmor;
     MemoryPatch NoHipfireUseGetReadyTime, NoHipfireSpringFireGetReady;
+    // No Slide Fatigue: get_UseSlideTackleLimit is an 8-byte leaf getter whose
+    // next function is LimitSlideTackle(), so it must be a byte patch, never an
+    // inline hook (see the NewFeatures.h note). Pve = the arcade/PVE override.
+    MemoryPatch NoSlideFatigue, NoSlideFatiguePve;
 } Patches;
 
 float AVIWA = 119.167f;
@@ -1913,60 +1917,6 @@ if (runtimeState.activeTab == 4) {
                                     // 2.5% of screen width, so this is deliberately user-tunable.
                                     custom::SliderInt("Radius", &Config.NewFeaturesMenu.TriggerbotRadius, 4, 240, "%d px");
                                 }
-                                // Debug status (shows in-game). A_FireRenderTick() runs the
-                                // read-only half of the trigger here on the render thread (the
-                                // same accessors the ESP already uses every frame), so the state
-                                // stays honest even if the in-game tick hook were dead - and it
-                                // reports a dead heartbeat instead of silently doing nothing.
-                                ImGui::Spacing();
-                                NewFeatures::A_FireRenderTick();
-                                NewFeatures::TriggerbotDiag& td = NewFeatures::GetTriggerbotDiag();
-                                int dbgState = NewFeatures::GetTriggerbotDebugState();
-                                const bool hbAlive = NewFeatures::A_FireHeartbeatAlive();
-                                if (!hbAlive) {
-                                    ImGui::TextColored(ImVec4(1, 0.25f, 0.25f, 1), "NO GAME-THREAD TICK");
-                                } else if (dbgState == 2) {
-                                    ImGui::TextColored(ImVec4(0, 1, 0, 1), ">> FIRING <<");
-                                } else if (dbgState == 1) {
-                                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "TARGET LOCKED");
-                                } else {
-                                    // Per-scan verdict only: a candidate denied
-                                    // geometry this exact scan. The lifetime
-                                    // counter must not decide this headline -
-                                    // it made "WALL BETWEEN" stick forever.
-                                    ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
-                                                       td.losBlockedScan > 0 ? "WALL BETWEEN" : "NO TARGET");
-                                }
-                                // Test Fire: this menu runs on the render thread and the game
-                                // only reacts to StartFire on the game thread, so the click just
-                                // queues the request - the heartbeat runs it and reports back.
-                                if (custom::Button("Test Fire", ImVec2(0, 0))) {
-                                    NewFeatures::g_testFireRequest = true;
-                                    NewFeatures::g_testFireRequestTime = NewFeatures::A_FireNow();
-                                    td.testFireStatus = 0;
-                                }
-                                {
-                                    const char* testTxt = "TestFire: idle";
-                                    if (td.testFireStatus == 1) testTxt = "TestFire: fired";
-                                    else if (td.testFireStatus == 2) testTxt = "TestFire: no local pawn";
-                                    else if (td.testFireStatus == 3) testTxt = "TestFire: no weapon";
-                                    else if (td.testFireStatus == 4) testTxt = "TestFire: no StartFire ptr";
-                                    else if (td.testFireStatus == 5) testTxt = "TestFire: queued, no tick";
-                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "%s", testTxt);
-                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
-                                        "HB %s  wTick=%d held=%d pawn=%d",
-                                        hbAlive ? "OK" : "DEAD",
-                                        td.weaponTicks, td.weaponHeldTicks, td.pawnLocalTicks);
-                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
-                                        "Scan=%d R=%d Enemy=%d Tgt=%d Fire=%d LOSblk=%d",
-                                        td.scans, td.renderScans, td.enemyCount,
-                                        td.targets, td.fires, td.losBlocked);
-                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
-                                        "R=%.0f Near=%.0f px", td.radiusPx,
-                                        td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx));
-                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
-                                        "Pawn=%p Wpn=%p Match=%p", td.localPawn, td.heldWeapon, td.matchGame);
-                                }
                                 EndContentChild(left);
                             }
                             custom::EndGroup();
@@ -2106,6 +2056,16 @@ if (runtimeState.activeTab == 4) {
                     if (Patches.NoDrift.Modify()) s_appliedNoDrift = true;
                 } else if (!Config.NewFeaturesMenu.NoDrift && s_appliedNoDrift) {
                     if (Patches.NoDrift.Restore()) s_appliedNoDrift = false;
+                }
+                static bool s_appliedNoSlideFatigue = false;
+                if (Config.NewFeaturesMenu.NoSlideFatigue && !s_appliedNoSlideFatigue) {
+                    const bool ok = Patches.NoSlideFatigue.Modify()
+                                 && Patches.NoSlideFatiguePve.Modify();
+                    if (ok) s_appliedNoSlideFatigue = true;
+                } else if (!Config.NewFeaturesMenu.NoSlideFatigue && s_appliedNoSlideFatigue) {
+                    const bool ok = Patches.NoSlideFatigue.Restore()
+                                 && Patches.NoSlideFatiguePve.Restore();
+                    if (ok) s_appliedNoSlideFatigue = false;
                 }
 
                 // Same edge-triggered pattern for the four 8-byte getters that
@@ -2458,6 +2418,19 @@ void Init_Thread() {
     Patches.NoDrift = MemoryPatch::createWithHex("libunity.so", 0xC9BE4C0,
         "00 00 80 D2 C0 03 5F D6");
 
+    // No Slide Fatigue: force SlideTackleComponent::get_UseSlideTackleLimit()
+    // (0x8BF722C, Slot 39) and the PVEArcadeSlideTackleComponent override
+    // (0x651274C) to return false. Both are 8-byte leaf getters - the next
+    // function in .text starts immediately after them, so they are byte patches
+    // ("mov w0,#0 ; ret"), exactly like the set above, and never inline hooks.
+    // false = the component ignores the slide-tackle limit, which is the whole
+    // fatigue system (LimitSlideTackle reduces slide speed/distance as slides
+    // are chained), so slides keep their full length instead of decaying.
+    Patches.NoSlideFatigue = MemoryPatch::createWithHex("libunity.so", 0x8BF722C,
+        "00 00 80 D2 C0 03 5F D6");
+    Patches.NoSlideFatiguePve = MemoryPatch::createWithHex("libunity.so", 0x651274C,
+        "00 00 80 D2 C0 03 5F D6");
+
     // ------------------------------------------------------------------
     //  8-byte leaf getters: PATCHED, never hooked.
     //
@@ -2491,8 +2464,29 @@ void Init_Thread() {
     // dataset): CreateBulletLine @ 0xC9B6F90, CreateBulletProjectile @ 0xC9C33A4.
     // Too small to hook safely: Tick @ 0xC9C0B64, ChangePunchAngleByGetHit @
     // 0xC9C0EDC, UpdateBreatheTrembling @ 0xC9BE4C0 - those use memory patches.
-    DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9B6F90), (void *)&WeaponFireComponent_Instant_CreateBulletLine, (void **)&oWeaponFireComponent_Instant_CreateBulletLine);
-    DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C33A4), (void *)&WeaponFireComponent_Instant_CreateBulletProjectile, (void **)&oWeaponFireComponent_Instant_CreateBulletProjectile);
+    // Installed through Tools::Hook (mprotect PROT_READ|WRITE|EXEC, THEN
+    // DobbyHook) like every other game hook in this file. These two used to be
+    // the only bare DobbyHook calls in Main.cpp, and on a libunity.so whose
+    // .text is mapped read-only they silently did not land - Bullet Track then
+    // had no hook at all and nothing about the shot changed.
+    void *bulletLineAddr = (void *)getAbsoluteAddress("libunity.so", 0xC9B6F90);
+    if (Tools::IsPtrValid(bulletLineAddr)) {
+        Tools::Hook(bulletLineAddr, (void *)&WeaponFireComponent_Instant_CreateBulletLine,
+                    (void **)&oWeaponFireComponent_Instant_CreateBulletLine);
+        LOGI("BulletTrack: CreateBulletLine hooked @%p -> orig %p",
+             bulletLineAddr, (void *)oWeaponFireComponent_Instant_CreateBulletLine);
+    } else {
+        LOGE("BulletTrack: CreateBulletLine RVA 0xC9B6F90 did not resolve");
+    }
+    void *bulletProjAddr = (void *)getAbsoluteAddress("libunity.so", 0xC9C33A4);
+    if (Tools::IsPtrValid(bulletProjAddr)) {
+        Tools::Hook(bulletProjAddr, (void *)&WeaponFireComponent_Instant_CreateBulletProjectile,
+                    (void **)&oWeaponFireComponent_Instant_CreateBulletProjectile);
+        LOGI("BulletTrack: CreateBulletProjectile hooked @%p -> orig %p",
+             bulletProjAddr, (void *)oWeaponFireComponent_Instant_CreateBulletProjectile);
+    } else {
+        LOGE("BulletTrack: CreateBulletProjectile RVA 0xC9C33A4 did not resolve");
+    }
 
     // NewFeatures (dump-verified, see NewFeatures.h header block):
     //   Triggerbot   -> WeaponFireComponent_Instant::CheckTarget   @0xC9C1B50

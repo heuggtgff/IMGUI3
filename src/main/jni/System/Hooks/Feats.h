@@ -225,6 +225,132 @@ inline float hook_GetMaxJumpHeight(void* instance) {
 }
 
 //-- Increase Damage
+// ---------------------------------------------------------------------------
+// Bullet Track (Config.Aim.AimSilent) -- the HIT path, not just the tracer.
+//
+// The DrawESP.h hooks (WeaponFireComponent_Instant::CreateBulletLine /
+// CreateBulletProjectile) only bend the *visible* bullet line towards the
+// enemy. Whether a shot REGISTERS is decided by the game's own sweep,
+// WeaponFireComponent_Instant::SingleLineCheckPhysics @0xC9B2A9C (Slot 90,
+// dump.cs 769628) -- the override a real gun actually dispatches to (the base
+// WeaponFireComponent::SingleLineCheckPhysics @0xC1514C0 is the one hooked
+// above for Hitbox). Redirecting `dir` on THAT ray is what turns a tracer that
+// hits nothing into shots that land.
+//
+// Guards, so nothing but the local player's own shot is ever touched:
+//   * the feature has to be on (AimSilent / Aimbot360), including the Trigger
+//     (None / Shooting / Scoping) setting -- exactly the gate the DrawESP
+//     tracer handler uses, so ray and tracer always agree;
+//   * the fire component must belong to the weapon the local player is holding
+//     (WeaponFireComponent::m_WeaponEntity @0x10, dump.cs 764177), so a bot's
+//     shot is never redirected;
+//   * without a live enemy the original `dir` is passed through untouched and
+//     the shot resolves exactly as the game intended.
+// ---------------------------------------------------------------------------
+inline bool A_BulletTrackIsLocalShot(void *fireComponent)
+{
+    if (!Tools::IsPtrValid(fireComponent)) return false;
+
+    // WeaponFireComponent::m_WeaponEntity @0x10 (dump.cs 764173/764177).
+    // NOTE: there is no owner-pawn field at +0x28 - m_Owner there is a const
+    // PropertyName, which is why the weapon pointer is used instead.
+    void *weapon = *(void **)((uintptr_t)fireComponent + 0x10);
+    if (!Tools::IsPtrValid(weapon)) return false;
+
+    Pawn *local = GamePlay::get_LocalPawn();
+    if (!Tools::IsPtrValid(local)) return false;
+
+    return (void *)local->get_CurrentWeapon() == weapon;
+}
+
+// Same Trigger gate DrawESP.h's WeaponHandlerByAstral uses.
+inline bool A_BulletTrackTriggerReady()
+{
+    Pawn *local = GamePlay::get_LocalPawn();
+    if (!Tools::IsPtrValid(local)) return false;
+
+    if (Config.Aim.Trigger == EAimTrigger::Shooting)
+        return ((bool (*)(uintptr_t))(Class_Pawn_get_IsFiring))((uintptr_t)local);
+    if (Config.Aim.Trigger == EAimTrigger::Scoping)
+        return ((bool (*)(uintptr_t))(Class_Pawn_IsAiming))((uintptr_t)local);
+    return true;                                    // EAimTrigger::None
+}
+
+// Target head to aim the ray at. Distance mode (the default) takes the enemy
+// nearest the shot origin - the same choice GetClosestTarget() makes in
+// DrawESP.h; FOV mode takes the enemy whose head lies closest to the ray.
+inline bool A_BulletTrackTargetHead(const Vector3 &startPos, const Vector3 &dir, Vector3 &outHead)
+{
+    auto getMatchGame = (uintptr_t (*)()) (Class_Gameplay_get_MatchGame);
+    uintptr_t matchGame = (getMatchGame != nullptr) ? getMatchGame() : 0;
+    if (!Tools::IsPtrValid((void *) matchGame)) return false;
+
+    auto EnemyPawns = *(List<uintptr_t> **) (matchGame + Class_BaseGame_EnemyPawns);
+    if (!Tools::IsPtrValid((void *) EnemyPawns)) return false;
+    auto Items = EnemyPawns->getItems();
+    if (!Items) return false;
+
+    const int count = EnemyPawns->getSize();
+    if (count <= 0 || count > 1024) return false;
+
+    const bool byFov = (Config.Aim.By == EAim::Crosshair);
+    const Vector3 rayAxis = Vector3::Normalized(dir);
+
+    bool found = false;
+    float best = 0.0f;
+    for (int i = 0; i < count; i++) {
+        uintptr_t pawnU = Items[i];
+        if (!Tools::IsPtrValid((void *) pawnU)) continue;
+
+        Pawn *pawn = (Pawn *) pawnU;
+        if (!pawn->m_IsAlive()) continue;
+
+        const Vector3 head = pawn->get_HeadPosition();
+        const Vector3 toHead = head - startPos;
+
+        float metric;
+        if (byFov) {
+            const float along = Vector3::Dot(toHead, rayAxis);
+            if (along <= 0.0f) continue;             // behind the shot
+            metric = Vector3::Dot(toHead, toHead) - along * along;  // perpendicular^2
+        } else {
+            metric = Vector3::SqrMagnitude(toHead);  // nearest to the shooter
+        }
+
+        if (!found || metric < best) {
+            best = metric;
+            outHead = head;
+            found = true;
+        }
+    }
+    return found;
+}
+
+// Rewrites the shot ray. No-op (dir passed through untouched) unless every
+// guard above lines up.
+inline void A_BulletTrackAimRay(void *fireComponent, const Vector3 &startPos, Vector3 &dir)
+{
+    if (!Config.Aim.AimSilent && !Config.Aim.Aimbot360) return;
+    if (!A_BulletTrackTriggerReady()) return;
+    if (!A_BulletTrackIsLocalShot(fireComponent)) return;
+
+    Vector3 head;
+    if (!A_BulletTrackTargetHead(startPos, dir, head)) return;
+
+    const Vector3 toTarget = head - startPos;
+    if (!(Vector3::SqrMagnitude(toTarget) > 0.0001f)) return;   // also rejects NaN
+
+    dir = toTarget;
+}
+
+inline bool (*orig_SingleLineCheckPhysics_Instant)(void* instance, int hitType, void* hitTarget, void* hitCollider, Vector3 startPos, Vector3 dir, void* impactInfo) = nullptr;
+inline bool SingleLineCheckPhysics_Instant_Hook(void* instance, int hitType, void* hitTarget, void* hitCollider, Vector3 startPos, Vector3 dir, void* impactInfo) {
+    A_BulletTrackAimRay(instance, startPos, dir);
+    if (orig_SingleLineCheckPhysics_Instant != nullptr)
+        return orig_SingleLineCheckPhysics_Instant(instance, hitType, hitTarget, hitCollider, startPos, dir, impactInfo);
+    return false;
+}
+
 inline bool (*orig_SingleLineCheckPhysics)(void* instance, int hitType, void* hitTarget, void* hitCollider, Vector3 startPos, Vector3 dir, void* impactInfo) = nullptr;
 inline bool SingleLineCheckPhysics(void* instance, int hitType, void* hitTarget, void* hitCollider, Vector3 startPos, Vector3 dir, void* impactInfo) {
     if (instance != NULL) {
@@ -724,6 +850,11 @@ inline void InitializeAllHooks() {
 
     //-- Increase Damage
     HOOK_LIB("libunity.so", "0xC1514C0", SingleLineCheckPhysics, orig_SingleLineCheckPhysics);
+
+    //-- Bullet Track (silent aim): the hit ray a real gun dispatches to.
+    //   See the A_BulletTrack* block above - this is what makes the redirected
+    //   shot actually register instead of only bending the tracer.
+    HOOK_LIB("libunity.so", "0xC9B2A9C", SingleLineCheckPhysics_Instant_Hook, orig_SingleLineCheckPhysics_Instant);
 
     //-- No Parachute
     HOOK_LIB("libunity.so", "0x68823FC", OpenParachute, orig_OpenParachute);

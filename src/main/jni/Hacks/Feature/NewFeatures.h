@@ -172,7 +172,6 @@ namespace NewFeatures
         constexpr uintptr_t Pawn_FirstPersonCamOffsetX      = 0x6FC; // m_FirstPersonCameraCurrentOffsetX
         constexpr uintptr_t Pawn_FirstPersonCamDestX        = 0x700; // m_FirstPersonCameraDestOffsetX
 
-        constexpr uintptr_t PawnComponent_Owner             = 0x20;  // PawnComponent::m_Pawn
         constexpr uintptr_t WeaponShake_Owner               = 0x78;  // WeaponShakeController::m_Pawn
     }
 
@@ -217,9 +216,6 @@ namespace NewFeatures
         constexpr uintptr_t Pawn_get_LastOccVisible         = 0x51BA800; // bool() Slot 235 (dump.cs 796918)
         constexpr uintptr_t Screen_get_width                = 0x50504BC; // int() - Screen.get_width
         constexpr uintptr_t Screen_get_height               = 0x5050520; // int() - Screen.get_height
-
-        constexpr uintptr_t SlideTackle_get_UseSlideTackleLimit  = 0x8BF722C; // bool() Slot 39 - SlideTackleComponent (dump.cs 731407)
-        constexpr uintptr_t PVEArcade_get_UseSlideTackleLimit    = 0x651274C; // bool() Slot 39 - PVEArcadeSlideTackleComponent override (dump.cs 785219)
 
         constexpr uintptr_t Pawn_GetTeamId                  = 0x51B89CC; // uint()
         constexpr uintptr_t Pawn_IsSameCamp                 = 0x51EF174; // bool(Pawn)
@@ -270,15 +266,6 @@ namespace NewFeatures
     {
         if (!IsReadable(fireComponent)) return false;
         void *owner = *(void **)((uintptr_t)fireComponent + Offsets::WeaponFire_Owner);
-        return owner != nullptr && owner == LocalPlayer();
-    }
-
-    // PawnComponent-level owner check (PawnComponent::m_Pawn @0x20): used by the
-    // No Slide Fatigue hooks (SlideTackleComponent derives from PawnComponent).
-    inline bool IsLocalPawnComponent(void *component)
-    {
-        if (!IsReadable(component)) return false;
-        void *owner = *(void **)((uintptr_t)component + Offsets::PawnComponent_Owner);
         return owner != nullptr && owner == LocalPlayer();
     }
 
@@ -379,6 +366,11 @@ namespace NewFeatures
     inline void *(*fn_CameraGetMain)() = nullptr;
     inline bool (*fn_PawnRecentlyRendered)(void *) = nullptr;
     inline bool (*fn_PawnLastOccVisible)(void *) = nullptr;
+    // Mode gates (TriggerbotMode 1 = ADS only, 2 = Firing only). Resolved once
+    // with the rest - they are evaluated on EVERY tick now, so they must not
+    // cost a getAbsoluteAddress() (a /proc/self/maps scan) per tick.
+    inline bool (*fn_PawnIsAiming)(void *) = nullptr;
+    inline bool (*fn_PawnGetIsFiring)(void *) = nullptr;
 
     // State - game thread only.
     inline bool     g_afireHoldingFire       = false;
@@ -741,21 +733,36 @@ namespace NewFeatures
         if (g_afireHoldingFire && g_afireFiringOn != (void *)held)
             A_FireReleaseTrigger(nullptr);
 
+        // ---- Mode gate FIRST ---------------------------------------------
+        // "ADS only" / "Firing only" used to be checked AFTER A_FireFindTarget
+        // had already run, so every frame spent not aiming still walked the whole
+        // enemy list (two bone projections per pawn plus the game's own occlusion
+        // verdict per candidate) and then threw the verdict away. That is the
+        // stutter ADS-only mode had. Both gates are single virtual getters, so
+        // the scan is now skipped outright in the frames where the trigger
+        // cannot fire. Releasing the trigger here also stops the burst on the
+        // very frame the player un-ADS.
+        // Modes: 0 = Always, 1 = ADS only, 2 = Firing only.
+        if (Config.NewFeaturesMenu.TriggerbotMode == 1) {
+            if (fn_PawnIsAiming == nullptr || !fn_PawnIsAiming(localPawn)) {
+                A_FireReleaseTrigger(nullptr);
+                s_dbgTriggerState = 0;
+                return;
+            }
+        } else if (Config.NewFeaturesMenu.TriggerbotMode == 2) {
+            if (fn_PawnGetIsFiring == nullptr || !fn_PawnGetIsFiring(localPawn)) {
+                A_FireReleaseTrigger(nullptr);
+                s_dbgTriggerState = 0;
+                return;
+            }
+        }
+
         // A_FireFindTarget already LOS-checked the winning candidate this scan
         // (g_afireLosOk). No second raycast here - shooting through walls is on
         // the scan's verdict, and a stale-verdict window of <=10 ms is what
         // A_FireTick's own gate absorbs.
         const uintptr_t target = A_FireFindTarget();
         bool ready = target != 0 && g_afireLosOk;
-
-        // Modes: 0 = Always, 1 = ADS only, 2 = Firing only.
-        if (ready && Config.NewFeaturesMenu.TriggerbotMode == 1) {
-            auto isAiming = (bool (*)(void *))UnityRva(RVA::Pawn_IsAiming);
-            ready = isAiming != nullptr && isAiming(localPawn);
-        } else if (ready && Config.NewFeaturesMenu.TriggerbotMode == 2) {
-            auto getIsFiring = (bool (*)(void *))UnityRva(RVA::Pawn_get_IsFiring);
-            ready = getIsFiring != nullptr && getIsFiring(localPawn);
-        }
 
 // Delay slider removed: the trigger now fires the frame the target enters the
         // crosshair zone (config field kept for save-file compatibility, forced to 0).
@@ -863,6 +870,14 @@ namespace NewFeatures
         auto camMainAddr = UnityRva(RVA::Camera_get_main);
         if (Tools::IsPtrValid(camMainAddr))
             fn_CameraGetMain = (void *(*)())camMainAddr;
+
+        auto aimingAddr = UnityRva(RVA::Pawn_IsAiming);
+        if (Tools::IsPtrValid(aimingAddr))
+            fn_PawnIsAiming = (bool (*)(void *))aimingAddr;
+
+        auto firingAddr = UnityRva(RVA::Pawn_get_IsFiring);
+        if (Tools::IsPtrValid(firingAddr))
+            fn_PawnGetIsFiring = (bool (*)(void *))firingAddr;
 
         void *weaponTick = UnityRva(RVA::Weapon_Tick);
         if (Tools::IsPtrValid(weaponTick)) {
@@ -1014,33 +1029,25 @@ namespace NewFeatures
     // MemoryPatch restore now actually restores the game behaviour.
 
     // ---- No Slide Fatigue ----------------------------------------------
-    // SlideTackleComponent::get_UseSlideTackleLimit() @RVA 0x8BF722C (Slot 39)
-    // gates the slide limit/fatigue system (m_SlideTackleLimitDecreaseRate,
-    // m_CurrentMaxIdleTime, LimitSlideTackle). Returning false disables the
-    // whole system: unlimited slides, no fatigue, no idle-time decay.
-    // PVEArcadeSlideTackleComponent overrides the same slot @0x651274C - both
-    // are hooked so the feature works in arcade/PVE matches too. Gate by the
-    // owner pawn: only the local player's component is patched.
-    bool (*oSlideTackle_get_UseSlideTackleLimit)(void *) = nullptr;
-    bool (*oPVEArcade_get_UseSlideTackleLimit)(void *) = nullptr;
-
-    inline bool Hook_SlideTackle_get_UseSlideTackleLimit(void *thiz)
-    {
-        if (Config.NewFeaturesMenu.NoSlideFatigue && IsLocalPawnComponent(thiz))
-            return false;
-        if (oSlideTackle_get_UseSlideTackleLimit)
-            return oSlideTackle_get_UseSlideTackleLimit(thiz);
-        return true;
-    }
-
-    inline bool Hook_PVEArcade_get_UseSlideTackleLimit(void *thiz)
-    {
-        if (Config.NewFeaturesMenu.NoSlideFatigue && IsLocalPawnComponent(thiz))
-            return false;
-        if (oPVEArcade_get_UseSlideTackleLimit)
-            return oPVEArcade_get_UseSlideTackleLimit(thiz);
-        return true;
-    }
+    // NOT inline-hooked any more. SlideTackleComponent::get_UseSlideTackleLimit()
+    // @0x8BF722C (Slot 39) and its PVEArcadeSlideTackleComponent override
+    // @0x651274C are 8-byte leaf getters (ldrb w0,[x0,#off] ; ret), and their
+    // very next function in .text starts 8 bytes later. That is the one shape an
+    // A64 inline hook must never touch: the 16-byte "ldr x17,#8 ; br x17" stub
+    // overwrites the neighbour, and for the main getter the neighbour is
+    // LimitSlideTackle() @0x8BF7234 - the function that applies the slide
+    // limit/fatigue in the first place. Hooking the getter therefore corrupted
+    // the exact code the feature was supposed to neutralise.
+    //
+    // Both getters are 8-byte byte patches now, created and toggled from
+    // Main.cpp exactly like Patches.NoDrift:
+    //     Patches.NoSlideFatigue     "mov w0,#0 ; ret" on 0x8BF722C
+    //     Patches.NoSlideFatiguePve  "mov w0,#0 ; ret" on 0x651274C
+    // Semantics are unchanged - false = "this component does not use the slide
+    // tackle limit", which switches the whole fatigue system off
+    // (m_SlideTackleLimitDecreaseRate, m_SlideTackleIdleLimitDecreaseRate,
+    // m_SlideTackleLimitMinIdleTime and the LimitSlideTackle path), so repeated
+    // slides keep their full distance/speed instead of decaying.
 
     // =====================================================================
     inline void InstallHooks()
@@ -1049,12 +1056,8 @@ namespace NewFeatures
         InstallTriggerbotHooks();
 
         // ---- No Slide Fatigue -------------------------------------------
-        Tools::Hook(UnityRva(RVA::SlideTackle_get_UseSlideTackleLimit),
-                    (void *)&Hook_SlideTackle_get_UseSlideTackleLimit,
-                    (void **)&oSlideTackle_get_UseSlideTackleLimit);
-        Tools::Hook(UnityRva(RVA::PVEArcade_get_UseSlideTackleLimit),
-                    (void *)&Hook_PVEArcade_get_UseSlideTackleLimit,
-                    (void **)&oPVEArcade_get_UseSlideTackleLimit);
+        // Two 8-byte byte patches owned by Main.cpp (see the note above) - there
+        // is nothing to inline-hook here.
 
         // ---- Firing timing : 3.2 No Hipfire Delay -----------------------
         // NoSprintFireDelay (3.1) and NoFireDelay (3.3) are gated inside the
@@ -1066,11 +1069,9 @@ namespace NewFeatures
         // functions and must never be inline-hooked (their setters are adjacent).
 
         LOGI("[NewFeatures] hooks installed: Pawn_Tick=%p Weapon_StartFire=%p Weapon_StopFire=%p "
-             "SlideLimit=%p PVEArcadeSlideLimit=%p (NoHipfireDelay: 2 x 8-byte patch)",
+             "(NoHipfireDelay + NoSlideFatigue are 8-byte patches owned by Main.cpp)",
              (void *)orig_Pawn_Tick,
              (void *)fn_Weapon_StartFire,
-             (void *)fn_Weapon_StopFire,
-             (void *)oSlideTackle_get_UseSlideTackleLimit,
-             (void *)oPVEArcade_get_UseSlideTackleLimit);
+             (void *)fn_Weapon_StopFire);
     }
 }
