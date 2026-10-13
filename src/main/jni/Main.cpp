@@ -1972,8 +1972,8 @@ if (runtimeState.activeTab == 4) {
                                     ImGui::TextColored(muted, "LOS ok rend=%d occ=%d ray=%d | block=%d bad=%d noFn=%d",
                                         td.okRendered, td.okOccVisible, td.okRay,
                                         td.rejRayBlocked, td.rejRayInvalid, td.rejNoVerdict);
-                                    ImGui::TextColored(muted, "aim crossOk=%d crossOff=%d",
-                                        td.crosshairOk, td.rejCrosshairOff);
+                                    ImGui::TextColored(muted, "aim crossOk=%d crossOff=%d rayGate=%d",
+                                        td.crosshairOk, td.rejCrosshairOff, td.rejThreadGated);
                                     ImGui::TextColored(muted, "out tgt=%d fire=%d gateBlk=%d losBlk=%d/%d",
                                         td.targets, td.fires, td.gateBlocks,
                                         td.losBlockedScan, td.losBlocked);

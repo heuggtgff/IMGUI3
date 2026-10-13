@@ -142,6 +142,7 @@
 //
 #include <random>
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 #include <cstring>
 
@@ -378,9 +379,42 @@ namespace NewFeatures
     inline double   g_afireLastPressTime     = -1000.0;
     inline double   g_afireLastEvalTime      = -1000.0;
     inline bool     g_afireInTick            = false;   // re-entrancy guard
-    inline bool     g_afireLosOk             = false;   // last scan: target has LOS
+    inline bool     g_afireLosOk             = false;   // last game-thread scan: target has LOS
+    inline bool     g_afireRayThreadOk       = false;   // stamped by A_FireTick at every tick:
+                                                        // Physics.Raycast (PhysX/bepu native
+                                                        // scene query) may only run on the GAME
+                                                        // thread. A_TickHookedWeapon stamps it
+                                                        // true, A_FireRenderTick stamps it false
+                                                        // before the render-thread diag scan. The
+                                                        // ray, wrapper returns -3 (= thread-gated)
+                                                        // so no render-thread scan can ever call
+                                                        // the physics engine - that pair of
+                                                        // concurrent scene queries is exactly what
+                                                        // crashed the game the instant a scan ran
+                                                        // while a player was on screen.
     inline bool     g_testFireRequest        = false;   // set by the menu (render thread)
     inline double   g_testFireRequestTime    = -1000.0;
+
+    // Mutual exclusion ON THE RAYCAST ITSELF - the last line of defence. The
+    // thread stamp below makes the render thread ray-free and the game thread
+    // ray-allowed; the flag makes it impossible for TWO scans (the diag scan
+    // on the render thread and the trigger scan on the game thread) to be
+    // inside the physics scene query AT THE SAME TIME, whatever the stamps
+    // say. Contended = -3 (this scan continues getter-only). Without this,
+    // overlapping Raycast calls crashed the game the moment a scan ran while
+    // a player was on screen.
+    inline std::atomic_flag g_afireRayBusy = ATOMIC_FLAG_INIT;
+
+    // RAII: stamps which thread is currently evaluating the scan and restores
+    // the previous value on scope exit, so the game thread cannot be left
+    // ray-denied by an early return in the tick path.
+    struct A_FireRayThreadGuard
+    {
+        bool prev;
+        explicit A_FireRayThreadGuard(bool gameThread)
+            : prev(g_afireRayThreadOk) { g_afireRayThreadOk = gameThread; }
+        ~A_FireRayThreadGuard() { g_afireRayThreadOk = prev; }
+    };
 
     // Where the last scan stopped. Printed by the menu as the headline reason
     // when the trigger is on but nothing fires ("Always" has no mode gate, so
@@ -444,6 +478,9 @@ namespace NewFeatures
         int    rejRayBlocked;   // ... refused: raw ray stopped by real geometry
         int    rejRayInvalid;   // ... refused: malformed hit struct (-2)
         int    rejNoVerdict;    // ... refused: no game verdict AND no raycast fn
+        int    rejThreadGated;  // ... refused: render-thread scan (its rays are
+                                //     thread-gated, so only the game's own
+                                //     getters were available to say no)
         int    rejCrosshairOff; // ... visible on screen, but the crosshair ray
                                 //     lands on cover before reaching them
         int    crosshairOk;     // ... confirmed under the actual aim ray
@@ -509,23 +546,37 @@ namespace NewFeatures
 
 
     // Returns the first-hit distance for origin->dir, -1 when clear, -2 on
-    // failure/malformed (fail-closed: the caller treats that as "blocked").
+    // failure/malformed (fail-closed: the caller treats that as "blocked"),
+    // -3 when the CALLER is not the game thread / another scan holds the
+    // physics query (the physics engine must not be touched concurrently;
+    // see g_afireRayThreadOk / g_afireRayBusy).
     inline float A_FireRaycastDistance(const Vector3 &origin, const Vector3 &dir, float maxDist)
     {
+        if (!g_afireRayThreadOk) return -3.0f;          // wrong thread: never cast
+        if (g_afireRayBusy.test_and_set(std::memory_order_acquire))
+            return -3.0f;                               // a scan is mid-query: don't contend
+
         unsigned char hitBuf[AF_RAYHIT_SIZE];
         memset(hitBuf, 0, sizeof hitBuf);
         bool hit;
+        float out;
 
         if (fn_PhysicsRaycastLOS != nullptr) {
             hit = fn_PhysicsRaycastLOS(origin, dir, maxDist, hitBuf);
         } else {
-            return -2.0f;                                   // no raycast -> fail closed
+            g_afireRayBusy.clear(std::memory_order_release);
+            return -2.0f;                               // no raycast -> fail closed
         }
 
-        if (!hit) return -1.0f;                             // clear line
-        const float d = *(const float *)(hitBuf + AF_RAYHIT_DISTOFF);
-        if (!(d >= 0.0f) || !(d <= maxDist + 0.5f)) return -2.0f;  // malformed -> blocked
-        return d;
+        if (!hit) out = -1.0f;                          // clear line
+        else {
+            const float dres = *(const float *)(hitBuf + AF_RAYHIT_DISTOFF);
+            // malformed -> blocked
+            if (!(dres >= 0.0f) || !(dres <= maxDist + 0.5f)) out = -2.0f;
+            else out = dres;
+        }
+        g_afireRayBusy.clear(std::memory_order_release);
+        return out;
     }
 
     // Crosshair-rays check: TRUE when the pawn is under the actual aim ray.
@@ -545,9 +596,10 @@ namespace NewFeatures
         const float inv = 1.0f / pawnDist;
         const Vector3 dir(to.x * inv, to.y * inv, to.z * inv);
         const float hit = A_FireRaycastDistance(camPos, dir, pawnDist + 0.35f);
-        if (hit == -2.0f) return true;              // raycast unavailable/malformed:
-                                                    // keep the getter verdict, don't
-                                                    // veto on missing data
+        if (hit == -2.0f || hit == -3.0f)
+            return true;              // raycast unavailable, malformed, or this scan
+                                      // is not the game thread: keep the getter
+                                      // verdict, never veto on missing data
         // Clear line, or the first thing hit IS this pawn's collider: on target.
         return hit == -1.0f || hit >= pawnDist - 0.5f;
     }
@@ -591,6 +643,7 @@ namespace NewFeatures
         d.rejRayBlocked= 0;
         d.rejRayInvalid= 0;
         d.rejNoVerdict = 0;
+        d.rejThreadGated = 0;
         d.rejCrosshairOff = 0;
         d.crosshairOk  = 0;
 
@@ -761,8 +814,12 @@ namespace NewFeatures
                     const float hit = A_FireRaycastDistance(camPos, dir, len + AF_AIM_TOLERANCE);
                     // -1 = clear line, >= len-tolerance = the hit IS the target.
                     // -2 (no raycast fn / malformed struct) stays fail-closed.
+                    // -3 (wrong thread) = the ray was never PERMITTED on this
+                    // scan: treat as not-tried, the getters' verdict stands.
                     if (hit == -2.0f) {
                         if (rayVerdict == 0) rayVerdict = -2;
+                    } else if (hit == -3.0f) {
+                        if (rayVerdict == 0) rayVerdict = -3;
                     } else if (hit == -1.0f || hit >= len - AF_AIM_TOLERANCE) {
                         rayVerdict = 2;
                         visible    = true;
@@ -775,7 +832,8 @@ namespace NewFeatures
             if (!visible) {
                 d.losBlocked++;
                 d.losBlockedScan++;
-                if      (fn_PhysicsRaycastLOS == nullptr) d.rejNoVerdict++;   // fail closed
+                if      (rayVerdict == -3)                d.rejThreadGated++;
+                else if (fn_PhysicsRaycastLOS == nullptr) d.rejNoVerdict++;   // fail closed
                 else if (rayVerdict == -2)                d.rejRayInvalid++;
                 else                                      d.rejRayBlocked++;
                 losGateRejected = true;
@@ -877,6 +935,11 @@ namespace NewFeatures
         TriggerbotDiag &d = g_triggerDiag;
         d.lastTickTime = A_FireNow();
         d.lastGateBlocked = 0;      // set below only if the ACTIVE-mode gate refuses
+
+        // This is the game thread: rays are PERMITTED for the whole scan the
+        // tick is about to run. RAII-restored so no early return can leave the
+        // stamp in the wrong state for the next evaluator.
+        A_FireRayThreadGuard gameThreadRays(true);
 
         const double now = d.lastTickTime;
         if (now - g_afireLastEvalTime < 0.010) return;   // ~10 ms, like V3
@@ -1135,6 +1198,13 @@ namespace NewFeatures
         if (!Config.NewFeaturesMenu.Triggerbot) return;
 
         d.renderScans++;
+
+        // The menu runs on the RENDER thread: rays are FORBIDDEN for this scan
+        // (physics scene queries on this thread are what crashed the game).
+        // The diag keeps working ray-free on the game's own getters; a verdict
+        // that would have needed a ray is honestly shown as ray-gated.
+        A_FireRayThreadGuard renderThreadRays(false);
+
         const uintptr_t t = A_FireFindTarget();
 
         // The game thread owns s_dbgTriggerState while its heartbeat is alive;
@@ -1185,9 +1255,10 @@ namespace NewFeatures
         LOGI("[AFire] skip dead=%d noBones=%d behindCam=%d",
              d.candDead, d.candNoBones, d.candBehindCam);
         LOGI("[AFire] los okRendered=%d okOcc=%d okRay=%d rejBlocked=%d rejInvalid(-2)=%d rejNoFn=%d "
-             "crossOk=%d crossOff=%d losBlocked(scan/life)=%d/%d",
+             "threadGated=%d crossOk=%d crossOff=%d losBlocked(scan/life)=%d/%d",
              d.okRendered, d.okOccVisible, d.okRay, d.rejRayBlocked,
-             d.rejRayInvalid, d.rejNoVerdict, d.crosshairOk, d.rejCrosshairOff,
+             d.rejRayInvalid, d.rejNoVerdict, d.rejThreadGated,
+             d.crosshairOk, d.rejCrosshairOff,
              d.losBlockedScan, d.losBlocked);
         LOGI("[AFire] out targets=%d fires=%d gateBlocks=%d lastGateBlocked=%d testFire=%d",
              d.targets, d.fires, d.gateBlocks, d.lastGateBlocked, d.testFireStatus);
