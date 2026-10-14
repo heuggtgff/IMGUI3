@@ -724,8 +724,10 @@ case 3:
                     item2Fields = (Item2InventoryFields *)((uintptr_t)item + 0x20);
                     if (item2Fields->ItemID == getitem.Item2Inventory[0] || item2Fields->ItemID == getitem.Item2Inventory[3])
                     {
-                        item2Fields->WeaponAssetGroupID = getitem.Item2Inventory[1];
-                        item2Fields->WeaponIconID = getitem.Item2Inventory[2];
+                        if (getitem.Item2Inventory[1] != 0)
+                            item2Fields->WeaponAssetGroupID = getitem.Item2Inventory[1];
+                        if (getitem.Item2Inventory[2] != 0)
+                            item2Fields->WeaponIconID = getitem.Item2Inventory[2];
                     }
                 }
                 for (auto conf : weaponConfInstance)
@@ -750,7 +752,10 @@ case 3:
                             WeaponConfFields *skinFields = (WeaponConfFields *)((uintptr_t)skinConf + 0x20);
                             if (skinFields->ID == getitem.WeaponConf[2])
                             {
-                                weaponconfFields->LOCID_Name = skinFields->LOCID_Name;
+                                // Only copy a name that really exists — a null
+                                // string would blank the weapon's name/desc.
+                                if (Tools::IsPtrValid(skinFields->LOCID_Name))
+                                    weaponconfFields->LOCID_Name = skinFields->LOCID_Name;
                                 break;
                             }
                         }
@@ -762,11 +767,20 @@ case 3:
                 }
                 if (getitem.WeaponExtra[4] > 0)
                 {
-                    activeKillEffects[baseID] = getitem.WeaponExtra[4];
-                    activeKillEffects[extraID] = getitem.WeaponExtra[4];
-                    activeKillEffects[skinID] = getitem.WeaponExtra[4];
-                    activeKillEffects[itemID] = getitem.WeaponExtra[4];
-                    activeKillEffects[lootID] = getitem.WeaponExtra[4];
+                    const int effectAssetID = getitem.WeaponExtra[4];
+                    auto itEffectItem = killEffectItemByAssetId.find(effectAssetID);
+                    const int effectItemID = itEffectItem != killEffectItemByAssetId.end()
+                                             ? itEffectItem->second : 0;
+                    const int effectKeys[5] = {baseID, extraID, skinID, itemID, lootID};
+                    for (int key : effectKeys)
+                    {
+                        activeKillEffects[key] = effectAssetID;
+                        // The client-side per-weapon record (WeaponAttrData)
+                        // resolves the effect from the ITEM id, so hand it that
+                        // too when LoadWeaponSkins found one.
+                        if (effectItemID > 0)
+                            activeKillEffectItems[key] = effectItemID;
+                    }
                 }
                 if (DetectSkinTier(getitem.itemName) == SkinTier::Mythic)
                 {
@@ -795,14 +809,20 @@ case 3:
                     {
                         if (getitem.itemName.find("[MYTHIC]") != std::string::npos)
                         {
-                            weaponextraFields->DefaultMythicArmor = getitem.WeaponExtra[1];
-                            if (getitem.itemName.find("[MYTHIC] AK117 - Memento Mori") != std::string::npos)
+                            if (getitem.WeaponExtra[1] != 0)
+                                weaponextraFields->DefaultMythicArmor = getitem.WeaponExtra[1];
+                            if (getitem.itemName.find("[MYTHIC] AK117 - Memento Mori") != std::string::npos &&
+                                    getitem.WeaponExtra[2] != 0)
                             {
                                 weaponextraFields->DefaultMythicSig = getitem.WeaponExtra[2];
                             }
                         }
-                        weaponextraFields->DefaultDeadReplayEffectId = getitem.WeaponExtra[3];
-                        weaponextraFields->DefaultKillEffectId = getitem.WeaponExtra[4];
+                        // Guarded: writing a 0 here is what silently deleted the
+                        // weapon's own kill effect / death replay effect.
+                        if (getitem.WeaponExtra[3] != 0)
+                            weaponextraFields->DefaultDeadReplayEffectId = getitem.WeaponExtra[3];
+                        if (getitem.WeaponExtra[4] != 0)
+                            weaponextraFields->DefaultKillEffectId = getitem.WeaponExtra[4];
                     }
                 }
                 for (auto asset : weaponAssetGroupInstance)
@@ -823,62 +843,32 @@ case 3:
                     if (!itemResource)
                         continue;
                     itemFields = (ItemResourceFields *)((uintptr_t)itemResource + 0x10);
-                    if (itemFields->ID == skinID)
-                    {
-                        itemFields->FxAssetID = getitem.WeaponConf[0];
+                    if (!Tools::IsPtrValid(itemFields))
+                        continue;
+                    const int resourceID = itemFields->ID;
+                    if (resourceID != skinID && resourceID != itemID && resourceID != lootID &&
+                            resourceID != extraID && resourceID != baseID)
+                        continue;
+                    // One guarded block per id (the six copies above repeated the
+                    // same writes and one of them missed UISpriteNameIndex). Every
+                    // write is skipped when the value is 0: ItemRes/ItemResInt are
+                    // only non-zero when LoadWeaponSkins matched the item's own
+                    // ItemResourceConfig, and writing the zero of an unmatched
+                    // resource is what blanked the weapon card in the loadout.
+                    if (getitem.ItemResInt[0] != 0)
+                        itemFields->FxAssetID = getitem.ItemResInt[0];
+                    if (getitem.ItemResInt[1] != 0)
                         itemFields->InventoryModelID = getitem.ItemResInt[1];
+                    if (getitem.ItemResInt[2] != 0)
                         itemFields->ModelAssetIDRaw = getitem.ItemResInt[2];
+                    if (getitem.ItemRes[0] != 0)
                         itemFields->UIMiniSpriteNameIndex = getitem.ItemRes[0];
+                    if (getitem.ItemRes[1] != 0)
                         itemFields->UISmallSpriteNameIndex = getitem.ItemRes[1];
+                    if (getitem.ItemRes[2] != 0)
                         itemFields->UISpriteNameIndex = getitem.ItemRes[2];
+                    if (getitem.ItemRes[3] != 0)
                         itemFields->UISquareSpriteNameIndex = getitem.ItemRes[3];
-                    }
-                    if (itemFields->ID == skinID)
-                    {
-                        itemFields->FxAssetID = getitem.ItemResInt[0];
-                        itemFields->InventoryModelID = getitem.ItemResInt[1];
-                        itemFields->ModelAssetIDRaw = getitem.ItemResInt[2];
-                        itemFields->UIMiniSpriteNameIndex = getitem.ItemRes[0];
-                        itemFields->UISmallSpriteNameIndex = getitem.ItemRes[1];
-                        itemFields->UISquareSpriteNameIndex = getitem.ItemRes[3];
-                    }
-                    if (itemFields->ID == itemID)
-                    {
-                        itemFields->FxAssetID = getitem.ItemResInt[0];
-                        itemFields->InventoryModelID = getitem.ItemResInt[1];
-                        itemFields->ModelAssetIDRaw = getitem.ItemResInt[2];
-                        itemFields->UIMiniSpriteNameIndex = getitem.ItemRes[0];
-                        itemFields->UISmallSpriteNameIndex = getitem.ItemRes[1];
-                        itemFields->UISpriteNameIndex = getitem.ItemRes[2];
-                    }
-                    if (itemFields->ID == lootID)
-                    {
-                        itemFields->FxAssetID = getitem.ItemResInt[0];
-                        itemFields->InventoryModelID = getitem.ItemResInt[1];
-                        itemFields->ModelAssetIDRaw = getitem.ItemResInt[2];
-                        itemFields->UIMiniSpriteNameIndex = getitem.ItemRes[0];
-                        itemFields->UISmallSpriteNameIndex = getitem.ItemRes[1];
-                        itemFields->UISpriteNameIndex = getitem.ItemRes[2];
-                        itemFields->UISquareSpriteNameIndex = getitem.ItemRes[3];
-                    }
-                    if (itemFields->ID == extraID)
-                    {
-                        itemFields->FxAssetID = getitem.ItemResInt[0];
-                        itemFields->InventoryModelID = getitem.ItemResInt[1];
-                        itemFields->ModelAssetIDRaw = getitem.ItemResInt[2];
-                        itemFields->UIMiniSpriteNameIndex = getitem.ItemRes[0];
-                        itemFields->UISmallSpriteNameIndex = getitem.ItemRes[1];
-                        itemFields->UISpriteNameIndex = getitem.ItemRes[2];
-                    }
-                    if (itemFields->ID == baseID)
-                    {
-                        itemFields->FxAssetID = getitem.ItemResInt[0];
-                        itemFields->InventoryModelID = getitem.ItemResInt[1];
-                        itemFields->ModelAssetIDRaw = getitem.ItemResInt[2];
-                        itemFields->UIMiniSpriteNameIndex = getitem.ItemRes[0];
-                        itemFields->UISmallSpriteNameIndex = getitem.ItemRes[1];
-                        itemFields->UISpriteNameIndex = getitem.ItemRes[2];
-                    }
                 }
 
                 int fireEffectID = 0;
@@ -904,10 +894,15 @@ case 3:
                         if (!Tools::IsPtrValid(wfFields))
                             continue;
 
-                        if (wfFields->Id == fireEffectID)
+                        // WeaponFireEffectConfigConfig (dump 824278): Id @0x80,
+                        // LevelEffectDelayTimeUI @0x84, ..._King @0x88 — the
+                        // struct's offset comments were 4 bytes out and wrote
+                        // 0x88/0x8C, i.e. 4 bytes past the end of the pair.
+                        const int fireConfID = *(int *)((uintptr_t)fireConf + 0x80);
+                        if (fireConfID == fireEffectID)
                         {
-                            wfFields->LevelEffectDelayTimeUI = 0.1f;
-                            wfFields->LevelEffectDelayTimeUI_King = 0.1f;
+                            *(float *)((uintptr_t)fireConf + 0x84) = 0.1f;
+                            *(float *)((uintptr_t)fireConf + 0x88) = 0.1f;
                             auto *killCountArray = *(Array<int> **)((uintptr_t)fireConf + 0x118);
                             if (killCountArray && Tools::IsPtrValid(killCountArray))
                             {
@@ -996,6 +991,34 @@ case 3:
         // --- Camo Manager Tab Content ---
         ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "Inject Camo to Mythic/Legendary Skins");
         ImGui::Dummy(ImVec2(0, 10));
+
+        // Skin / kill-decoration diagnostics: each count is a stage of the
+        // pipeline, so a zero names the stage that failed without another build.
+        // KillIcon cfg/map = SPKillIcon configs captured / weapons mapped;
+        // KillFx = weapons mapped to an effect asset / effect items identified;
+        // Active = what the menu has switched on; Hooks = live getter traffic
+        // (AttrData = WeaponAttrData, Group = Weapon.get_KillEffectGroupIDOverride).
+        {
+            const ImVec4 dim(0.65f, 0.65f, 0.72f, 1);
+            ImGui::TextColored(dim, "KillIcon cfg=%d map=%d active=%d",
+                g_killDecorationDiag.killIconConfigs,
+                g_killDecorationDiag.killIconWeapons,
+                (int)activeKillIcons.size());
+            ImGui::TextColored(dim, "KillFx map=%d items=%d active=%d/%d",
+                g_killDecorationDiag.killEffectWeapons,
+                g_killDecorationDiag.killEffectItemIDs,
+                (int)activeKillEffects.size(), (int)activeKillEffectItems.size());
+            ImGui::TextColored(dim, "Hooks attr=%d/%d item=%d/%d grp=%d/%d",
+                g_killDecorationDiag.iconHookHits, g_killDecorationDiag.iconHookCalls,
+                g_killDecorationDiag.effectItemHookHits, g_killDecorationDiag.effectItemHookCalls,
+                g_killDecorationDiag.effectGroupHookHits, g_killDecorationDiag.effectGroupHookCalls);
+            ImGui::TextColored(dim, "HookInstalled %s%s%s key=%d res=%d",
+                g_killIconHookInstalled ? "icon " : "-icon ",
+                g_killEffectItemHookInstalled ? "item " : "-item ",
+                g_killEffectGroupHookInstalled ? "grp" : "-grp",
+                g_killDecorationDiag.lastAttrKey, (int)itemData.size());
+        }
+        ImGui::Dummy(ImVec2(0, 6));
 
         if (custom::Checkbox("Default / OFF", &camoOff)) {
             if (camoOff) {

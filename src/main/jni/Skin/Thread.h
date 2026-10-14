@@ -1,6 +1,14 @@
 std::unordered_map<std::string, bool> sBool;
 std::unordered_map<int, int> activeKillEffects;
 std::unordered_map<int, int> activeKillIcons;
+// Same idea as activeKillIcons, but keyed to the KillEffectItemConfConfig ID that
+// the client-side WeaponAttrData records (`m_KillEffectItem`): the in-match kill
+// effect is resolved from the item ID, so both have to be surfaced.
+std::unordered_map<int, int> activeKillEffectItems;
+// Filled by LoadWeaponSkins: weapon id -> kill effect asset id, and
+// kill effect asset id -> KillEffectItemConfConfig item id.
+std::unordered_map<int, int> killEffectByWeapon;
+std::unordered_map<int, int> killEffectItemByAssetId;
 std::unordered_map<int, int> activeBulletTrackEffects;
 std::unordered_map<int, int> activeWeaponFireEffects;
 std::unordered_map<int, int> activeWeaponBrocast;
@@ -193,6 +201,28 @@ VehicleSkinConfCtor orig_VehicleSkinConfCtor = nullptr;
 VehicleItemConfCtor orig_VehicleItemConfCtor = nullptr;
 
 std::mutex g_dataMutex;
+
+// Visible in the skin menu: which stage of the kill-effect / kill-icon data
+// pipeline actually produced values. A zero here names the broken stage without
+// another rebuild.
+struct KillDecorationDiag {
+    int killIconConfigs = 0;    // SPKillIconItemConfConfig instances captured
+    int killIconWeapons = 0;    // weapon -> kill icon entries built
+    int killEffectWeapons = 0;  // weapon -> kill effect asset entries built
+    int killEffectItemIDs = 0;  // asset -> KillEffectItem item id entries built
+    int iconHookCalls = 0;      // WeaponAttrData.get_KillIconItemID calls
+    int iconHookHits = 0;       // ... that returned our kill icon
+    int effectItemHookCalls = 0;
+    int effectItemHookHits = 0;
+    int effectGroupHookCalls = 0;
+    int effectGroupHookHits = 0;
+    int lastAttrKey = 0;        // last m_BlueprintWeaponId asked about
+};
+KillDecorationDiag g_killDecorationDiag;
+
+bool g_killIconHookInstalled = false;
+bool g_killEffectItemHookInstalled = false;
+bool g_killEffectGroupHookInstalled = false;
 
 void my_Item2InventoryCtor(void* instance) {
     orig_Item2InventoryCtor(instance);
@@ -536,6 +566,8 @@ uint8_t my_GetWeaponKillEffectLevelExtra(void *extraInfo) {
     int val;
     if (FindInMapExtra(activeKillIcons, extraInfo, val) && val > 0)
         return 5;
+    if (FindInMapExtra(activeKillEffects, extraInfo, val) && val > 0)
+        return 5;
     return orig_GetWeaponKillEffectLevelExtra ? orig_GetWeaponKillEffectLevelExtra(extraInfo) : 0;
 }
 
@@ -543,6 +575,8 @@ uint (*orig_GetWeaponKillEffectLevelDecor)(void *decorations) = nullptr;
 uint8_t my_GetWeaponKillEffectLevelDecor(void *decorations) {
     int val;
     if (FindInMapLocal(activeKillIcons, val) && val > 0)
+        return 5;
+    if (FindInMapLocal(activeKillEffects, val) && val > 0)
         return 5;
     return orig_GetWeaponKillEffectLevelDecor ? orig_GetWeaponKillEffectLevelDecor(decorations) : 0;
 }
@@ -596,7 +630,70 @@ void LoadKillIcons() {
         }
     }
 
+    g_killDecorationDiag.killIconConfigs = (int)killIcons.size();
+    g_killDecorationDiag.killIconWeapons = (int)killIconByWeapon.size();
     loadKillIcons = true;
+}
+
+// ── WeaponAttrData / Weapon: the LOCAL player's own weapon ───────────────────
+// The four InventoryUtil overloads above resolve decorations for weapon data the
+// client only knows through SyncWeaponExtraInfo. The local player's own weapon is
+// not one of those: it is described by the client-side WeaponAttrData record
+// (dump 49510) — m_BlueprintWeaponId @0x20, m_KillEffectItem @0x68,
+// m_KillIconItem @0x78 — and by Weapon (dump 16255), whose
+// get_KillEffectGroupIDOverride()@0x5167BDC is the kill effect the in-match
+// pipeline actually plays. These three hooks are the local-player path.
+
+uintptr_t WeaponAttrDataKillIconItemIDAddress = 0x8479334;   // WeaponAttrData.get_KillIconItemID
+uintptr_t WeaponAttrDataKillEffectItemIDAddress = 0x847924C; // WeaponAttrData.get_KillEffectItemID
+uintptr_t WeaponKillEffectGroupOverrideAddress = 0x5167BDC;  // Weapon.get_KillEffectGroupIDOverride
+
+// Look a map up by the WeaponAttrData key (its blueprint weapon id).
+static bool FindInMapAttrData(const std::unordered_map<int, int> &m, void *attrData, int &outVal) {
+    if (!attrData || !Tools::IsPtrValid(attrData)) return false;
+    const int key = (int)*(uint *)((uintptr_t)attrData + 0x20);   // m_BlueprintWeaponId
+    g_killDecorationDiag.lastAttrKey = key;
+    if (key == 0) return false;
+    auto it = m.find(key);
+    if (it != m.end() && it->second > 0) { outVal = it->second; return true; }
+    return false;
+}
+
+uint (*orig_GetKillIconItemID)(void *) = nullptr;
+uint my_GetKillIconItemID(void *attrData) {
+    g_killDecorationDiag.iconHookCalls++;
+    int val;
+    if (FindInMapAttrData(activeKillIcons, attrData, val)) {
+        g_killDecorationDiag.iconHookHits++;
+        return (uint)val;
+    }
+    return orig_GetKillIconItemID ? orig_GetKillIconItemID(attrData) : 0;
+}
+
+uint (*orig_GetKillEffectItemID)(void *) = nullptr;
+uint my_GetKillEffectItemID(void *attrData) {
+    g_killDecorationDiag.effectItemHookCalls++;
+    int val;
+    if (FindInMapAttrData(activeKillEffectItems, attrData, val)) {
+        g_killDecorationDiag.effectItemHookHits++;
+        return (uint)val;
+    }
+    return orig_GetKillEffectItemID ? orig_GetKillEffectItemID(attrData) : 0;
+}
+
+int (*orig_WeaponKillEffectGroupOverride)(void *) = nullptr;
+int my_WeaponKillEffectGroupOverride(void *weapon) {
+    g_killDecorationDiag.effectGroupHookCalls++;
+    if (weapon && Tools::IsPtrValid(weapon)) {
+        Weapon *w = (Weapon *)weapon;
+        const int weaponID = w->get_WeaponID();
+        auto it = activeKillEffects.find(weaponID);
+        if (it != activeKillEffects.end() && it->second > 0) {
+            g_killDecorationDiag.effectGroupHookHits++;
+            return it->second;
+        }
+    }
+    return orig_WeaponKillEffectGroupOverride ? orig_WeaponKillEffectGroupOverride(weapon) : 0;
 }
 
 #define ReadInt(base, offset) (*(int *)((uintptr_t)(base) + (offset)))
@@ -693,7 +790,7 @@ void LoadCharacterSkins() {
         if (!z || !Tools::IsPtrValid(z))
             continue;
 
-        auto *y = (BRDeadboxSkinFields *)((uintptr_t)z + 0x18);
+        auto *y = (BRDeadboxSkinFields *)((uintptr_t)z + 0x10);
 
         if (!Tools::IsPtrValid(y))
             continue;
@@ -782,7 +879,7 @@ void LoadCharacterSkins() {
         if (!X0 || !Tools::IsPtrValid(X0))
             continue;
 
-        auto *X1 = (CharacterModelFields *)((uintptr_t)X0 + 0x18);
+        auto *X1 = (CharacterModelFields *)((uintptr_t)X0 + 0x10);
 
         if (!Tools::IsPtrValid(X1))
             continue;
@@ -808,7 +905,7 @@ void LoadCharacterSkins() {
             if (!Y0 || !Tools::IsPtrValid(Y0))
                 continue;
 
-            auto *Y1 = (ItemResourceFields *)((uintptr_t)Y0 + 0x18);
+            auto *Y1 = (ItemResourceFields *)((uintptr_t)Y0 + 0x10);
 
             if (!Tools::IsPtrValid(Y1))
                 continue;
@@ -1078,7 +1175,7 @@ void LoadWeaponSkins() {
     std::unordered_map<int, void*> weaponExtraByID;
     std::unordered_map<int, int>   mythicArmorBySecondTab;
     std::unordered_map<int, int>   mythicSightByWeapon;
-    std::unordered_map<int, int>   killEffectByWeapon;
+
     std::unordered_map<int, void*> itemResByID;
 
     for (void* inv : itemInvs) {
@@ -1101,7 +1198,7 @@ void LoadWeaponSkins() {
 
     for (void* extra : weaponExtras) {
         if (!extra || !Tools::IsPtrValid(extra)) continue;
-        weaponextraFields = (WeaponConfExtraFields*)((uintptr_t)extra + 0x18);
+        weaponextraFields = (WeaponConfExtraFields*)((uintptr_t)extra + 0x10);
         if (!Tools::IsPtrValid(weaponextraFields)) continue;
         weaponExtraByID[weaponextraFields->ID] = extra;
     }
@@ -1117,7 +1214,7 @@ void LoadWeaponSkins() {
 
     for (void* sight : mythicSights) {
         if (!sight || !Tools::IsPtrValid(sight)) continue;
-        mythicsightFields = (MythicSightFields*)((uintptr_t)sight + 0x18);
+        mythicsightFields = (MythicSightFields*)((uintptr_t)sight + 0x10);
         if (!Tools::IsPtrValid(mythicsightFields)) continue;
         auto* equipArray = *(Array<int>**)((uintptr_t)sight + 0x38);
         if (equipArray && Tools::IsPtrValid(equipArray) && equipArray->getLength() > 0) {
@@ -1130,24 +1227,33 @@ void LoadWeaponSkins() {
 
     for (void* kill : killEffects) {
         if (!kill || !Tools::IsPtrValid(kill)) continue;
-        killeffectFields = (KillEffectItemFields*)((uintptr_t)kill + 0x18);
+        killeffectFields = (KillEffectItemFields*)((uintptr_t)kill + 0x10);
         if (!Tools::IsPtrValid(killeffectFields)) continue;
         auto* equipArray = *(Array<int>**)((uintptr_t)kill + 0x90);
         if (equipArray && Tools::IsPtrValid(equipArray) && equipArray->getLength() > 0) {
             int lastIndex = equipArray->getLength() - 1;
             int weaponID = equipArray->m_Items[lastIndex];
-            auto* realAssetIDs = *(Array<int>**)((uintptr_t)kill + 0x18);
+            // RealAssetIDs is the FIRST field of KillEffectItemConfConfig (0x10,
+            // dump 812074); reading it at 0x18 landed on IsAutoDemolition/ColorID
+            // and left the whole kill-effect map empty.
+            auto* realAssetIDs = *(Array<int>**)((uintptr_t)kill + 0x10);
             if (realAssetIDs && Tools::IsPtrValid(realAssetIDs) && realAssetIDs->getLength() > 0) {
                 int lastAssetIndex = realAssetIDs->getLength() - 1;
                 int lastAssetID = realAssetIDs->m_Items[lastAssetIndex];
                 killEffectByWeapon[weaponID] = lastAssetID;
+                // The client-side per-weapon record (WeaponAttrData.m_KillEffectItem)
+                // is keyed by the config's item ID (ID @0x2C), not by the asset ID,
+                // so remember which item produced this effect asset.
+                const int effectItemID = *(int *)((uintptr_t)kill + 0x2C);
+                if (effectItemID > 0 && lastAssetID > 0)
+                    killEffectItemByAssetId[lastAssetID] = effectItemID;
             }
         }
     }
 
     for (void* res : itemRes) {
         if (!res || !Tools::IsPtrValid(res)) continue;
-        itemFields = (ItemResourceFields*)((uintptr_t)res + 0x18);
+        itemFields = (ItemResourceFields*)((uintptr_t)res + 0x10);
         if (!Tools::IsPtrValid(itemFields)) continue;
         itemResByID[itemFields->ID] = res;
     }
@@ -1242,7 +1348,7 @@ void LoadWeaponSkins() {
                 auto itExtraBase = weaponExtraByID.find(baseID);
                 if (itExtraBase != weaponExtraByID.end()) {
                     void* extra = itExtraBase->second;
-                    weaponextraFields = (WeaponConfExtraFields*)((uintptr_t)extra + 0x18);
+                    weaponextraFields = (WeaponConfExtraFields*)((uintptr_t)extra + 0x10);
                     if (Tools::IsPtrValid(weaponextraFields)) {
                         extraOrig = weaponextraFields->ID;
                     }
@@ -1250,7 +1356,7 @@ void LoadWeaponSkins() {
                 auto itExtraConf = weaponExtraByID.find(confID);
                 if (itExtraConf != weaponExtraByID.end()) {
                     void* extra = itExtraConf->second;
-                    weaponextraFields = (WeaponConfExtraFields*)((uintptr_t)extra + 0x18);
+                    weaponextraFields = (WeaponConfExtraFields*)((uintptr_t)extra + 0x10);
                     if (Tools::IsPtrValid(weaponextraFields)) {
                         deadReplay = weaponextraFields->DefaultDeadReplayEffectId;
                         killEffect = weaponextraFields->DefaultKillEffectId;
@@ -1304,7 +1410,7 @@ void LoadWeaponSkins() {
                 auto itItemRes = itemResByID.find(confID);
                 if (itItemRes != itemResByID.end()) {
                     void* itemResource = itItemRes->second;
-                    itemFields = (ItemResourceFields*)((uintptr_t)itemResource + 0x18);
+                    itemFields = (ItemResourceFields*)((uintptr_t)itemResource + 0x10);
                     if (Tools::IsPtrValid(itemFields)) {
                         xItem1 = itemFields->FxAssetID;
                         xItem2 = itemFields->InventoryModelID;
@@ -1341,7 +1447,7 @@ void LoadPlaneSkins() {
 
     for (void* plane : dropPlaneSkins) {
         if (!plane || !Tools::IsPtrValid(plane)) continue;
-        dropplaneFields = (BRDropPlaneSkinFields*)((uintptr_t)plane + 0x18);
+        dropplaneFields = (BRDropPlaneSkinFields*)((uintptr_t)plane + 0x10);
         if (!Tools::IsPtrValid(dropplaneFields)) continue;
         std::string planeName = GetNameString(GetDropPlaneName, plane);
         if (dropplaneFields->ModelAsset1P != 0 && !getplane[planeName]) {
@@ -1586,6 +1692,24 @@ void Skins_Thread()
     Tools::Hook((void*)(m_unity + 0xC3664F8), (void*)my_GetWeaponKillEffectLevelExtra, (void**)&orig_GetWeaponKillEffectLevelExtra);
     Tools::Hook((void*)(m_unity + 0xC37F25C), (void*)my_GetWeaponKillEffectLevelDecor, (void**)&orig_GetWeaponKillEffectLevelDecor);
 
+    // Local-player kill decoration hooks (WeaponAttrData / Weapon).
+    auto hookUnityRva = [&](uintptr_t rva, void* hook, void** orig) -> bool {
+        uintptr_t addr = KittyMemory::getAbsoluteAddress("libunity.so", rva);
+        if (addr == 0 || !Tools::IsPtrValid((void*)addr))
+            return false;
+        Tools::Hook((void*)addr, hook, orig);
+        return true;
+    };
+    g_killIconHookInstalled = hookUnityRva(WeaponAttrDataKillIconItemIDAddress,
+                                           (void*)my_GetKillIconItemID,
+                                           (void**)&orig_GetKillIconItemID);
+    g_killEffectItemHookInstalled = hookUnityRva(WeaponAttrDataKillEffectItemIDAddress,
+                                                 (void*)my_GetKillEffectItemID,
+                                                 (void**)&orig_GetKillEffectItemID);
+    g_killEffectGroupHookInstalled = hookUnityRva(WeaponKillEffectGroupOverrideAddress,
+                                                  (void*)my_WeaponKillEffectGroupOverride,
+                                                  (void**)&orig_WeaponKillEffectGroupOverride);
+
     // VehicleSkis hooks
     auto hookVehicleRva = [&](uintptr_t rva, void* hook, void** orig) {
         uintptr_t addr = KittyMemory::getAbsoluteAddress("libunity.so", rva);
@@ -1617,6 +1741,8 @@ void Skins_Thread()
         LoadPlaneSkins();
         LoadSnowboardSkins();
         LoadKillIcons();
+        g_killDecorationDiag.killEffectWeapons = (int)killEffectByWeapon.size();
+        g_killDecorationDiag.killEffectItemIDs = (int)killEffectItemByAssetId.size();
         std::this_thread::sleep_for(std::chrono::milliseconds(1500));
     }
 }

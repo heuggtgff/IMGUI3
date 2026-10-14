@@ -320,17 +320,21 @@ struct WeaponConfFields
     uint8_t SuperShowGroup;          // 0x1C
     uint8_t WeaponBluePrintType;     // 0x1C
     uint8_t WinnerCircleAnimID;      // 0x30
+    char pad_31[3];                  // 0x31 alignment
     uint BaseWeaponId;               // 0x34
     int DefWeaponSkinID;             // 0x38
     int DefaultKillBrocast;          // 0x3C
     uint ID;                         // 0x40
+    int IsDouble;                    // 0x44
     int WinnerCircleWeaponMountType; // 0x48
-    void *EnableCamoBeta;            // 0x48
-    void *LOCID_Desc;                // 0x50
-    void *LOCID_Name;                // 0x58
-    void *ModelRotation;             // 0x60
-    void *UIProperty;                // 0x68
-    void *UIPropertyUnlockLevel;     // 0x70
+    int pad_4C;                      // 0x4C
+    void *ChangeColorStr;            // 0x50
+    void *EnableCamoBeta;            // 0x58
+    void *LOCID_Desc;                // 0x60
+    void *LOCID_Name;                // 0x68
+    void *ModelRotation;             // 0x70
+    void *UIProperty;                // 0x78
+    void *UIPropertyUnlockLevel;     // 0x80
 };
 extern WeaponConfFields *weaponconfFields;
 
