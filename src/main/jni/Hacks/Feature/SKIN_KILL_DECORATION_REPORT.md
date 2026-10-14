@@ -123,5 +123,34 @@ index ⇒ blank thumbnail, while the in-game model kept coming from
   needs an existing `SimpleItem` instance for the item.
 - `Weapon.get_KillEffectGroupIDOverride` keys on the weapon id, so on the local
   client an enemy holding the same weapon id would also render the forced effect.
-- The character (`RoleConfFields`) path still carries its own stale tail
-  (`RolePackID` etc.) and was left untouched.
+## Same bug class found, deliberately NOT changed (out of scope)
+
+The convention above is violated in a few more places that belong to features
+other than the two reported ones. Each is dump-verified; none was changed here
+because an in-game regression there would be indistinguishable from an unrelated
+break, and they were not part of the request:
+
+- `RoleConfFields` (character tab) is cast at `+0x18` while `RoleConfConfig`'s
+  first field is `0x10` (dump 818159), so `Z1->ID` (needed by the
+  `Z1->ID != W` match that populates the character list) reads `0x3C`
+  (`KeepInCatalog`) instead of `0x34` — with base `+0x10`, `ID` lands exactly on
+  `0x34`. The declaration also carries an extra `bool BlockBack` that the live
+  class does not have, which leaves `ColorID` (`0x23` vs real `0x22`),
+  `ColorSubID`, `ShowRare` and `RolePackID` (`0x48` vs real `0x44`) one to four
+  bytes high.
+- `RolePackFields` is cast at `+0x18` while `RolePackConfConfig`'s first field
+  is `0x10` (dump 818902), and its declaration is stale as well: the live class is
+  alphabetically ordered with `KillStreakSkinID 0x68`, `LoadingFrame 0x6C`,
+  `RolePackID 0x90`, while the struct comments claim `0x48`/`0x4C`/`0x6C` — so
+  this one needs the same declaration rebuild as `WeaponConfFields`, not just a
+  base change.
+- `VehicleSkinConfFields` (snowboard/vehicle skins) is cast at `+0x18` while
+  `VehicleSkinConfConfig.ColorID` is at `0x10` (dump 822946, `ID 0x20`,
+  `NewVehicleResId 0x28`, `VehicleId 0x48`), and the declaration is missing
+  `DisableInCollection`, so every field after `ColorID` is one byte high on top
+  of the eight.
+
+Left otherwise correct and unchanged: `RoleSkinFields +0x18`
+(`RoleSkinConfig.ClothType 0x18`), `MythicArmorFields +0x14`,
+`WeaponConfFields +0x20`, `Item2InventoryFields +0x20`,
+`WeaponAssetGroupFields +0x40`, `SkinPtr`/`GetIl2CppArrayLen`.
