@@ -1913,10 +1913,17 @@ if (runtimeState.activeTab == 4) {
                                     static const char* triggerModes[] = { "Always", "ADS Only", "Firing Only" };
                                     custom::Combo("Mode", &Config.NewFeaturesMenu.TriggerbotMode, triggerModes, IM_ARRAYSIZE(triggerModes));
                                     custom::SliderInt("Delay", &Config.NewFeaturesMenu.TriggerbotDelay, 0, 500, "%d ms");
-                                    // Zone width in FULL pixels around the crosshair. Default
-                                    // 40 = whatever the device rendered before; V3's own zone is
-                                    // 2.5% of screen width, so this is deliberately user-tunable.
                                     custom::SliderInt("Radius", &Config.NewFeaturesMenu.TriggerbotRadius, 4, 240, "%d px");
+                                    
+                                    // Hitbox priority
+                                    static const char* hitboxModes[] = { "Head", "Chest", "Limbs", "Any" };
+                                    custom::Combo("Hitbox", &Config.NewFeaturesMenu.TriggerbotHitboxPriority, hitboxModes, IM_ARRAYSIZE(hitboxModes));
+                                    
+                                    // Lead target for projectiles
+                                    custom::Checkbox("Lead Target", &Config.NewFeaturesMenu.TriggerbotLeadTarget);
+                                    
+                                    // Check spread/recoil
+                                    custom::Checkbox("Check Spread", &Config.NewFeaturesMenu.TriggerbotCheckSpread);
                                 }
                                 // Debug status (shows in-game). The counters below are
                                 // written by the GAME-THREAD scan in A_FireTick, so they

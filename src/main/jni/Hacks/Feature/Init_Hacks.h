@@ -230,20 +230,18 @@ sColorsESPBOT sColorsESPBOT{0};
     {
         bool NoCrouch = false;
         bool Triggerbot = false;
-        int TriggerbotMode = 0; // 0 = Always, 1 = ADS only, 2 = Firing only (matches V3)
-        // TriggerbotDelay removed: the trigger fires the frame the target enters
-        // the crosshair zone. The field name is kept only as a save-file no-op.
-        int TriggerbotDelay = 0; // ms (UNUSED - forced 0; UI/logic removed)
-        int TriggerbotRadius = 40; // crosshair zone width in px (V3 default is 2.5% of width)
+        int TriggerbotMode = 0;        // 0 = Always, 1 = ADS only, 2 = Firing only
+        int TriggerbotDelay = 0;       // ms (humanized reaction delay)
+        int TriggerbotRadius = 40;     // crosshair zone width in px
+        int TriggerbotHitboxPriority = 3; // 0=Head, 1=Chest, 2=Limbs, 3=Any
+        bool TriggerbotLeadTarget = true;  // Enable target leading for projectiles
+        bool TriggerbotCheckSpread = true; // Check bullet spread/recoil before firing
         bool NoHitFlinch = false;
         bool NoDrift = false;
-        // No Slide Fatigue: SlideTackleComponent::get_UseSlideTackleLimit -> false
-        // (local pawn only) - unlimited slides, no slide idle/fatigue decay.
         bool NoSlideFatigue = false;
         // Firing timing - each removes exactly one delay, nothing else
         bool NoSprintToFireDelay = false;  // sprint-out timer before the gun fires
         bool NoHipfireDelay = false;       // hipfire get-ready / wind-up gate
-        // NoFireDelay removed (per request). field dropped from config struct.
     };
     sNewFeaturesMenu NewFeaturesMenu{0};
 };
