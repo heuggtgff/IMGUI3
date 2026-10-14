@@ -1912,111 +1912,65 @@ if (runtimeState.activeTab == 4) {
                                 if (Config.NewFeaturesMenu.Triggerbot) {
                                     static const char* triggerModes[] = { "Always", "ADS Only", "Firing Only" };
                                     custom::Combo("Mode", &Config.NewFeaturesMenu.TriggerbotMode, triggerModes, IM_ARRAYSIZE(triggerModes));
+                                    custom::SliderInt("Delay", &Config.NewFeaturesMenu.TriggerbotDelay, 0, 500, "%d ms");
                                     // Zone width in FULL pixels around the crosshair. Default
                                     // 40 = whatever the device rendered before; V3's own zone is
                                     // 2.5% of screen width, so this is deliberately user-tunable.
                                     custom::SliderInt("Radius", &Config.NewFeaturesMenu.TriggerbotRadius, 4, 240, "%d px");
-
-                                    // ---- Triggerbot diagnostics: why isn't it firing? ---
-                                    // A_FireRenderTick() runs the read-only half of the trigger on
-                                    // this (render) thread with the same accessors the ESP already
-                                    // uses every frame, so the state stays honest even if the
-                                    // in-game tick hook is dead - and it reports a dead heartbeat
-                                    // instead of silently doing nothing.
-                                    // Every counter below belongs to the LAST scan and says which
-                                    // gate dropped the candidate, so "Always" not firing is
-                                    // answered directly: no enemies / outside the radius / the
-                                    // visibility gate refused (rendered vs occ vs raw ray).
-                                    ImGui::Spacing();
-                                    custom::Separator_line();
-                                    NewFeatures::A_FireRenderTick();
-                                    NewFeatures::TriggerbotDiag& td = NewFeatures::GetTriggerbotDiag();
-                                    const int dbgState = NewFeatures::GetTriggerbotDebugState();
-                                    const bool hbAlive = NewFeatures::A_FireHeartbeatAlive();
-                                    const ImVec4 muted(0.65f, 0.65f, 0.72f, 1.0f);
-                                    static const char* trModes[] = { "Always", "ADS Only", "Firing Only" };
-                                    const int trMode = Config.NewFeaturesMenu.TriggerbotMode;
-                                    const char* trModeTxt = (trMode >= 0 && trMode < 3) ? trModes[trMode] : "?";
-
-                                    if (!hbAlive) {
-                                        ImGui::TextColored(ImVec4(1, 0.25f, 0.25f, 1), "NO GAME-THREAD TICK");
-                                    } else if (dbgState == 2) {
-                                        ImGui::TextColored(ImVec4(0, 1, 0, 1), ">> FIRING <<");
-                                    } else if (dbgState == 1) {
-                                        ImGui::TextColored(ImVec4(1, 1, 0, 1), "TARGET LOCKED");
-                                    } else if (td.lastGateBlocked) {
-                                        // Only ADS-only / Firing-only can block here; "Always" never can.
-                                        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "MODE GATE: %s", trModeTxt);
-                                    } else {
-                                        // The stage the last scan (render thread, just above)
-                                        // stopped at - the actual answer. If this reads
-                                        // "OK - target in zone" while the game thread reports no
-                                        // target, the game-thread tick never reached the scan
-                                        // (see the tick counters) - that is the loadout bug.
-                                        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "scan: %s",
-                                                           NewFeatures::A_FireStageText(td.stage));
-                                    }
-
-                                    ImGui::TextColored(muted, "Mode %s  HB %s  R=%.0f px  Near=%.0f px",
-                                        trModeTxt, hbAlive ? "OK" : "DEAD",
-                                        td.radiusPx,
-                                        td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx));
-                                    ImGui::TextColored(muted, "ticks wTick=%d held=%d pawn=%d/%d hook=%d",
-                                        td.weaponTicks, td.weaponHeldTicks,
-                                        td.pawnLocalTicks, td.pawnTicks, td.hookCalls);
-                                    ImGui::TextColored(muted, "scan=%d rScan=%d enemies=%d in=%d out=%d",
+                                }
+                                // Debug status (shows in-game). READ-ONLY on this thread:
+                                // the render-thread scan (A_FireRenderTick, present here in
+                                // commit 5e6d323) is deliberately NOT called - it ran the full
+                                // A_FireFindTarget incl. Physics.Raycast on the render thread
+                                // every frame, and that concurrent scan was the crash-on-scan
+                                // bug. The counters below are written by the GAME-THREAD scan
+                                // in A_FireTick, so they stay live while the trigger is armed.
+                                NewFeatures::TriggerbotDiag& td = NewFeatures::GetTriggerbotDiag();
+                                int dbgState = NewFeatures::GetTriggerbotDebugState();
+                                const bool hbAlive = NewFeatures::A_FireHeartbeatAlive();
+                                if (!hbAlive) {
+                                    ImGui::TextColored(ImVec4(1, 0.25f, 0.25f, 1), "NO GAME-THREAD TICK");
+                                } else if (dbgState == 2) {
+                                    ImGui::TextColored(ImVec4(0, 1, 0, 1), ">> FIRING <<");
+                                } else if (dbgState == 1) {
+                                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "TARGET LOCKED");
+                                } else {
+                                    // Per-scan verdict only: a candidate denied
+                                    // geometry this exact scan. The lifetime
+                                    // counter must not decide this headline -
+                                    // it made "WALL BETWEEN" stick forever.
+                                    ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
+                                                       td.losBlockedScan > 0 ? "WALL BETWEEN" : "NO TARGET");
+                                }
+                                // Test Fire: this menu runs on the render thread and the game
+                                // only reacts to StartFire on the game thread, so the click just
+                                // queues the request - the heartbeat runs it and reports back.
+                                if (custom::Button("Test Fire", ImVec2(0, 0))) {
+                                    NewFeatures::g_testFireRequest = true;
+                                    NewFeatures::g_testFireRequestTime = NewFeatures::A_FireNow();
+                                    td.testFireStatus = 0;
+                                }
+                                {
+                                    const char* testTxt = "TestFire: idle";
+                                    if (td.testFireStatus == 1) testTxt = "TestFire: fired";
+                                    else if (td.testFireStatus == 2) testTxt = "TestFire: no local pawn";
+                                    else if (td.testFireStatus == 3) testTxt = "TestFire: no weapon";
+                                    else if (td.testFireStatus == 4) testTxt = "TestFire: no StartFire ptr";
+                                    else if (td.testFireStatus == 5) testTxt = "TestFire: queued, no tick";
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "%s", testTxt);
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "HB %s  wTick=%d held=%d pawn=%d",
+                                        hbAlive ? "OK" : "DEAD",
+                                        td.weaponTicks, td.weaponHeldTicks, td.pawnLocalTicks);
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "Scan=%d R=%d Enemy=%d Tgt=%d Fire=%d LOSblk=%d",
                                         td.scans, td.renderScans, td.enemyCount,
-                                        td.candInZone, td.candOutZone);
-                                    ImGui::TextColored(muted, "skip dead=%d nobone=%d behind=%d",
-                                        td.candDead, td.candNoBones, td.candBehindCam);
-                                    ImGui::TextColored(muted, "LOS ok rend=%d occ=%d ray=%d | block=%d bad=%d noFn=%d",
-                                        td.okRendered, td.okOccVisible, td.okRay,
-                                        td.rejRayBlocked, td.rejRayInvalid, td.rejNoVerdict);
-                                    ImGui::TextColored(muted, "aim crossOk=%d crossOff=%d rayGate=%d",
-                                        td.crosshairOk, td.rejCrosshairOff, td.rejThreadGated);
-                                    ImGui::TextColored(muted, "out tgt=%d fire=%d gateBlk=%d losBlk=%d/%d",
-                                        td.targets, td.fires, td.gateBlocks,
-                                        td.losBlockedScan, td.losBlocked);
-                                    ImGui::TextColored(muted, "pawn=%p wpn=%p match=%p",
-                                        td.localPawn, td.heldWeapon, td.matchGame);
-
-                                    // Held weapon never ticks => its class overrides Weapon::Tick
-                                    // at its own RVA, so the heartbeat hook cannot see it and none
-                                    // of the counters above ever move. Say it out loud instead of
-                                    // showing a UI that looks alive but can never fire.
-                                    if (hbAlive && td.weaponTicks > 0 && td.weaponHeldTicks == 0)
-                                        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
-                                            "held weapon never ticks (Tick overridden) - heartbeat miss");
-
-                                    // Crosshair-on-cover explainer: when every in-zone pawn is on
-                                    // screen but none of them sits under the actual aim ray, say it
-                                    // plainly - the zone caught a peeker, the crosshair rests on
-                                    // cover (truck corner, wall edge,...) and the trigger correctly
-                                    // refuses to fire there.
-                                    if (hbAlive && td.stage == NewFeatures::AF_STAGE_CROSSHAIR_ON_WALL)
-                                        ImGui::TextColored(ImVec4(1, 0.6f, 0.3f, 1),
-                                            "enemy visible on screen but crosshair is on cover - move the crosshair ONTO the enemy");
-
-                                    // Test Fire: this menu runs on the render thread and the game
-                                    // only reacts to StartFire on the game thread, so the click just
-                                    // queues the request - the heartbeat runs it and reports back.
-                                    if (custom::Button("Test Fire", ImVec2(0, 0))) {
-                                        NewFeatures::g_testFireRequest = true;
-                                        NewFeatures::g_testFireRequestTime = NewFeatures::A_FireNow();
-                                        td.testFireStatus = 0;
-                                    }
-                                    ImGui::SameLine(0.0f, 8.0f);
-                                    if (custom::Button("Log Dump", ImVec2(0, 0)))
-                                        NewFeatures::A_FireLogSnapshot();
-                                    {
-                                        const char* testTxt = "TestFire: idle";
-                                        if      (td.testFireStatus == 1) testTxt = "TestFire: fired";
-                                        else if (td.testFireStatus == 2) testTxt = "TestFire: no local pawn";
-                                        else if (td.testFireStatus == 3) testTxt = "TestFire: no weapon";
-                                        else if (td.testFireStatus == 4) testTxt = "TestFire: no StartFire ptr";
-                                        else if (td.testFireStatus == 5) testTxt = "TestFire: queued, no tick";
-                                        ImGui::TextColored(muted, "%s", testTxt);
-                                    }
+                                        td.targets, td.fires, td.losBlocked);
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "R=%.0f Near=%.0f px", td.radiusPx,
+                                        td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx));
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "Pawn=%p Wpn=%p Match=%p", td.localPawn, td.heldWeapon, td.matchGame);
                                 }
                                 EndContentChild(left);
                             }

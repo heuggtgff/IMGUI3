@@ -142,7 +142,7 @@
 //
 #include <random>
 #include <chrono>
-#include <atomic>
+
 #include <cstdint>
 #include <cstring>
 
@@ -367,11 +367,6 @@ namespace NewFeatures
     inline void *(*fn_CameraGetMain)() = nullptr;
     inline bool (*fn_PawnRecentlyRendered)(void *) = nullptr;
     inline bool (*fn_PawnLastOccVisible)(void *) = nullptr;
-    // Mode gates (TriggerbotMode 1 = ADS only, 2 = Firing only). Resolved once
-    // with the rest - they are evaluated on EVERY tick now, so they must not
-    // cost a getAbsoluteAddress() (a /proc/self/maps scan) per tick.
-    inline bool (*fn_PawnIsAiming)(void *) = nullptr;
-    inline bool (*fn_PawnGetIsFiring)(void *) = nullptr;
 
     // State - game thread only.
     inline bool     g_afireHoldingFire       = false;
@@ -379,65 +374,12 @@ namespace NewFeatures
     inline double   g_afireLastPressTime     = -1000.0;
     inline double   g_afireLastEvalTime      = -1000.0;
     inline bool     g_afireInTick            = false;   // re-entrancy guard
-    inline bool     g_afireLosOk             = false;   // last game-thread scan: target has LOS
-    inline bool     g_afireRayThreadOk       = false;   // stamped by A_FireTick at every tick:
-                                                        // Physics.Raycast (PhysX/bepu native
-                                                        // scene query) may only run on the GAME
-                                                        // thread. A_TickHookedWeapon stamps it
-                                                        // true, A_FireRenderTick stamps it false
-                                                        // before the render-thread diag scan. The
-                                                        // ray, wrapper returns -3 (= thread-gated)
-                                                        // so no render-thread scan can ever call
-                                                        // the physics engine - that pair of
-                                                        // concurrent scene queries is exactly what
-                                                        // crashed the game the instant a scan ran
-                                                        // while a player was on screen.
+    inline bool     g_afireLosOk             = false;   // last scan: target has LOS
     inline bool     g_testFireRequest        = false;   // set by the menu (render thread)
     inline double   g_testFireRequestTime    = -1000.0;
 
-    // Mutual exclusion ON THE RAYCAST ITSELF - the last line of defence. The
-    // thread stamp below makes the render thread ray-free and the game thread
-    // ray-allowed; the flag makes it impossible for TWO scans (the diag scan
-    // on the render thread and the trigger scan on the game thread) to be
-    // inside the physics scene query AT THE SAME TIME, whatever the stamps
-    // say. Contended = -3 (this scan continues getter-only). Without this,
-    // overlapping Raycast calls crashed the game the moment a scan ran while
-    // a player was on screen.
-    inline std::atomic_flag g_afireRayBusy = ATOMIC_FLAG_INIT;
-
-    // RAII: stamps which thread is currently evaluating the scan and restores
-    // the previous value on scope exit, so the game thread cannot be left
-    // ray-denied by an early return in the tick path.
-    struct A_FireRayThreadGuard
-    {
-        bool prev;
-        explicit A_FireRayThreadGuard(bool gameThread)
-            : prev(g_afireRayThreadOk) { g_afireRayThreadOk = gameThread; }
-        ~A_FireRayThreadGuard() { g_afireRayThreadOk = prev; }
-    };
-
-    // Where the last scan stopped. Printed by the menu as the headline reason
-    // when the trigger is on but nothing fires ("Always" has no mode gate, so
-    // the answer is always one of these).
-    enum A_FireStage : int
-    {
-        AF_STAGE_OK = 0,            // a shootable target was found
-        AF_STAGE_OK_FALLBACK,       // raycast fn missing - nearest pawn in the zone used
-        AF_STAGE_NO_MATCHGAME,      // GamePlay::get_MatchGame() invalid
-        AF_STAGE_NO_CAMERA,         // Camera::get_main() invalid
-        AF_STAGE_NO_ENEMY_LIST,     // MatchGame::EnemyPawns() invalid
-        AF_STAGE_NO_ENEMIES,        // the enemy list is empty / implausible size
-        AF_STAGE_NO_CANDIDATES,     // nobody projected: dead / no bones / behind camera
-        AF_STAGE_OUT_OF_ZONE,       // projected, but nobody inside Triggerbot Radius
-        AF_STAGE_LOS_BLOCKED,       // inside the zone, the visibility gate refused
-        AF_STAGE_CROSSHAIR_ON_WALL  // in-zone pawn(s) visible on screen, but the
-                                    // actual aim ray lands on cover first - the
-                                    // crosshair is NOT on the pawn
-    };
-
     // Diagnostics, so the menu can show *why* nothing happens. The game thread
     // writes, the render thread reads - racy but harmless (plain ints/pointers).
-    // Nothing in here feeds a firing decision: the counters are pure observers.
     struct TriggerbotDiag
     {
         int    weaponTicks;     // Weapon::Tick calls (any weapon)          <- heartbeat
@@ -460,32 +402,6 @@ namespace NewFeatures
         void  *matchGame;
         int    testFireStatus;  // 0 idle, 1 fired, 2 no pawn, 3 no weapon,
                                 // 4 no StartFire ptr, 5 pointers ok / no heartbeat
-
-        // ---- "why is Always not firing" breakdown -------------------------
-        // Per-SCAN fields (reset at the top of A_FireFindTarget), one per
-        // question the scan asks, in the order it asks them. gateBlocks is the
-        // only lifetime counter here.
-        int    stage;           // AF_STAGE_*: where the last scan stopped
-        int    candTotal;       // pawns that projected in front of the camera
-        int    candDead;        // ... skipped first: null ptr / !m_IsAlive
-        int    candNoBones;     // ... skipped: no head bone AND no mesh
-        int    candBehindCam;   // ... skipped: projected behind the camera
-        int    candOutZone;     // projected, but outside the Triggerbot Radius
-        int    candInZone;      // inside the radius -> reached the visibility gate
-        int    okRendered;      // candidates accepted by Pawn::get_RecentlyRendered
-        int    okOccVisible;    // ... accepted by Pawn::get_LastOccVisible
-        int    okRay;           // ... accepted by the raw ray at head/body
-        int    rejRayBlocked;   // ... refused: raw ray stopped by real geometry
-        int    rejRayInvalid;   // ... refused: malformed hit struct (-2)
-        int    rejNoVerdict;    // ... refused: no game verdict AND no raycast fn
-        int    rejThreadGated;  // ... refused: render-thread scan (its rays are
-                                //     thread-gated, so only the game's own
-                                //     getters were available to say no)
-        int    rejCrosshairOff; // ... visible on screen, but the crosshair ray
-                                //     lands on cover before reaching them
-        int    crosshairOk;     // ... confirmed under the actual aim ray
-        int    gateBlocks;      // lifetime: ticks the ACTIVE-mode gate refused
-        int    lastGateBlocked; // 1 = the mode gate refused the most recent tick
     };
     inline TriggerbotDiag g_triggerDiag{};
 
@@ -546,62 +462,23 @@ namespace NewFeatures
 
 
     // Returns the first-hit distance for origin->dir, -1 when clear, -2 on
-    // failure/malformed (fail-closed: the caller treats that as "blocked"),
-    // -3 when the CALLER is not the game thread / another scan holds the
-    // physics query (the physics engine must not be touched concurrently;
-    // see g_afireRayThreadOk / g_afireRayBusy).
+    // failure/malformed (fail-closed: the caller treats that as "blocked").
     inline float A_FireRaycastDistance(const Vector3 &origin, const Vector3 &dir, float maxDist)
     {
-        if (!g_afireRayThreadOk) return -3.0f;          // wrong thread: never cast
-        if (g_afireRayBusy.test_and_set(std::memory_order_acquire))
-            return -3.0f;                               // a scan is mid-query: don't contend
-
         unsigned char hitBuf[AF_RAYHIT_SIZE];
         memset(hitBuf, 0, sizeof hitBuf);
         bool hit;
-        float out;
 
         if (fn_PhysicsRaycastLOS != nullptr) {
             hit = fn_PhysicsRaycastLOS(origin, dir, maxDist, hitBuf);
         } else {
-            g_afireRayBusy.clear(std::memory_order_release);
-            return -2.0f;                               // no raycast -> fail closed
+            return -2.0f;                                   // no raycast -> fail closed
         }
 
-        if (!hit) out = -1.0f;                          // clear line
-        else {
-            const float dres = *(const float *)(hitBuf + AF_RAYHIT_DISTOFF);
-            // malformed -> blocked
-            if (!(dres >= 0.0f) || !(dres <= maxDist + 0.5f)) out = -2.0f;
-            else out = dres;
-        }
-        g_afireRayBusy.clear(std::memory_order_release);
-        return out;
-    }
-
-    // Crosshair-rays check: TRUE when the pawn is under the actual aim ray.
-    // The frustum/occlusion getters say "the pawn is on my screen somewhere";
-    // they say nothing about what the CROSSHAIR line lands on. When a player
-    // peeks from behind cover, their screen-space projection still passes
-    // RecentlyRendered - and if the zone radius is generous, the trigger pulled
-    // the trigger while the crosshair was physically sitting on the truck/wall
-    // next to them. Distances defeat this: a pawn 1 m behind the wall that
-    // holds the crosshair yields ~2x the ray's hit distance; a pawn the
-    // crosshair really is on yields hit >= pawnDist - tolerance.
-    inline bool A_FireCrosshairHitsPawn(const Vector3 &camPos, const Vector3 &pawnPos)
-    {
-        Vector3 to = pawnPos - camPos;
-        const float pawnDist = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
-        if (pawnDist < 0.01f) return true;
-        const float inv = 1.0f / pawnDist;
-        const Vector3 dir(to.x * inv, to.y * inv, to.z * inv);
-        const float hit = A_FireRaycastDistance(camPos, dir, pawnDist + 0.35f);
-        if (hit == -2.0f || hit == -3.0f)
-            return true;              // raycast unavailable, malformed, or this scan
-                                      // is not the game thread: keep the getter
-                                      // verdict, never veto on missing data
-        // Clear line, or the first thing hit IS this pawn's collider: on target.
-        return hit == -1.0f || hit >= pawnDist - 0.5f;
+        if (!hit) return -1.0f;                             // clear line
+        const float d = *(const float *)(hitBuf + AF_RAYHIT_DISTOFF);
+        if (!(d >= 0.0f) || !(d <= maxDist + 0.5f)) return -2.0f;  // malformed -> blocked
+        return d;
     }
 
     // True when the ray from the camera to the target position is NOT stopped
@@ -629,50 +506,21 @@ namespace NewFeatures
         d.losBlockedScan = 0;   // THIS scan only. The lifetime counter must
                                 // never drive the menu headline - that made
                                 // "WALL BETWEEN" permanent after one legit block.
-        // Fresh reject breakdown for THIS scan (menu reads it right after).
-        d.stage        = AF_STAGE_NO_CANDIDATES;
-        d.candTotal    = 0;
-        d.candDead     = 0;
-        d.candNoBones  = 0;
-        d.candBehindCam= 0;
-        d.candOutZone  = 0;
-        d.candInZone   = 0;
-        d.okRendered   = 0;
-        d.okOccVisible = 0;
-        d.okRay        = 0;
-        d.rejRayBlocked= 0;
-        d.rejRayInvalid= 0;
-        d.rejNoVerdict = 0;
-        d.rejThreadGated = 0;
-        d.rejCrosshairOff = 0;
-        d.crosshairOk  = 0;
 
         MatchGame *matchGame = GamePlay::get_MatchGame();
         d.matchGame = (void *)matchGame;
-        if (!Tools::IsPtrValid((void *)matchGame)) {
-            d.stage = AF_STAGE_NO_MATCHGAME;
-            return 0;
-        }
+        if (!Tools::IsPtrValid((void *)matchGame)) return 0;
 
         Camera *cam = Camera::get_main();
-        if (!Tools::IsPtrValid((void *)cam)) {
-            d.stage = AF_STAGE_NO_CAMERA;
-            return 0;
-        }
+        if (!Tools::IsPtrValid((void *)cam)) return 0;
 
         List<Pawn *> *enemyPawns = matchGame->EnemyPawns();
-        if (!Tools::IsPtrValid((void *)enemyPawns)) {
-            d.stage = AF_STAGE_NO_ENEMY_LIST;
-            return 0;
-        }
+        if (!Tools::IsPtrValid((void *)enemyPawns)) return 0;
 
         Pawn **items = (Pawn **)enemyPawns->getItems();
         const int count = enemyPawns->getSize();
         d.enemyCount = count;
-        if (!Tools::IsPtrValid((void *)items) || count <= 0 || count > 1024) {
-            d.stage = AF_STAGE_NO_ENEMIES;
-            return 0;
-        }
+        if (!Tools::IsPtrValid((void *)items) || count <= 0 || count > 1024) return 0;
 
         const float cx = (float)get_width()  * 0.5f;
         const float cy = (float)get_height() * 0.5f;
@@ -687,55 +535,25 @@ namespace NewFeatures
         auto camPos = cam->get_transform()->get_position();
 
         // ---- Phase 1: who is inside the crosshair zone? (screen-space, no ray)
-        //
-        // Head bone AND body centre are considered, and the one nearest the
-        // crosshair wins. The head alone used to decide the zone and the body was
-        // only tried when the head did not project at all - so an enemy whose
-        // head sat a few pixels outside the radius while their body filled the
-        // crosshair was discarded, and the trigger stayed silent while the
-        // crosshair was plainly on them.
         constexpr int MAX_CANDIDATES = 16;
-        struct Candidate { Pawn *pawn; float dist2; Vector3 headPoint, chestPoint; };
+        struct Candidate { Pawn *pawn; float dist2; Vector3 aimPoint; };
         Candidate candidates[MAX_CANDIDATES];
         int nCandidates = 0;
         Pawn *bestNoLos = nullptr;             // nearest pawn, LOS not yet known
         float bestNoLosDist2 = radiusSq + 1.0f;
-        bool losGateRejected = false;          // per-scan: some candidate failed "on screen"
-        bool crosshairRejected = false;        // per-scan: some candidate was on screen
-                                               // but the crosshair ray hit cover first
 
         for (int i = 0; i < count; i++) {
             Pawn *pawn = items[i];
-            if (!Tools::IsPtrValid((void *)pawn)) { d.candDead++; continue; }
-            if (!pawn->m_IsAlive())                 { d.candDead++; continue; }
+            if (!Tools::IsPtrValid((void *)pawn)) continue;
+            if (!pawn->m_IsAlive()) continue;
+
+            float d2 = -1.0f;                  // best of head/mesh for this pawn
+            Vector3 aim;
 
             Transform *headBone = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
-            Transform *mesh     = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
-            const bool haveHeadBone = Tools::IsPtrValid((void *)headBone);
-            const bool haveMesh     = Tools::IsPtrValid((void *)mesh);
-            if (!haveHeadBone && !haveMesh) { d.candNoBones++; continue; }
-
-            Vector3 headPoint(0, 0, 0), chestPoint(0, 0, 0);
-            if (haveHeadBone) headPoint = headBone->get_position();
-
-            if (haveMesh) {
-                const Vector3 root = mesh->get_position();
-                if (haveHeadBone) {
-                    // centre of mass: halfway between the model root and the head
-                    chestPoint = Vector3((root.x + headPoint.x) * 0.5f,
-                                         (root.y + headPoint.y) * 0.5f,
-                                         (root.z + headPoint.z) * 0.5f);
-                } else {
-                    chestPoint = root;         // no head bone -> the root will do
-                }
-            } else {
-                chestPoint = headPoint;        // no mesh -> both points are the head
-            }
-
-            float d2 = -1.0f;                  // best of head/body for this pawn
-
-            if (haveHeadBone) {
-                const Vector3 sc = worldToScreen(cam, headPoint);
+            if (Tools::IsPtrValid((void *)headBone)) {
+                aim = headBone->get_position();
+                const Vector3 sc = worldToScreen(cam, aim);
                 if (sc.z > 0.0f) {             // in front of the camera
                     const float dx = sc.x - cx;
                     const float dy = sc.y - cy;
@@ -743,148 +561,80 @@ namespace NewFeatures
                 }
             }
 
-            if (haveMesh) {
-                const Vector3 sc = worldToScreen(cam, chestPoint);
-                if (sc.z > 0.0f) {
-                    const float dx = sc.x - cx;
-                    const float dy = sc.y - cy;
-                    const float dc = dx * dx + dy * dy;
-                    if (d2 < 0.0f || dc < d2) d2 = dc;   // nearest point to the crosshair
+            if (d2 < 0.0f) {                   // head not projectable -> try the body
+                Transform *mesh = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
+                if (Tools::IsPtrValid((void *)mesh)) {
+                    aim = mesh->get_position();
+                    const Vector3 sc = worldToScreen(cam, aim);
+                    if (sc.z > 0.0f) {
+                        const float dx = sc.x - cx;
+                        const float dy = sc.y - cy;
+                        d2 = dx * dx + dy * dy;
+                    }
                 }
             }
 
-            if (d2 < 0.0f) { d.candBehindCam++; continue; }
+            if (d2 < 0.0f) continue;
 
-            d.candTotal++;
             if (d.closestPx < 0.0f || d2 < d.closestPx) d.closestPx = d2;
 
-            if (d2 > radiusSq) { d.candOutZone++; continue; }   // outside the zone
-            d.candInZone++;
+            if (d2 > radiusSq) continue;       // outside the zone, not a candidate
 
             if (nCandidates < MAX_CANDIDATES) {
-                candidates[nCandidates].pawn       = pawn;
-                candidates[nCandidates].dist2      = d2;
-                candidates[nCandidates].headPoint  = headPoint;
-                candidates[nCandidates].chestPoint = chestPoint;
+                candidates[nCandidates].pawn = pawn;
+                candidates[nCandidates].dist2 = d2;
+                candidates[nCandidates].aimPoint = aim;
                 nCandidates++;
             }
             if (d2 < bestNoLosDist2) { bestNoLosDist2 = d2; bestNoLos = pawn; }
         }
 
-        // ---- Phase 2: visibility for the candidates only (at most two rays
-        // each, hard cap 16 so a crowd cannot spike it).
-        //
-        // A hit counts as "the target itself" when it lands within
-        // AF_AIM_TOLERANCE of the aim point, so cover still blocks while the
-        // enemy's own chest, arms or raised weapon do not. The old test accepted
-        // ONLY "the ray hit nothing at all", which classified a ray landing on
-        // the target's own collider as "WALL BETWEEN" - and since the ray to the
-        // head is regularly clipped by the body first, the trigger went silent on
-        // enemies the crosshair was sitting on.
-        constexpr float AF_AIM_TOLERANCE = 0.5f;   // metres
-
+        // ---- Phase 2: only candidates get the LOS ray (one ray each, usually
+        // 0-1 pawns near the crosshair; hard cap 16 so a crowd can't spike it).
+        // The nearest-shootable pawn goes noLOS; if raycasting is unavailable
+        // the nearest zone pawn goes there too (fail-open for the INDICATOR
+        // only - the fire path re-checks and fails closed).
         uintptr_t best = 0;
         float bestDist = radiusSq + 1.0f;
         for (int c = 0; c < nCandidates; c++) {
+            // VISIBILITY check = the game's own occlusion verdict for that pawn
+            // (RecentlyRendered), with the raw raycast as the tie-breaker only
+            // when the game hasn't rendered the pawn this frame but it also
+            // doesn't say "occluded" (still respawning / spectating etc).
             Pawn *cp = candidates[c].pawn;
-
-            // 1) the game's own occlusion verdict for that pawn
             bool visible = false;
-            bool byRendered = false, byOcc = false;
+
             if (fn_PawnRecentlyRendered != nullptr) {
                 visible = fn_PawnRecentlyRendered(cp);          // game's own answer
-                byRendered = visible;
-                if (!visible && fn_PawnLastOccVisible != nullptr) {
+                if (!visible && fn_PawnLastOccVisible != nullptr)
                     visible = fn_PawnLastOccVisible(cp);        // 1-frame leniency
-                    byOcc = visible;
-                }
             }
 
-            // 2) raw ray, tried at BOTH the head and the body centre.
-            //    rayVerdict is diagnostic only: 0 not tried/none, -2 malformed
-            //    hit struct, 3 stopped by geometry, 2 = the hit IS the target.
-            int rayVerdict = 0;
-            if (!visible && fn_PhysicsRaycastLOS != nullptr) {
-                const Vector3 points[2] = { candidates[c].headPoint, candidates[c].chestPoint };
-                for (int p = 0; p < 2 && !visible; p++) {
-                    Vector3 to = points[p] - camPos;
-                    const float len = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
-                    if (len < 0.0001f) continue;
-                    const Vector3 dir(to.x / len, to.y / len, to.z / len);
-                    const float hit = A_FireRaycastDistance(camPos, dir, len + AF_AIM_TOLERANCE);
-                    // -1 = clear line, >= len-tolerance = the hit IS the target.
-                    // -2 (no raycast fn / malformed struct) stays fail-closed.
-                    // -3 (wrong thread) = the ray was never PERMITTED on this
-                    // scan: treat as not-tried, the getters' verdict stands.
-                    if (hit == -2.0f) {
-                        if (rayVerdict == 0) rayVerdict = -2;
-                    } else if (hit == -3.0f) {
-                        if (rayVerdict == 0) rayVerdict = -3;
-                    } else if (hit == -1.0f || hit >= len - AF_AIM_TOLERANCE) {
-                        rayVerdict = 2;
-                        visible    = true;
-                    } else if (rayVerdict != -2) {
-                        rayVerdict = 3;
-                    }
-                }
+            if (!visible) {
+                // Fallback: raw 2-arg raycast. Same struct layout as before,
+                // no overloads = no ABI guessing.
+                Vector3 to = candidates[c].aimPoint - camPos;
+                const float len = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
+                if (len < 0.0001f) continue;
+                const Vector3 dir(to.x / len, to.y / len, to.z / len);
+                const float hit = A_FireRaycastDistance(
+                    camPos, dir, Vector3::Distance(camPos, candidates[c].aimPoint) + 0.35f);
+                visible = (hit == -1.0f);                      // -1 = clear; blocked/malformed = invisible
             }
 
             if (!visible) {
                 d.losBlocked++;
                 d.losBlockedScan++;
-                if      (rayVerdict == -3)                d.rejThreadGated++;
-                else if (fn_PhysicsRaycastLOS == nullptr) d.rejNoVerdict++;   // fail closed
-                else if (rayVerdict == -2)                d.rejRayInvalid++;
-                else                                      d.rejRayBlocked++;
-                losGateRejected = true;
                 continue;                      // not on screen -> not shootable
             }
-
-            // 3) CROSSHAIR-RAYS check: "visible on screen" is not "under the aim
-            //    ray". A pawn peeking from behind cover projects into the zone
-            //    and passes RecentlyRendered while the crosshair physically
-            //    rests on the cover between the camera and them - that is what
-            //    made the trigger fire while picturing a target on the truck's
-            //    corner. Only the pawn(s) the crosshair actually points at
-            //    survive this; each costs exactly one extra ray per PAWN, not
-            //    per frame, and only for pawns that are already visible.
-            if (fn_PhysicsRaycastLOS != nullptr) {
-                const bool headOn  = A_FireCrosshairHitsPawn(camPos, candidates[c].headPoint);
-                const bool chestOn = A_FireCrosshairHitsPawn(camPos, candidates[c].chestPoint);
-                if (!headOn && !chestOn) {
-                    d.rejCrosshairOff++;
-                    d.losBlockedScan++;
-                    crosshairRejected = true;
-                    continue;
-                }
-            }
-            d.crosshairOk++;
-
-            if (byRendered) d.okRendered++;
-            else if (byOcc)      d.okOccVisible++;
-            else                 d.okRay++;
             if (candidates[c].dist2 < bestDist) {
                 best     = (uintptr_t)candidates[c].pawn;
                 bestDist = candidates[c].dist2;
             }
         }
 
-        // ---- Where this scan stopped (the menu's headline reason) ----------
-        if (best != 0)
-            d.stage = AF_STAGE_OK;
-        else if (d.candInZone > 0 && crosshairRejected && !losGateRejected)
-            d.stage = AF_STAGE_CROSSHAIR_ON_WALL;   // on screen, but not under the
-                                                    // aim ray - the headline is
-                                                    // cover, never a phantom wall
-        else if (d.candInZone > 0)
-            d.stage = AF_STAGE_LOS_BLOCKED;
-        else if (d.candTotal > 0)  d.stage = AF_STAGE_OUT_OF_ZONE;
-        else                       d.stage = AF_STAGE_NO_CANDIDATES;
-
-        if (best == 0 && fn_PhysicsRaycastLOS == nullptr && bestNoLos != nullptr) {
+        if (best == 0 && fn_PhysicsRaycastLOS == nullptr && bestNoLos != nullptr)
             best = (uintptr_t)bestNoLos;
-            d.stage = AF_STAGE_OK_FALLBACK;    // no raycast fn at all: nearest in zone
-        }
 
         g_afireLosOk = (best != 0);            // scan verdict: this target is shootable
         if (best != 0) d.targets++;
@@ -934,12 +684,6 @@ namespace NewFeatures
     {
         TriggerbotDiag &d = g_triggerDiag;
         d.lastTickTime = A_FireNow();
-        d.lastGateBlocked = 0;      // set below only if the ACTIVE-mode gate refuses
-
-        // This is the game thread: rays are PERMITTED for the whole scan the
-        // tick is about to run. RAII-restored so no early return can leave the
-        // stamp in the wrong state for the next evaluator.
-        A_FireRayThreadGuard gameThreadRays(true);
 
         const double now = d.lastTickTime;
         if (now - g_afireLastEvalTime < 0.010) return;   // ~10 ms, like V3
@@ -985,34 +729,6 @@ namespace NewFeatures
         if (g_afireHoldingFire && g_afireFiringOn != (void *)held)
             A_FireReleaseTrigger(nullptr);
 
-        // ---- Mode gate FIRST ---------------------------------------------
-        // "ADS only" / "Firing only" used to be checked AFTER A_FireFindTarget
-        // had already run, so every frame spent not aiming still walked the whole
-        // enemy list (two bone projections per pawn plus the game's own occlusion
-        // verdict per candidate) and then threw the verdict away. That is the
-        // stutter ADS-only mode had. Both gates are single virtual getters, so
-        // the scan is now skipped outright in the frames where the trigger
-        // cannot fire. Releasing the trigger here also stops the burst on the
-        // very frame the player un-ADS.
-        // Modes: 0 = Always, 1 = ADS only, 2 = Firing only.
-        if (Config.NewFeaturesMenu.TriggerbotMode == 1) {
-            if (fn_PawnIsAiming == nullptr || !fn_PawnIsAiming(localPawn)) {
-                A_FireReleaseTrigger(nullptr);
-                d.lastGateBlocked = 1;
-                d.gateBlocks++;
-                s_dbgTriggerState = 0;
-                return;
-            }
-        } else if (Config.NewFeaturesMenu.TriggerbotMode == 2) {
-            if (fn_PawnGetIsFiring == nullptr || !fn_PawnGetIsFiring(localPawn)) {
-                A_FireReleaseTrigger(nullptr);
-                d.lastGateBlocked = 1;
-                d.gateBlocks++;
-                s_dbgTriggerState = 0;
-                return;
-            }
-        }
-
         // A_FireFindTarget already LOS-checked the winning candidate this scan
         // (g_afireLosOk). No second raycast here - shooting through walls is on
         // the scan's verdict, and a stale-verdict window of <=10 ms is what
@@ -1020,8 +736,20 @@ namespace NewFeatures
         const uintptr_t target = A_FireFindTarget();
         bool ready = target != 0 && g_afireLosOk;
 
-// Delay slider removed: the trigger now fires the frame the target enters the
-        // crosshair zone (config field kept for save-file compatibility, forced to 0).
+        // Modes: 0 = Always, 1 = ADS only, 2 = Firing only.
+        if (ready && Config.NewFeaturesMenu.TriggerbotMode == 1) {
+            auto isAiming = (bool (*)(void *))UnityRva(RVA::Pawn_IsAiming);
+            ready = isAiming != nullptr && isAiming(localPawn);
+        } else if (ready && Config.NewFeaturesMenu.TriggerbotMode == 2) {
+            auto getIsFiring = (bool (*)(void *))UnityRva(RVA::Pawn_get_IsFiring);
+            ready = getIsFiring != nullptr && getIsFiring(localPawn);
+        }
+
+        if (ready && Config.NewFeaturesMenu.TriggerbotDelay > 0) {
+            if (now - g_afireLastPressTime <
+                (double)Config.NewFeaturesMenu.TriggerbotDelay / 1000.0)
+                ready = false;
+        }
 
         if (!ready) {
             A_FireReleaseTrigger(nullptr);
@@ -1127,14 +855,6 @@ namespace NewFeatures
         if (Tools::IsPtrValid(camMainAddr))
             fn_CameraGetMain = (void *(*)())camMainAddr;
 
-        auto aimingAddr = UnityRva(RVA::Pawn_IsAiming);
-        if (Tools::IsPtrValid(aimingAddr))
-            fn_PawnIsAiming = (bool (*)(void *))aimingAddr;
-
-        auto firingAddr = UnityRva(RVA::Pawn_get_IsFiring);
-        if (Tools::IsPtrValid(firingAddr))
-            fn_PawnGetIsFiring = (bool (*)(void *))firingAddr;
-
         void *weaponTick = UnityRva(RVA::Weapon_Tick);
         if (Tools::IsPtrValid(weaponTick)) {
             Tools::Hook(weaponTick, (void *)&Hook_Weapon_Tick, (void **)&orig_Weapon_Tick);
@@ -1198,13 +918,6 @@ namespace NewFeatures
         if (!Config.NewFeaturesMenu.Triggerbot) return;
 
         d.renderScans++;
-
-        // The menu runs on the RENDER thread: rays are FORBIDDEN for this scan
-        // (physics scene queries on this thread are what crashed the game).
-        // The diag keeps working ray-free on the game's own getters; a verdict
-        // that would have needed a ray is honestly shown as ray-gated.
-        A_FireRayThreadGuard renderThreadRays(false);
-
         const uintptr_t t = A_FireFindTarget();
 
         // The game thread owns s_dbgTriggerState while its heartbeat is alive;
@@ -1216,59 +929,6 @@ namespace NewFeatures
 
     inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
     inline TriggerbotDiag &GetTriggerbotDiag() { return g_triggerDiag; }
-
-    // Plain-English name for the stage the last scan stopped at.
-    inline const char *A_FireStageText(int stage)
-    {
-        switch (stage) {
-            case AF_STAGE_OK:            return "OK - target in zone";
-            case AF_STAGE_OK_FALLBACK:   return "OK - no raycast fn, nearest in zone";
-            case AF_STAGE_NO_MATCHGAME:  return "no MatchGame";
-            case AF_STAGE_NO_CAMERA:     return "no Camera::get_main";
-            case AF_STAGE_NO_ENEMY_LIST: return "no EnemyPawns list";
-            case AF_STAGE_NO_ENEMIES:    return "EnemyPawns empty (size 0 or >1024)";
-            case AF_STAGE_NO_CANDIDATES: return "nobody projected (dead / no bones / behind cam)";
-            case AF_STAGE_OUT_OF_ZONE:   return "enemy visible but OUTSIDE the radius";
-            case AF_STAGE_LOS_BLOCKED:   return "in zone, visibility gate refused";
-            case AF_STAGE_CROSSHAIR_ON_WALL:
-                                         return "crosshair on cover, not on enemy";
-            default:                     return "?";
-        }
-    }
-
-    // One-shot dump of the whole trigger chain to logcat (menu "Log Dump").
-    // Read-only: it touches no game function the tick paths do not already call.
-    inline void A_FireLogSnapshot()
-    {
-        TriggerbotDiag &d = g_triggerDiag;
-        LOGI("[AFire] stage=%d(%s) mode=%d hb=%d state=%d",
-             d.stage, A_FireStageText(d.stage),
-             Config.NewFeaturesMenu.TriggerbotMode,
-             A_FireHeartbeatAlive() ? 1 : 0, s_dbgTriggerState);
-        LOGI("[AFire] ticks wTick=%d heldTick=%d pawnTick=%d pawnLocal=%d hook=%d scans=%d renderScans=%d",
-             d.weaponTicks, d.weaponHeldTicks, d.pawnTicks, d.pawnLocalTicks,
-             d.hookCalls, d.scans, d.renderScans);
-        LOGI("[AFire] zone radius=%.1f nearestPx=%.1f enemies=%d cand=%d inZone=%d outZone=%d",
-             (double)d.radiusPx,
-             d.closestPx < 0.0f ? -1.0 : (double)sqrtf(d.closestPx),
-             d.enemyCount, d.candTotal, d.candInZone, d.candOutZone);
-        LOGI("[AFire] skip dead=%d noBones=%d behindCam=%d",
-             d.candDead, d.candNoBones, d.candBehindCam);
-        LOGI("[AFire] los okRendered=%d okOcc=%d okRay=%d rejBlocked=%d rejInvalid(-2)=%d rejNoFn=%d "
-             "threadGated=%d crossOk=%d crossOff=%d losBlocked(scan/life)=%d/%d",
-             d.okRendered, d.okOccVisible, d.okRay, d.rejRayBlocked,
-             d.rejRayInvalid, d.rejNoVerdict, d.rejThreadGated,
-             d.crosshairOk, d.rejCrosshairOff,
-             d.losBlockedScan, d.losBlocked);
-        LOGI("[AFire] out targets=%d fires=%d gateBlocks=%d lastGateBlocked=%d testFire=%d",
-             d.targets, d.fires, d.gateBlocks, d.lastGateBlocked, d.testFireStatus);
-        LOGI("[AFire] ptrs pawn=%p held=%p match=%p w2s=%p ray=%p rendered=%p occ=%p startFire=%p stopFire=%p",
-             d.localPawn, d.heldWeapon, d.matchGame, (void *)fn_WorldToScreen,
-             (void *)fn_PhysicsRaycastLOS, (void *)fn_PawnRecentlyRendered,
-             (void *)fn_PawnLastOccVisible, (void *)fn_Weapon_StartFire,
-             (void *)fn_Weapon_StopFire);
-    }
-
     // =====================================================================
     //  FIRING TIMING (Task 3)
     // =====================================================================
