@@ -96,73 +96,6 @@ int32_t ToColor(float *col) {
 int totalBots, totalEnemies;
 bool isEspReady;
 
-// ============================================================================
-// Visibility check for aimbot / triggerbot (dump-verified):
-//   Pawn.get_LastOccVisible   RVA 0x51BA800 (Slot 235) - same in dump.cs and
-//   dump (GR .57).cs from the jeudhehs/dump dataset. The game itself sets this
-//   from the camera occlusion test every frame, so it is exactly the
-//   "can the local player actually see this pawn" flag. Using it keeps the
-//   triggerbot from firing at (and the aimbot from snapping to) enemies that
-//   are only ESP-visible through walls.
-//   Secondary gate: WorldToScreenPoint camera z > 0 (target actually in
-//   front of the camera frustum) - not a wall test, catches behind-camera
-//   targets that screen-space circle math would otherwise accept.
-// ============================================================================
-static inline bool PawnPassesVisibilityCheck(uintptr_t pawn)
-{
-    if (!pawn)
-        return false;
-
-    // Camera-frustum gate: WorldToScreenPoint z <= 0 means the target is
-    // behind the camera (e.g. EnemyPawns while turned away) - never trigger
-    // on those regardless of ESP visibility.
-    auto headBone = *(Transform **)(pawn + Class_Pawn_m_HeadBone);
-    if (!headBone)
-        return false;
-    auto headScreen = Camera::get_main()->WorldToScreenPoint(headBone->get_position());
-    if (headScreen.z <= 0.0f)
-        return false;
-
-    // Engine occlusion flag: only set (true) when the game's own render
-    // pipeline can see the pawn. Fail open (treat as visible) if the getter
-    // has not resolved yet or the call itself fails - a missing check is
-    // strictly less harmful than falsely rejecting a genuine LOS target.
-    static bool s_lastOccResolved = false;
-    static bool (*s_GetLastOccVisible)(uintptr_t) = nullptr;
-    if (!s_lastOccResolved)
-    {
-        // RVA from dump.cs / dump (GR .57).cs: Pawn.get_LastOccVisible Slot 235
-        s_GetLastOccVisible = (bool (*)(uintptr_t))(uintptr_t)getAbsoluteAddress("libunity.so", 0x51BA800);
-        s_lastOccResolved = true;
-    }
-    if (!s_GetLastOccVisible)
-        return true;
-
-    // Engine occlusion result: true only when the game's own pipeline can see
-    // the pawn this frame.
-    if (!s_GetLastOccVisible(pawn))
-        return false;
-
-    // Smoke check (dump-verified):
-    //   Pawn.get_IsInSmoke            RVA 0x51B4844 (pawn inside a smoke volume)
-    // BaseGame.IsInSmoke(point) 0x9CC3518 needs the Vector3 by-value ABI
-    // (8-byte struct passed in registers) that Il2Cpp uses for this signature
-    // in this build; the guarded Pawn getter alone is enough, the smoke
-    // behind-wall case is already covered by LastOccVisible because smoke
-    // volumes are actual render blockers, not just visual overlays.
-    static bool s_smokeResolved = false;
-    static bool (*s_PawnGetIsInSmoke)(uintptr_t) = nullptr;
-    if (!s_smokeResolved)
-    {
-        s_PawnGetIsInSmoke = (bool (*)(uintptr_t))(uintptr_t)getAbsoluteAddress("libunity.so", 0x51B4844);
-        s_smokeResolved = true;
-    }
-    if (s_PawnGetIsInSmoke && s_PawnGetIsInSmoke(pawn))
-        return false;
-
-    return true;
-}
-
 static inline void ApplySpeedhack() {
     static float lastAppliedScale = 1.0f;
     const float targetScale = (speedHackMultiplier <= 0.0f) ? 1.0f : speedHackMultiplier;
@@ -197,8 +130,6 @@ uintptr_t GetClosestTarget() {
                         auto Pawn = Items[i];
                         if (Pawn) {
                             if (!*(bool *) (Pawn + Class_Pawn_m_IsAlive))
-                                continue;
-                            if (!PawnPassesVisibilityCheck(Pawn))
                                 continue;
                             auto m_Mesh = *(Transform **) (Pawn + Class_Pawn_m_Mesh);
                             if (!m_Mesh)
@@ -250,8 +181,6 @@ uintptr_t GetInsideFOVTarget() {
                         if (Pawn) {
                             auto isAlive = *(bool*) ((uintptr_t)Pawn + Class_Pawn_m_IsAlive);
                             if (!isAlive)
-                                continue;
-                            if (!PawnPassesVisibilityCheck(Pawn))
                                 continue;
                             auto m_HeadBone = *(Transform **) (Pawn + Class_Pawn_m_HeadBone);
                             if (!m_HeadBone)
@@ -1167,14 +1096,7 @@ void DrawESP(ImDrawList *draw, int sWidth, int sHeight, float density) {
 
 template<typename ThisType, typename... Args>
 void WeaponHandlerByAstral(ThisType thiz, Vector3 startPos, Vector3& dir, Args... args) {
-    // Triggerbot gate: fires on ANY shot from ANY weapon once enabled, no
-    // weapon-ID or fire-condition filtering (dump-verified: every weapon in
-    // the game routes through WeaponFireComponent_Instant.CreateBulletPipe
-    // Line/Projectile at 0xC9B6F90 / 0xC9C33A4, so this hook is weapon-agnostic
-    // by construction).
-    bool triggerActive = Config.NewFeaturesMenu.Triggerbot;
-    bool aimbotActive = Config.Aim.Aimbot360 || Config.Aim.AimSilent;
-    if (!triggerActive && !aimbotActive) return;
+    if (!Config.Aim.Aimbot360 && !Config.Aim.AimSilent) return;
 
     auto get_MatchGame = ((uintptr_t(*)())(Class_Gameplay_get_MatchGame))();
     if (!Tools::IsPtrValid((void*)get_MatchGame)) return;
@@ -1182,32 +1104,17 @@ void WeaponHandlerByAstral(ThisType thiz, Vector3 startPos, Vector3& dir, Args..
     auto LocalPawn = ((uintptr_t(*)())(Class_Gameplay_get_LocalPawn))();
     if (!LocalPawn) return;
 
-    bool triggerReady;
-    if (triggerActive) {
-        // Triggerbot: always-on, no fire-condition gate (removed the old
-        // Config.Aim.Trigger == None requirement). The only condition is a
-        // visible enemy -- enforced by PawnPassesVisibilityCheck inside both
-        // target pickers below and re-checked on the chosen target.
-        triggerReady = true;
-    } else {
-        triggerReady = Config.Aim.Trigger == EAimTrigger::None;
-        if (Config.Aim.Trigger == EAimTrigger::Shooting) {
-            triggerReady = ((bool(*)(uintptr_t))(Class_Pawn_get_IsFiring))(LocalPawn);
-        } else if (Config.Aim.Trigger == EAimTrigger::Scoping) {
-            triggerReady = ((bool(*)(uintptr_t))(Class_Pawn_IsAiming))(LocalPawn);
-        }
+    bool triggerReady = Config.Aim.Trigger == EAimTrigger::None;
+    if (Config.Aim.Trigger == EAimTrigger::Shooting) {
+        triggerReady = ((bool(*)(uintptr_t))(Class_Pawn_get_IsFiring))(LocalPawn);
+    } else if (Config.Aim.Trigger == EAimTrigger::Scoping) {
+        triggerReady = ((bool(*)(uintptr_t))(Class_Pawn_IsAiming))(LocalPawn);
     }
 
     if (!triggerReady) return;
 
-    // Target pickers are visibility-checked (LastOccVisible + smoke + camera
-    // frustum), so wallbang targets are filtered here.
     uintptr_t target = (Config.Aim.By == EAim::Distance) ? GetClosestTarget() : GetInsideFOVTarget();
     if (!target) return;
-
-    // Belt-and-braces: the chosen target must itself pass the visibility check
-    // (the pickers already filter, this guards against future picker changes).
-    if (!PawnPassesVisibilityCheck(target)) return;
 
     Vector3 targetPos;
     auto m_HeadBone = *(Transform**)(target + Class_Pawn_m_HeadBone);
