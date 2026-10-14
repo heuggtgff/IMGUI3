@@ -1,5 +1,6 @@
 std::unordered_map<std::string, bool> sBool;
 std::unordered_map<int, int> activeKillEffects;
+std::unordered_map<int, int> activeKillIcons;
 std::unordered_map<int, int> activeBulletTrackEffects;
 std::unordered_map<int, int> activeWeaponFireEffects;
 std::unordered_map<int, int> activeWeaponBrocast;
@@ -14,6 +15,7 @@ std::vector<void *> weaponAssetGroupInstance;
 std::vector<void *> mythicArmorInstance;
 std::vector<void *> mythicSightInstance;
 std::vector<void *> killEffectItemInstance;
+std::vector<void *> killIconConfigInstance;
 std::vector<void *> weaponSkinConfigInstance;
 std::vector<void *> weaponCamosConfigInstance;
 std::vector<void *> itemResourceConfigInstance;
@@ -51,6 +53,34 @@ WeaponConfExtraFields *weaponextraFields;
 MythicArmorFields *mythicarmorFields;
 MythicSightFields *mythicsightFields;
 KillEffectItemFields *killeffectFields;
+
+// SPKillIconItemConfConfig (dump.cs 819793): fields are dump-resolved here
+// (first field @0x10), ColorID distinguishes the mythic kill icons.
+struct SPKillIconItemFields
+{
+    bool IsAutoDemolition;             // 0x10
+    bool ShowInBag;                    // 0x11
+    char pad_12[2];                    // 0x12
+    int AssetID;                       // 0x14
+    int ColorID;                       // 0x18
+    int ColorSubID;                    // 0x1C
+    uint CurrencyID;                   // 0x20
+    int EffectAssetID;                 // 0x24
+    int GoGetPos;                      // 0x28
+    uint ID;                           // 0x2C
+    int SecondTab;                     // 0x30
+    int SellPrice;                     // 0x34
+    int SellProtection;                // 0x38
+    int ThirdTab;                      // 0x3C
+    void *BoardUIName;                 // 0x40
+    void *GoGetUrl;                    // 0x48
+    void *LOCID_Desc;                  // 0x50
+    void *LOCID_HowToGet;              // 0x58
+    void *LOCID_Name;                  // 0x60
+    void *TieUIName;                   // 0x68
+    void *WeaponCanEquip;              // 0x70 (int[])
+};
+SPKillIconItemFields *killiconFields;
 BRDeadboxSkinFields *deadboxFields;
 BRDropPlaneSkinFields *dropplaneFields;
 
@@ -92,6 +122,9 @@ uintptr_t WeaponAssetGroupAddress = 0xAF7A080;
 uintptr_t MythicArmorConfigAddress = 0x5C90E84;
 uintptr_t MythicSightConfigAddress = 0x90DDEEC;
 uintptr_t KillEffectItemConfConfigAddress = 0x90C54CC;
+uintptr_t SPKillIconItemConfConfigAddress = 0xAF67F1C;   // SPKillIconItemConfConfig..ctor (dump 819836)
+uintptr_t GetWeaponKillIconByExtraAddress = 0xC366318;   // GetWeaponKillIcon(SyncWeaponExtraInfo) (dump 1089440)
+uintptr_t GetWeaponKillIconOwnAddress     = 0xC37F220;   // GetWeaponKillIcon(out object decorations) (dump 1089443)
 uintptr_t WeaponSkinAddress = 0xAF8B4D4;
 uintptr_t WeaponCamosAddress = 0xAF7E148;
 uintptr_t ItemResourceAddress = 0x6985AB8;
@@ -127,6 +160,7 @@ typedef void (*MythicSightCtor)(void*);
 typedef void (*WeaponSkinCtor)(void*);
 typedef void (*WeaponCamosCtor)(void*);
 typedef void (*KillEffectItemCtor)(void*);
+typedef void (*SPKillIconCtor)(void*);
 typedef void (*ItemResourceCtor)(void*);
 typedef void (*CharacterModelCtor)(void*);
 typedef void (*RoleConfCtor)(void*);
@@ -147,6 +181,7 @@ MythicSightCtor orig_MythicSightCtor = nullptr;
 WeaponSkinCtor orig_WeaponSkinCtor = nullptr;
 WeaponCamosCtor orig_WeaponCamosCtor = nullptr;
 KillEffectItemCtor orig_KillEffectItemCtor = nullptr;
+SPKillIconCtor orig_SPKillIconCtor = nullptr;
 ItemResourceCtor orig_ItemResourceCtor = nullptr;
 CharacterModelCtor orig_CharacterModelCtor = nullptr;
 RoleConfCtor orig_RoleConfCtor = nullptr;
@@ -236,6 +271,14 @@ void my_KillEffectItemCtor(void* instance) {
     if (instance) {
         std::lock_guard<std::mutex> lock(g_dataMutex);
         killEffectItemInstance.push_back(instance);
+    }
+}
+
+void my_SPKillIconCtor(void* instance) {
+    orig_SPKillIconCtor(instance);
+    if (instance) {
+        std::lock_guard<std::mutex> lock(g_dataMutex);
+        killIconConfigInstance.push_back(instance);
     }
 }
 
@@ -408,6 +451,152 @@ int _GetCurrentWeaponBrocast(Weapon weapon) {
         return it->second;
     }
     return 0;
+}
+
+// ── InventoryUtil (GameEngine) kill decorations overrides ───────────────
+// The in-match kill effect / kill icon consumers are InventoryUtil statics
+// (dump 1089418-1089460): GetWeaponKillEffectGroup / GetWeaponKillIcon /
+// GetWeaponKillEffectLevel, each with a (SyncWeaponExtraInfo) overload and
+// an (out object decorations) overload. WeaponPromotionInfo above only
+// feeds the lobby upgrade UI, which is why kill effects never fired in
+// match. Killing bullets never send our four WeaponPromotionInfo hooks
+// so the maps have to surface through here.
+
+// Resolve a map key from a SyncWeaponExtraInfo object.
+// Layout (dump 1430872): VirtualItemID 0x20, ItemID 0x28, BluePrintID 0x30.
+static bool FindInMapExtra(const std::unordered_map<int, int> &m, void *extraInfo, int &outVal) {
+    if (!extraInfo || !Tools::IsPtrValid(extraInfo)) return false;
+    uintptr_t p = (uintptr_t)extraInfo;
+    int itemID = (int)*(uint *)(p + 0x28);
+    if (itemID != 0) {
+        auto it = m.find(itemID);
+        if (it != m.end()) { outVal = it->second; return true; }
+    }
+    int virtID = (int)*(uint *)(p + 0x20);
+    if (virtID != 0) {
+        auto it = m.find(virtID);
+        if (it != m.end()) { outVal = it->second; return true; }
+    }
+    int bpID = (int)*(uint *)(p + 0x30);
+    if (bpID != 0) {
+        auto it = m.find(bpID);
+        if (it != m.end()) { outVal = it->second; return true; }
+    }
+    return false;
+}
+
+// Resolve a map key from the local pawn's current weapon.
+static bool FindInMapLocal(const std::unordered_map<int, int> &m, int &outVal) {
+    Pawn *localPawn = GamePlay::get_LocalPawn();
+    if (!localPawn) return false;
+    Weapon *currentWeapon = localPawn->get_CurrentWeapon();
+    if (!currentWeapon) return false;
+    auto it = m.find(currentWeapon->get_WeaponID());
+    if (it != m.end()) { outVal = it->second; return true; }
+    return false;
+}
+
+uint (*orig_GetWeaponKillEffectGroupExtra)(void *extraInfo) = nullptr;
+uint my_GetWeaponKillEffectGroupExtra(void *extraInfo) {
+    int val;
+    if (FindInMapExtra(activeKillEffects, extraInfo, val) && val > 0)
+        return (uint)val;
+    return orig_GetWeaponKillEffectGroupExtra ? orig_GetWeaponKillEffectGroupExtra(extraInfo) : 0;
+}
+
+uint (*orig_GetWeaponKillEffectGroupDecor)(void *decorations) = nullptr;
+uint my_GetWeaponKillEffectGroupDecor(void *decorations) {
+    int val;
+    if (FindInMapLocal(activeKillEffects, val) && val > 0)
+        return (uint)val;
+    return orig_GetWeaponKillEffectGroupDecor ? orig_GetWeaponKillEffectGroupDecor(decorations) : 0;
+}
+
+uint (*orig_GetWeaponKillIconExtra)(void *extraInfo) = nullptr;
+uint my_GetWeaponKillIconExtra(void *extraInfo) {
+    int val;
+    if (FindInMapExtra(activeKillIcons, extraInfo, val) && val > 0)
+        return (uint)val;
+    return orig_GetWeaponKillIconExtra ? orig_GetWeaponKillIconExtra(extraInfo) : 0;
+}
+
+uint (*orig_GetWeaponKillIconDecor)(void *decorations) = nullptr;
+uint my_GetWeaponKillIconDecor(void *decorations) {
+    int val;
+    if (FindInMapLocal(activeKillIcons, val) && val > 0)
+        return (uint)val;
+    return orig_GetWeaponKillIconDecor ? orig_GetWeaponKillIconDecor(decorations) : 0;
+}
+
+// Mythic-L5 behavior: when the weapon carries an applied mythic skin
+// (activeKillIcons), report kill-effect level 5 so the game picks the
+// level-5 mythic tier everywhere (kill icons, kill feed, killcam).
+uint (*orig_GetWeaponKillEffectLevelExtra)(void *extraInfo) = nullptr;
+uint8_t my_GetWeaponKillEffectLevelExtra(void *extraInfo) {
+    int val;
+    if (FindInMapExtra(activeKillIcons, extraInfo, val) && val > 0)
+        return 5;
+    return orig_GetWeaponKillEffectLevelExtra ? orig_GetWeaponKillEffectLevelExtra(extraInfo) : 0;
+}
+
+uint (*orig_GetWeaponKillEffectLevelDecor)(void *decorations) = nullptr;
+uint8_t my_GetWeaponKillEffectLevelDecor(void *decorations) {
+    int val;
+    if (FindInMapLocal(activeKillIcons, val) && val > 0)
+        return 5;
+    return orig_GetWeaponKillEffectLevelDecor ? orig_GetWeaponKillEffectLevelDecor(decorations) : 0;
+}
+
+// ── SPKillIcon lookup ─────────────────────────────────────────────────────
+// weapon/OBB item ID → SPKillIconItemConfConfig ID (mythic/highest tier wins).
+// Built from SPKillIconItemConfConfig instances hooked via my_SPKillIconCtor.
+static std::unordered_map<int, int> killIconByWeapon;
+static bool loadKillIcons = false;
+
+void LoadKillIcons() {
+    if (loadKillIcons) return;
+
+    std::vector<void*> killIcons;
+    {
+        std::lock_guard<std::mutex> lock(g_dataMutex);
+        killIcons = killIconConfigInstance;
+    }
+
+    if (killIcons.empty()) return;
+
+    // Absolute config offsets per dump (SPKillIconItemConfConfig, dump 819794):
+    // ColorID 0x18, ID 0x2C, ThirdTab 0x3C, WeaponCanEquip 0x70.
+    for (void *icon : killIcons) {
+        if (!icon || !Tools::IsPtrValid(icon)) continue;
+        int id = *(int *)((uintptr_t)icon + 0x2C);
+        if (id <= 0) continue;
+        auto *equipArray = *(Array<int> **)((uintptr_t)icon + 0x70);
+        if (!equipArray || !Tools::IsPtrValid(equipArray)) continue;
+        int len = equipArray->getLength();
+        for (int i = 0; i < len; i++) {
+            int weaponID = equipArray->m_Items[i];
+            if (weaponID <= 0) continue;
+            auto it = killIconByWeapon.find(weaponID);
+            if (it != killIconByWeapon.end()) {
+                void *old = nullptr;
+                for (void *c : killIcons) {
+                    if (*(int *)((uintptr_t)c + 0x2C) == it->second) { old = c; break; }
+                }
+                if (old) {
+                    int rankOld = *(int *)((uintptr_t)old + 0x18) * 100 + *(int *)((uintptr_t)old + 0x3C);
+                    int rankNew = *(int *)((uintptr_t)icon + 0x18) * 100 + *(int *)((uintptr_t)icon + 0x3C);
+                    if (rankNew > rankOld)
+                        it->second = id;
+                } else {
+                    it->second = id;
+                }
+            } else {
+                killIconByWeapon[weaponID] = id;
+            }
+        }
+    }
+
+    loadKillIcons = true;
 }
 
 #define ReadInt(base, offset) (*(int *)((uintptr_t)(base) + (offset)))
@@ -1363,6 +1552,7 @@ void Skins_Thread()
     DobbyHook((void*)getRealOffset(WeaponSkinAddress), (void*)my_WeaponSkinCtor, (void**)&orig_WeaponSkinCtor);
     DobbyHook((void*)getRealOffset(WeaponCamosAddress), (void*)my_WeaponCamosCtor, (void**)&orig_WeaponCamosCtor);
     DobbyHook((void*)getRealOffset(KillEffectItemConfConfigAddress), (void*)my_KillEffectItemCtor, (void**)&orig_KillEffectItemCtor);
+    DobbyHook((void*)getRealOffset(SPKillIconItemConfConfigAddress), (void*)my_SPKillIconCtor, (void**)&orig_SPKillIconCtor);
     DobbyHook((void*)getRealOffset(ItemResourceAddress), (void*)my_ItemResourceCtor, (void**)&orig_ItemResourceCtor);
     DobbyHook((void*)getRealOffset(CharacterModelAddress), (void*)my_CharacterModelCtor, (void**)&orig_CharacterModelCtor);
     DobbyHook((void*)getRealOffset(RoleConfAddress), (void*)my_RoleConfCtor, (void**)&orig_RoleConfCtor);
@@ -1384,6 +1574,17 @@ void Skins_Thread()
     Tools::Hook((void*)(m_unity + 0xA61AAA8), (void*)_GetCurrentWeaponFireEffect, (void**)&orig_GetCurrentWeaponFireEffect);
     Tools::Hook((void*)(m_unity + 0xA61AB8C), (void*)_GetCurrentBulletTrackEffect, (void**)&orig_GetCurrentBulletTrackEffect);
     Tools::Hook((void*)(m_unity + 0xA61ADFC), (void*)_GetCurrentWeaponBrocast, (void**)&orig_GetCurrentWeaponBrocast);
+
+    // InventoryUtil (GameEngine) statics — the in-match kill decorations.
+    // dump 1089418-1089460: GetWeaponKillEffectGroup 0xC3661B0/0xC37F1D0,
+    // GetWeaponKillIcon 0xC366318/0xC37F220, GetWeaponKillEffectLevel
+    // 0xC3664F8/0xC37F25C.
+    Tools::Hook((void*)(m_unity + 0xC3661B0), (void*)my_GetWeaponKillEffectGroupExtra, (void**)&orig_GetWeaponKillEffectGroupExtra);
+    Tools::Hook((void*)(m_unity + 0xC37F1D0), (void*)my_GetWeaponKillEffectGroupDecor, (void**)&orig_GetWeaponKillEffectGroupDecor);
+    Tools::Hook((void*)(m_unity + 0xC366318), (void*)my_GetWeaponKillIconExtra, (void**)&orig_GetWeaponKillIconExtra);
+    Tools::Hook((void*)(m_unity + 0xC37F220), (void*)my_GetWeaponKillIconDecor, (void**)&orig_GetWeaponKillIconDecor);
+    Tools::Hook((void*)(m_unity + 0xC3664F8), (void*)my_GetWeaponKillEffectLevelExtra, (void**)&orig_GetWeaponKillEffectLevelExtra);
+    Tools::Hook((void*)(m_unity + 0xC37F25C), (void*)my_GetWeaponKillEffectLevelDecor, (void**)&orig_GetWeaponKillEffectLevelDecor);
 
     // VehicleSkis hooks
     auto hookVehicleRva = [&](uintptr_t rva, void* hook, void** orig) {
@@ -1415,6 +1616,7 @@ void Skins_Thread()
         LoadWeaponSkins();
         LoadPlaneSkins();
         LoadSnowboardSkins();
+        LoadKillIcons();
         std::this_thread::sleep_for(std::chrono::milliseconds(1500));
     }
 }

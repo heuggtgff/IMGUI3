@@ -768,6 +768,20 @@ case 3:
                     activeKillEffects[itemID] = getitem.WeaponExtra[4];
                     activeKillEffects[lootID] = getitem.WeaponExtra[4];
                 }
+                if (DetectSkinTier(getitem.itemName) == SkinTier::Mythic)
+                {
+                    // Mythic skin applied → behave like mythic level 5 and
+                    // surface the mythic kill icon through InventoryUtil.
+                    // The InventoryUtil hooks gate on val > 0, so weapons
+                    // without a matching SPKillIcon entry stay untouched.
+                    const int mythicKeys[5] = {baseID, extraID, skinID, itemID, lootID};
+                    for (int key : mythicKeys)
+                    {
+                        auto itIcon = killIconByWeapon.find(key);
+                        if (itIcon != killIconByWeapon.end() && itIcon->second > 0)
+                            activeKillIcons[key] = itIcon->second;
+                    }
+                }
                 for (auto extra : weaponExtraInstance)
                 {
                     if (!extra)
