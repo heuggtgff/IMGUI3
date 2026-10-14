@@ -16,41 +16,76 @@
 //               DECISION is this repo's own ShouldFire tree (below).
 //  ---------------------------------------------------------------------------
 //   THE DECISION (A_FireShouldFire -> A_FireScan): one named reason per scan,
-//   in this order, and NOT ONE of them fires on a guess:
+//   in this order, and NOT ONE of them fires on a guess.
+//
+//   HARD GATES (only these can refuse a shot):
 //     1  alive ............ Pawn::m_IsAlive @0x548, second chance
 //                           Pawn.get_IsAlive() 0x51B7C40 (Slot 49)
 //     2  in a match ....... GamePlay::get_MatchGame() 0x8569B10 +
 //                           BaseGame.get_IsPaused() 0x9CAFDC4
-//     3  weapon ........... Pawn.get_CurrentWeapon() 0x518BEA8,
-//                           Weapon.InSwitchWeaponState 0x512724C,
-//                           Weapon.HasSwitchingState 0x5124C70,
-//                           Weapon.AmmoCanFire 0x50EB73C,
-//                           Weapon.get_ClipAmmoCount 0x50EC614,
-//                           Weapon.CanFire() 0x5126CC4 (Slot 269, the game's
-//                             own readiness gate - toggle "Require Ready"),
-//                           Weapon.RealFireInterval 0x50EC250 (re-press pacing)
+//     3  weapon present ... Pawn.get_CurrentWeapon() 0x518BEA8
 //     4  trigger mode ..... Pawn.IsAiming 0x519BB10 (ADS only),
 //                           Pawn.get_IsFiring 0x51A8A38 (Firing only)
-//     5  target ........... BaseGame::EnemyPawns @0x178, team id
-//                           (Pawn.get_TeamId 0x51B89CC), alive, NOT self,
-//                           then the hitbox walk: head bone 0x308 / torso
-//                           midpoint / mesh root 0x628 must project inside the
-//                           crosshair zone (Camera.WorldToScreenPoint 0x5023B54)
-//     6  line of sight .... Physics.Raycast(origin, dir, out hit) 0x506C1E4
-//                           from the camera to the aim point INSIDE the target
-//     7  rangeless + lead . Weapon.get_CurrentFireComponent 0x50EB1E4 ->
-//                           WeaponFireComponent.get_BulletInitSpeed 0xC14A158,
-//                           Pawn.get_Velocity 0x51B38CC, then the PREDICTED
-//                           point must have its own clear ray and must stay
-//                           inside kMaxTravelTime (1.2 s)
-//     8  spread / recoil .. Weapon.get_ShotSpreadSize 0x5109B68 with the camera
-//                           focal length from Camera.get_fieldOfView 0x5021F7C:
-//                           the cone + hitbox must still cover the predicted
-//                           point (camera punch is already inside the screen
-//                           projection, so recoil needs no extra term)
-//     9  friendlies ....... BaseGame.GetTeamPawns() 0x9CAFEB4 - a living
-//                           teammate within 0.45 m of the bullet line and
-//                           closer than the target blocks the shot
+//     5  target visible ... the two paths below
+//     6  friendlies ....... BaseGame.GetTeamPawns() 0x9CAFEB4 - a living
+//                           teammate within 0.35 m of the bullet line and closer
+//                           than the target blocks the shot
+//
+//   PATH A - "enemy exactly in the centre of the screen":
+//     ONE ray from the camera along the camera's own forward
+//     (Transform.get_forward 0x509C650), bounded by Physics.Raycast
+//     (origin, direction, out RaycastHit, maxDistance) 0x506C188. Whichever pawn
+//     the first hit belongs to (Transform.get_parent 0x507BDEC walks the hit's
+//     parent chain against every candidate's transform) is the enemy under the
+//     crosshair - centred AND unobstructed by construction, because a wall in
+//     front of him would have been the first hit. This path needs no bones and
+//     no projection, so it keeps working even if the Pawn bone offsets drift
+//     between game builds.
+//
+//   PATH B - the crosshair zone, for a crosshair that is near but not exactly on
+//     the enemy: BaseGame::EnemyPawns @0x178 -> team id (Pawn.get_TeamId
+//     0x51B89CC) -> alive -> NOT self -> the hitbox walk (head bone 0x308, chest
+//     at 0.72 of the feet->head axis, waist at 0.45, mesh root 0x628) must
+//     project inside the px zone (Camera.WorldToScreenPoint 0x5023B54), then the
+//     visibility ray below.
+//
+//   VISIBILITY (both paths): the nearest thing on the shot line must BE the
+//     pawn. Physics.Raycast(origin, dir, out hit, maxDistance) 0x506C188 gives
+//     the nearest hit inside the segment; the hit's Collider -> Transform
+//     (Component.get_transform, the call DrawESP has used in game for ages) ->
+//     parent chain is compared against the target's own transform and bones.
+//       hit IS the target        -> clear (his body, his gear, even an arm
+//                                   reaching toward the muzzle - the bullet
+//                                   reaches HIM either way)
+//       hit is anything else     -> blocked. A wall blocks however THIN it is,
+//                                   because the test never guesses from a
+//                                   distance. (The old kRaySlack = 0.40 rule
+//                                   accepted any hit within 40 cm of the aim
+//                                   point, which is exactly how a thin panel in
+//                                   front of the target got shot through.)
+//       nothing hit              -> clear
+//       hit cannot be named      -> conservative stem test: a bounded ray that
+//                                   STOPS SHORT of the target's own collider
+//                                   surface (0.80 of the hitbox radius), so any
+//                                   hit at all is geometry in front of him
+//       no ray symbol            -> blocked (fail closed, never shoots walls)
+//     RecentlyRendered / LastOccVisible are no longer consulted for the verdict:
+//     they answer "was this pawn drawn anywhere on screen", which stays true for
+//     a pawn behind a low wall.
+//
+//   ADVISORY ONLY - measured every scan, shown in the menu, never refuses:
+//     Weapon.InSwitchWeaponState 0x512724C / HasSwitchingState 0x5124C70,
+//     Weapon.AmmoCanFire 0x50EB73C, Weapon.get_ClipAmmoCount 0x50EC614,
+//     Weapon.CanFire() 0x5126CC4 (Slot 269 - only a gate while "Require Ready"
+//       is on, which is OFF by default),
+//     Weapon.RealFireInterval 0x50EC250 (the weapon's own rate, NOT enforced:
+//       there is no artificial re-press delay any more),
+//     lead (Weapon.get_CurrentFireComponent 0x50EB1E4 ->
+//       WeaponFireComponent.get_BulletInitSpeed 0xC14A158, Pawn.get_Velocity
+//       0x51B38CC): the aim point moves ahead of a moving target and a covered
+//       lead point falls back to the aim point instead of refusing the shot,
+//     spread (Weapon.get_ShotSpreadSize 0x5109B68 with the camera focal length
+//       from Camera.get_fieldOfView 0x5021F7C) and bullet travel time.
 //   Diagnostics: Weapon.get_AimingTarget 0x510EAAC /
 //                Weapon.get_CurrentAimingTargetDis 0x510EABC (the game's own
 //                aim answer, shown in the menu and used as a tie-break)
@@ -77,13 +112,15 @@
 //                                 build did)
 //     Pawn::get_IsFiring()        RVA 0x51A8A38   ("Firing only" mode)
 //
-//   Line of sight is NOT the game's render cache: RecentlyRendered /
-//   LastOccVisible answer "was this pawn drawn anywhere on screen", which stays
-//   TRUE for a pawn behind a low wall. They are resolved and kept only as the
-//   fallback for a build where the Raycast symbol does not resolve - the gate
-//   itself is the 0x506C1E4 ray, and its result is read the only way that
-//   call can be read (no maxDistance -> first hit at/after the aim point = the
-//   path is clear, first hit before it = cover).
+//   The LOS rays used by the tree (dump.cs line -> RVA):
+//     Physics.Raycast(origin, dir, out RaycastHit hit, float maxDistance)
+//       0x506C188 (dump.cs 173930)  <- nearest hit + an explicit limit
+//     Physics.Raycast(origin, dir, float maxDistance)
+//       0x506BF60 (dump.cs 173912)  <- the same limit, no out struct
+//     0x506C1E4 (dump.cs 173933) is the 3-parameter overload with NO maxDistance
+//     and is no longer used for the verdict.
+//   RaycastHit (dump.cs 175618): m_FaceID @0x18, m_Distance @0x1C, m_UV @0x20,
+//     m_Collider @0x28 (the field right after m_UV).
 //
 //   The old CheckTarget @0xC9C1B50 / HasEnemyInPort @0xC9C13F8 /
 //   WeaponFireComponent::StartFire @0xC14C29C hooks are gone: they only run on
@@ -233,7 +270,21 @@ namespace NewFeatures
         constexpr uintptr_t Pawn_get_LastPawnPos            = 0x51B8D30; // ref object() - Pawn.get_LastPawnPos
         constexpr uintptr_t Camera_get_main                 = 0x5024010; // Camera*() - Camera.get_main
         constexpr uintptr_t Camera_WorldToScreenPoint       = 0x5023B54; // Vector3 Camera.WorldToScreenPoint(Vector3)  <- 1-arg overload (0x5023AB8 is the 2-arg one)
-        constexpr uintptr_t Physics_RaycastLOS              = 0x506C1E4; // bool(Vector3, Vector3, out RaycastHit) - 2-arg overload (dump.cs 267239)
+        constexpr uintptr_t Physics_RaycastLOS              = 0x506C1E4; // bool(Vector3, Vector3, out RaycastHit) - 3-param overload (dump.cs 173933), NO maxDistance
+        // ---- Visibility rays that can NAME what they hit (dump.cs 173927-173945)
+        //   0x506C188  bool Raycast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance)   <- nearest hit + limit
+        //   0x506BF60  bool Raycast(Vector3 origin, Vector3 direction, float maxDistance)                      <- limit only, no out struct
+        // Both take an explicit maxDistance, so the first hit is the nearest thing
+        // on the segment instead of "whatever is behind the enemy".
+        constexpr uintptr_t Physics_RaycastHitOut            = 0x506C188; // dump.cs 173930
+        constexpr uintptr_t Physics_RaycastSegment           = 0x506BF60; // dump.cs 173912
+        // Unity scene-graph accessors, used to turn "what the ray hit" into "whose
+        // collider is this". Both sit in the same 0x50xxxxx block as the already
+        // proven Transform.get_position (0x507C19C == api10 in Defines.h):
+        //   Transform.get_forward 0x509C650 (dump.cs 172057)
+        //   Transform.get_parent  0x507BDEC (dump.cs 172105)
+        constexpr uintptr_t Transform_get_forward            = 0x509C650;
+        constexpr uintptr_t Transform_get_parent             = 0x507BDEC;
         // The game's OWN visibility answers - no raycast needed:
         //   RecentlyRendered: was this pawn actually rendered on screen recently
         //     (frustum + occlusion culling + render distance) - Slot 234
@@ -411,6 +462,20 @@ namespace NewFeatures
     inline void (*fn_Weapon_StopFire)(void *, bool) = nullptr;
     inline Vector3 (*fn_WorldToScreen)(void *, Vector3) = nullptr;  // 1-arg overload
     inline bool (*fn_PhysicsRaycastLOS)(Vector3, Vector3, float, void *) = nullptr;
+    // Nearest-hit ray with an out RaycastHit and an explicit maxDistance
+    // (0x506C188). Nothing in the tree can tell a wall from an enemy without
+    // this: the old 3-param call always ran to infinity and was read by
+    // distance, so anything within kRaySlack of the aim point counted as "the
+    // enemy" - which is exactly how a thin panel in front of the target got
+    // shot through.
+    inline bool (*fn_PhysicsRaycastHitOut)(Vector3, Vector3, void *, float) = nullptr;
+    // The same ray with no out struct (0x506BF60): the conservative fallback for
+    // a build where the hit object cannot be named.
+    inline bool (*fn_PhysicsRaycastSegment)(Vector3, Vector3, float) = nullptr;
+    // Scene-graph accessors used to name a hit: Transform.get_forward /
+    // Transform.get_parent (see the RVA block).
+    inline Vector3 (*fn_TransformGetForward)(void *) = nullptr;
+    inline void   *(*fn_TransformGetParent)(void *) = nullptr;
     inline void *(*fn_CameraGetMain)() = nullptr;
     inline void *(*fn_GameGetMatchGame)() = nullptr;
     inline bool (*fn_PawnRecentlyRendered)(void *) = nullptr;
@@ -540,11 +605,18 @@ namespace NewFeatures
     // resolution or aspect ratio.
     struct A_FireTune
     {
-        static constexpr float kRaySlack        = 0.40f;   // m   - ray must reach the aim point within this slack
-        static constexpr float kHeadRadius      = 0.14f;   // m   - head hitbox half width
-        static constexpr float kBodyRadius      = 0.30f;   // m   - torso/limb hitbox half width
-        static constexpr float kFriendlyRadius  = 0.45f;   // m   - teammate capsule half width
-        static constexpr float kMaxTravelTime   = 1.20f;   // s   - beyond this the lead is a guess
+        // NOTE: the old kRaySlack = 0.40 is deliberately GONE. "The first hit is
+        // within 40 cm of the aim point, so it must be the enemy" is precisely
+        // the rule that shot through thin walls. A ray is now only clear when
+        // the object it hit IS the target (A_FireRayToTarget).
+        static constexpr float kRayReach        = 1.00f;   // m - how far past the aim point the nearest-hit ray may look
+        static constexpr float kSurfaceFrac     = 0.80f;   // - fallback stem stops this far inside the hitbox radius
+        static constexpr float kMinStemGap      = 0.05f;   // m - floor for that stem (never fires a 0-length ray)
+        static constexpr float kHeadRadius      = 0.14f;   // m - head hitbox half width
+        static constexpr float kBodyRadius      = 0.30f;   // m - torso/limb hitbox half width
+        static constexpr float kFriendlyRadius  = 0.35f;   // m - teammate capsule half width
+        static constexpr float kCrosshairRayMax = 400.0f;  // m - the centre ray is rangeless in practice
+        static constexpr float kMaxTravelTime   = 1.20f;   // s - beyond this the lead is a guess (ADVISORY only)
         static constexpr float kAssumedSpeed    = 800.0f;  // m/s - only when no fire component answers
         static constexpr float kMinFireInterval = 0.030f;  // s   - pacing floor
         static constexpr float kFallbackFov     = 60.0f;   // deg - only if Camera.get_fieldOfView fails
@@ -649,14 +721,30 @@ namespace NewFeatures
         return ((float)get_height() * 0.5f) / tanHalf;
     }
 
+    // Point at `t` of the way from the feet up to the head (0 = feet mesh root,
+    // 1 = head bone). Used to probe a body height without a spine bone: this dump
+    // exposes no instance spine/chest bone that works on every pawn subclass
+    // (PlayerPawn.m_SpineBone @0x1D68 is a STATIC field, and
+    // PlayerPawn.get_SpineBone() 0x5477EA8 only exists on PlayerPawn - not on the
+    // BR / MP / PVE pawns), so the torso height stays an axis fraction.
+    inline Vector3 A_FireAlongBody(const Vector3 &head, const Vector3 &feet, float t)
+    {
+        return Vector3(feet.x + (head.x - feet.x) * t,
+                       feet.y + (head.y - feet.y) * t,
+                       feet.z + (head.z - feet.z) * t);
+    }
+
     // Where to aim on this pawn for ONE hitbox (no fallback here - the scan walks
     // the hitboxes in the user's priority order and stops at the first one that is
     // actually under the crosshair, which is the "which hitbox is under the
     // crosshair" question the shot has to answer).
     // Head bone (Pawn.m_HeadBone 0x308) and mesh root (Pawn.m_Mesh 0x628) are the
     // two the rest of this project already reads in game every frame (DrawESP).
-    // This build proves no chest bone, so the torso point is their midpoint -
-    // a documented approximation, not a dump symbol.
+    //
+    // The torso is probed at 0.72 of the feet->head axis (chest height), not at
+    // the plain midpoint: the midpoint is the HIPS, so aiming centre-mass used to
+    // be validated against a point below the chest - one of the "sometimes it
+    // does not shoot" reports. Limbs use 0.45 (thigh/waist height).
     inline A_FireAimPoint A_FireAimPointFor(Pawn *pawn, HitboxPriority which)
     {
         A_FireAimPoint ap{};
@@ -682,13 +770,12 @@ namespace NewFeatures
             if (which == HitboxPriority::Head) return ap;       // asked for head, no head bone
         }
 
+        const Vector3 head = hasHead ? headBone->get_position() : Vector3::zero();
+        const Vector3 root = hasMesh ? mesh->get_position()     : Vector3::zero();
+
         if (which == HitboxPriority::Chest || which == HitboxPriority::Any) {
             if (hasHead && hasMesh) {
-                const Vector3 head = headBone->get_position();
-                const Vector3 root = mesh->get_position();
-                ap.pos = Vector3((head.x + root.x) * 0.5f,
-                                 (head.y + root.y) * 0.5f,
-                                 (head.z + root.z) * 0.5f);
+                ap.pos = A_FireAlongBody(head, root, 0.72f);    // chest
                 ap.radius = A_FireTune::kBodyRadius;
                 ap.hitbox = HitboxPriority::Chest;
                 ap.valid = true;
@@ -698,8 +785,11 @@ namespace NewFeatures
         }
 
         if (hasMesh) {                                          // Limbs and the last Any fallback
-            const Vector3 root = mesh->get_position();
-            ap.pos = Vector3(root.x, root.y + 0.55f, root.z);   // legs: just above the mesh root
+            if (hasHead) {
+                ap.pos = A_FireAlongBody(head, root, 0.45f);     // waist / thighs
+            } else {
+                ap.pos = Vector3(root.x, root.y + 0.55f, root.z);
+            }
             ap.radius = A_FireTune::kBodyRadius;
             ap.hitbox = HitboxPriority::Limbs;
             ap.valid = true;
@@ -996,6 +1086,18 @@ namespace NewFeatures
         float  lastTravel;      // bullet travel time (s)
         float  lastWorldDist;   // camera -> aim point (m)
         float  lastBulletSpeed; // m/s (assumed speed if speedKnown is false)
+        // ---- visibility ray bookkeeping (the anti-wall gate) --------------
+        int    aimPath;         // 0 = centre-of-screen ray accepted, 1 = zone scan
+        unsigned crosshairPawn; // pawn the centre ray landed on (0 = nothing named)
+        float  crosshairHitDist;// m, centre ray first-hit distance (-1 = no hit)
+        int    raysIdentified;  // last scan: rays whose nearest hit WAS the target
+        int    raysBlocked;     // last scan: rays stopped by something else
+        bool   rayUnknown;      // last scan: a ray symbol did not resolve (fail closed)
+        float  lastLosHitDist;  // m, nearest hit on the camera->aim-point line
+        bool   switching;       // Weapon.InSwitchWeaponState / HasSwitchingState (advisory)
+        bool   leadPathBlocked; // lead point was covered - the shot fell back to the aim point
+        bool   spreadWarn;      // spread/lead containment said "would miss" (advisory)
+        float  lastFireInterval;// s, the weapon's own interval (measured, NOT enforced)
         unsigned aimingTarget;  // Weapon.get_AimingTarget() - the game's own answer
         float  aimingTargetDis; // Weapon.get_CurrentAimingTargetDis()
 
@@ -1076,72 +1178,249 @@ namespace NewFeatures
         bool           speedKnown = false;   // the game answered the bullet speed
         bool           leadUsed = false;     // the predicted point was used
         HitboxPriority hitbox = HitboxPriority::Any;
+        int            path = 1;             // 0 = centre-of-screen ray (path A), 1 = crosshair zone (path B)
+        bool           visible = false;      // the shot line to the aim point was proven clear
+        bool           visibilityIdentified = false; // ... and the thing ON that line was this very pawn
     };
 
-    // ---- Line of sight ---------------------------------------------------
-    // Physics.Raycast(Vector3 origin, Vector3 direction, out RaycastHit) at
-    // 0x506C1E4 - dump.cs 173932, the THREE-argument overload on the Physics
-    // class (0x506BEA8 and 0x506C188 are the maxDistance/layerMask variants).
+    // ---- Line of sight: the ray has to NAME what it hit ----------------
     //
-    // It takes NO maxDistance, so the ray always runs to infinity and the first
-    // hit can legitimately be a wall far BEHIND the target. That is why the old
-    // "-2 = malformed" rule was wrong: it turned every "wall behind the enemy"
-    // into "no line of sight" and the trigger refused perfectly good shots.
-    // The only correct reading of this call is:
-    //     no hit            -> the ray hit nothing at all            -> clear
-    //     hit >= dist-slack -> the first thing on the path is the target
-    //                          itself (or something past it)        -> clear
-    //     hit <  dist-slack -> geometry before the aim point         -> blocked
-    //     unreadable struct -> unknown                               -> blocked
+    // The old gate read ONE number - the first hit distance - and called the
+    // line clear when that hit was within 0.40 m of the aim point. For an enemy
+    // standing behind a thin panel whose front face is 30 cm in front of his
+    // head bone, the first hit IS the panel, 30 cm short of the aim point, and
+    // the shot went through the wall. It also produced the mirror-image failure:
+    // the no-maxDistance overload ran the ray past the target, so scenery BEHIND
+    // the enemy came back as the first hit and "no line of sight" was reported
+    // on a clean shot.
     //
-    // RaycastHit layout, dump.cs 175618 (TypeDefIndex 1838):
-    //   m_Point Vector3 @0x00, m_Normal @0x0C, m_FaceID int @0x18,
-    //   m_Distance float @0x1C, m_UV @0x20, m_Collider @0x28
-    // V3 read the distance at +0x20; THIS build has it at 0x1C.
-    constexpr size_t AF_RAYHIT_SIZE    = 0x30;   // up to m_Collider @0x28 + pad
-    constexpr size_t AF_RAYHIT_DISTOFF = 0x1C;   // m_Distance for THIS build
+    // The gate below cannot make either mistake, because it does not guess from a
+    // distance at all: it asks the physics world for the NEAREST hit within a
+    // bounded segment, then walks that hit's Transform up its parent chain and
+    // asks "is this the pawn I am about to shoot?".
+    //
+    //   nearest hit IS in the target's hierarchy  -> clear  (the enemy's own
+    //       body / limbs / gear, at any distance, including an arm reaching
+    //       toward the muzzle - the shot hits him either way)
+    //   nearest hit is anything else               -> blocked (a wall however
+    //       thin, a door, a vehicle, another pawn)
+    //   nothing hit inside the segment             -> clear
+    //   hit object cannot be named                 -> the conservative stem test
+    //       below (stop short of the target's own collider surface)
+    //   no ray symbol at all                       -> Unknown, and the caller
+    //       treats Unknown as blocked so a missing symbol can never shoot walls
+    //
+    // RaycastHit layout, dump.cs 175618 (TypeDefIndex 1838). The dump annotates
+    // m_FaceID @0x18, m_Distance @0x1C, m_UV @0x20, and m_Collider is the next
+    // field after m_UV (Vector2, 8 bytes) -> 0x28:
+    //   m_Point Vector3 @0x00, m_Normal Vector3 @0x0C, m_FaceID int @0x18,
+    //   m_Distance float @0x1C, m_UV Vector2 @0x20, m_Collider object* @0x28
+    // (V3 read the distance at +0x20; THIS build has it at 0x1C.)
+    constexpr size_t AF_RAYHIT_SIZE      = 0x30;  // through m_Collider @0x28 + pad
+    constexpr size_t AF_RAYHIT_DISTOFF   = 0x1C;  // m_Distance for THIS build
+    constexpr size_t AF_RAYHIT_COLLOFF   = 0x28;  // m_Collider for THIS build
 
-    // First-hit distance along origin->dir; -1 when the ray hit nothing at all,
-    // -2 when the query could not answer (no symbol / unrecognisable struct).
-    inline float A_FireRaycastDistance(const Vector3 &origin, const Vector3 &dir)
+    // What a trace along the shot line found.
+    enum class AF_Ray : int
     {
-        unsigned char hitBuf[AF_RAYHIT_SIZE];
-        memset(hitBuf, 0, sizeof hitBuf);
-        if (fn_PhysicsRaycastLOS == nullptr) return -2.0f;   // no ray -> fail closed
+        Clear   = 0,   // nothing, or the target itself
+        Blocked = 1,   // something that is not the target is in the way
+        Unknown = 2    // no ray symbol resolved - caller must fail closed
+    };
 
-        // The 3rd argument (a float in an FP register) is never read by the
-        // callee; the out-struct pointer still lands in x0 because both Vector3
-        // arguments are HFAs and travel in the FP registers. Call shape is
-        // unchanged from the build that already casts successfully in game.
-        const bool hit = fn_PhysicsRaycastLOS(origin, dir, 0.0f, hitBuf);
-        if (!hit) return -1.0f;
-        const float dd = *(const float *)(hitBuf + AF_RAYHIT_DISTOFF);
-        if (!(dd >= 0.0f) || !(dd <= 100000.0f)) return -2.0f;
-        return dd;
+    // The collider the ray stopped on (null when the struct is unusable).
+    inline void *A_FireHitCollider(const unsigned char *hitBuf)
+    {
+        if (hitBuf == nullptr) return nullptr;
+        void *collider = *(void *const *)(hitBuf + AF_RAYHIT_COLLOFF);
+        return Tools::IsPtrValid(collider) ? collider : nullptr;
     }
 
-    // Is the straight line from `from` to `to` free of geometry? `to` is an aim
-    // point INSIDE the target, so a first hit within kRaySlack of that distance
-    // means the bullet reaches it (the ray enters the collider it was aimed at
-    // slightly BEFORE the bone it is aimed at).
-    inline bool A_FireLineClear(const Vector3 &from, const Vector3 &to)
+    // Collider -> Transform through the repo's own Component::get_transform
+    // (Class_Component_get_transform, the same call DrawESP has used in game for
+    // ages), so naming a hit needs no new il2cpp method lookup.
+    inline void *A_FireColliderTransform(void *collider)
+    {
+        if (!Tools::IsPtrValid(collider)) return nullptr;
+        return (void *)((Component *)collider)->get_transform();
+    }
+
+    // Does `hitTransform` belong to `pawn`? Walks up the parent chain (bounded),
+    // accepting the pawn's own transform and its two known bones. A bone hit and a
+    // body-mesh hit both reach the pawn's root transform, so the walk is what
+    // makes this work for any collider layout without a hitbox enumeration API.
+    inline bool A_FireHitIsTarget(void *hitTransform, Pawn *pawn, int *depthOut = nullptr)
+    {
+        if (depthOut != nullptr) *depthOut = -1;
+        if (!Tools::IsPtrValid(hitTransform) || !Tools::IsPtrValid((void *)pawn)) return false;
+
+        Transform *root = pawn->get_transform();
+        Transform *head = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
+        Transform *mesh = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
+
+        void *t = hitTransform;
+        for (int depth = 0; depth < 12 && Tools::IsPtrValid(t); depth++) {
+            if (t == (void *)root || t == (void *)head || t == (void *)mesh) {
+                if (depthOut != nullptr) *depthOut = depth;
+                return true;
+            }
+            if (fn_TransformGetParent == nullptr) break;     // cannot walk -> stop
+            void *parent = fn_TransformGetParent(t);
+            if (!Tools::IsPtrValid(parent) || parent == t) break;
+            t = parent;
+        }
+        return false;
+    }
+
+    // Is the shot line from `from` to `to` (an aim point INSIDE the target)
+    // actually clear to `target`?
+    //
+    //   probeRadius - the hitbox half width at `to`; the fallback stem test stops
+    //                 this far inside it, so the enemy's OWN collider surface is
+    //                 never mistaken for cover.
+    //   *identified - set when the nearest hit was proven to be the target (i.e.
+    //                 the enemy is not merely "on screen", he is the first thing
+    //                 the bullet would reach).
+    //   *hitDistance - first hit distance, for the diagnostics panel.
+    inline AF_Ray A_FireRayToTarget(const Vector3 &from, const Vector3 &to, Pawn *target,
+                                    float probeRadius, bool *identified = nullptr,
+                                    float *hitDistance = nullptr)
+    {
+        if (identified != nullptr) *identified = false;
+        if (hitDistance != nullptr) *hitDistance = -1.0f;
+
+        Vector3 d(to.x - from.x, to.y - from.y, to.z - from.z);
+        const float dist = Vector3::Magnitude(d);
+        if (!(dist >= 0.01f)) return AF_Ray::Clear;          // same spot
+        const Vector3 dir(d.x / dist, d.y / dist, d.z / dist);
+
+        // ---- 1. nearest hit, named. This is the real gate. ----------------
+        if (fn_PhysicsRaycastHitOut != nullptr) {
+            unsigned char hitBuf[AF_RAYHIT_SIZE];
+            memset(hitBuf, 0, sizeof hitBuf);
+            const bool got = fn_PhysicsRaycastHitOut(from, dir, hitBuf, dist + A_FireTune::kRayReach);
+            if (!got) return AF_Ray::Clear;                  // nothing at all on the line
+
+            const float hd = *(const float *)(hitBuf + AF_RAYHIT_DISTOFF);
+            if (hitDistance != nullptr && hd >= 0.0f && hd <= 100000.0f) *hitDistance = hd;
+
+            void *hitTransform = A_FireColliderTransform(A_FireHitCollider(hitBuf));
+            if (Tools::IsPtrValid(hitTransform)) {
+                if (A_FireHitIsTarget(hitTransform, target)) {
+                    if (identified != nullptr) *identified = true;
+                    return AF_Ray::Clear;                    // the enemy himself
+                }
+                return AF_Ray::Blocked;                      // somebody/something else
+            }
+            // Hit object could not be named - fall through to the stem test.
+        }
+
+        // ---- 2. Conservative stem test ------------------------------------
+        // Cast a bounded segment that STOPS SHORT of the target's own collider
+        // surface (inside the hitbox radius), so a hit can only be geometry in
+        // front of him. Any hit, however thin the object, blocks the shot.
+        if (fn_PhysicsRaycastSegment != nullptr) {
+            float stem = probeRadius * A_FireTune::kSurfaceFrac;
+            if (stem < A_FireTune::kMinStemGap) stem = A_FireTune::kMinStemGap;
+            const float stop = dist - stem;
+            if (!(stop > 0.01f)) return AF_Ray::Clear;       // point blank: nothing fits between
+            return fn_PhysicsRaycastSegment(from, dir, stop) ? AF_Ray::Blocked : AF_Ray::Clear;
+        }
+
+        return AF_Ray::Unknown;
+    }
+
+    // A straight segment (any two world points) free of geometry? Used by the
+    // centre-of-screen path, where the target is not known until the hit is
+    // named - so there is nothing to compare against and Blocked is the honest
+    // answer for any hit at all.
+    inline AF_Ray A_FireRaySegmentClear(const Vector3 &from, const Vector3 &to)
     {
         Vector3 d(to.x - from.x, to.y - from.y, to.z - from.z);
         const float dist = Vector3::Magnitude(d);
-        if (!(dist >= 0.01f)) return true;                   // same spot
+        if (!(dist >= 0.01f)) return AF_Ray::Clear;
         const Vector3 dir(d.x / dist, d.y / dist, d.z / dist);
-        const float hitDist = A_FireRaycastDistance(from, dir);
-        if (hitDist < -1.5f) return false;                   // unknown -> blocked
-        if (hitDist <  0.0f) return true;                    // ray hit nothing -> clear
-        return hitDist >= dist - A_FireTune::kRaySlack;       // reached / passed the aim point
+        if (fn_PhysicsRaycastSegment != nullptr)
+            return fn_PhysicsRaycastSegment(from, dir, dist) ? AF_Ray::Blocked : AF_Ray::Clear;
+        return AF_Ray::Unknown;
+    }
+
+    // Which pawn owns this hit? Walks the hit's parent chain (bounded) and
+    // compares every level against every pawn's transform, so ONE ray answers both
+    // "what did I hit" and "whose is it". Cheap: <=12 * enemyCount getter calls,
+    // and it only ever runs for the centre ray.
+    inline Pawn *A_FirePawnFromHitTransform(void *hitTransform, Pawn **items, int count,
+                                            int *depthOut = nullptr)
+    {
+        if (depthOut != nullptr) *depthOut = -1;
+        if (!Tools::IsPtrValid(hitTransform) || !Tools::IsPtrValid((void *)items)) return nullptr;
+
+        void *t = hitTransform;
+        for (int depth = 0; depth < 12 && Tools::IsPtrValid(t); depth++) {
+            for (int i = 0; i < count; i++) {
+                Pawn *p = items[i];
+                if (!Tools::IsPtrValid((void *)p)) continue;
+                if ((void *)p->get_transform() == t) {
+                    if (depthOut != nullptr) *depthOut = depth;
+                    return p;
+                }
+            }
+            if (fn_TransformGetParent == nullptr) break;
+            void *parent = fn_TransformGetParent(t);
+            if (!Tools::IsPtrValid(parent) || parent == t) break;
+            t = parent;
+        }
+        return nullptr;
+    }
+
+    // ---- PATH A: the enemy under the exact centre of the screen -----------
+    // One ray from the camera along the camera's own forward
+    // (Transform.get_forward 0x509C650). Whatever it hits first is what the
+    // crosshair is really on, so:
+    //   - the hit names an enemy pawn -> that pawn is centred AND unoccluded. A
+    //     wall in front of him would have been hit first, which is what makes
+    //     this path incapable of shooting through anything.
+    //   - anything else               -> nothing is centred.
+    // It needs no bones and no projection math, so it keeps working even if the
+    // Pawn bone offsets drift between game builds - the failure mode that turns
+    // path B into "sometimes it does not shoot" with no visible reason.
+    inline Pawn *A_FireCrosshairRayPawn(const Vector3 &camPos, const Vector3 &camForward,
+                                        Pawn **items, int count, float *hitDistOut,
+                                        bool *symbolMissing)
+    {
+        if (hitDistOut != nullptr) *hitDistOut = -1.0f;
+        if (symbolMissing != nullptr) *symbolMissing = false;
+        if (fn_PhysicsRaycastHitOut == nullptr) {
+            if (symbolMissing != nullptr) *symbolMissing = true;
+            return nullptr;
+        }
+        const float len = Vector3::Magnitude(camForward);
+        if (!(len > 0.0001f)) return nullptr;
+        const Vector3 dir(camForward.x / len, camForward.y / len, camForward.z / len);
+
+        unsigned char hitBuf[AF_RAYHIT_SIZE];
+        memset(hitBuf, 0, sizeof hitBuf);
+        if (!fn_PhysicsRaycastHitOut(camPos, dir, hitBuf, A_FireTune::kCrosshairRayMax))
+            return nullptr;                                  // the crosshair is on the sky
+
+        const float hd = *(const float *)(hitBuf + AF_RAYHIT_DISTOFF);
+        if (hitDistOut != nullptr && hd >= 0.0f) *hitDistOut = hd;
+        return A_FirePawnFromHitTransform(A_FireColliderTransform(A_FireHitCollider(hitBuf)),
+                                          items, count);
     }
 
     // =====================================================================
     //  THE SCAN (target acquisition + shot validation)
     //
-    //  Returns FireBlock::Fired with `out` filled, or the one reason the shot
-    //  was refused. Candidates are checked nearest-to-crosshair first, so the
-    //  pawn under the crosshair is the one that gets the ray budget.
+    //  Two paths, in this order:
+    //    A. the camera's own forward ray - "enemy exactly in the centre of the
+    //       screen". Bone-free, and unoccluded by construction.
+    //    B. the crosshair zone - any enemy whose hitbox projects inside the
+    //       configured px radius, with the nearest-hit ray naming the first thing
+    //       on the shot line.
+    //  Returns FireBlock::Fired with `out` filled, or the one reason the shot was
+    //  refused. Candidates are checked nearest-to-crosshair first, so the pawn
+    //  under the crosshair is the one that gets the ray budget.
     // =====================================================================
     inline FireBlock A_FireScan(Pawn *localPawn, Weapon *weapon, TriggerTarget &out)
     {
@@ -1203,6 +1482,59 @@ namespace NewFeatures
         const HitboxPriority want = (HitboxPriority)Config.NewFeaturesMenu.TriggerbotHitboxPriority;
         const float focalPx = A_FireFocalPx();
         d.focalPx = focalPx;
+
+        // ---- 0. PATH A - the enemy under the exact centre of the screen ----
+        // Tried before the zone scan because it answers the user's "shoots when the
+        // enemy is exactly in the middle" requirement directly, without relying on
+        // m_HeadBone/m_Mesh offsets or on a projection radius.
+        if (fn_TransformGetForward != nullptr) {
+            const Vector3 camForward = fn_TransformGetForward(camTransform);
+            bool symbolMissing = false;
+            float centreHitDist = -1.0f;
+            Pawn *centred = A_FireCrosshairRayPawn(camPos, camForward, items, count,
+                                                   &centreHitDist, &symbolMissing);
+            d.crosshairHitDist = centreHitDist;
+            d.crosshairPawn = (unsigned)(uintptr_t)centred;
+            if (symbolMissing && fn_PhysicsRaycastSegment == nullptr) {
+                d.rayUnknown = true;                        // no way at all to trace
+            } else if (centred != nullptr && centred != localPawn &&
+                       !IsSameTeamAcceptBots(localPawn, centred) && A_FirePawnAlive(centred)) {
+                // Best probe for the report: whichever of the three sits closest to
+                // the centre. The shot itself does not depend on it - the centre ray
+                // already proved visibility and ownership.
+                HitboxPriority order[3];
+                A_FireHitboxOrder(want, order);
+                A_FireAimPoint ap{};
+                float bestSq = -1.0f;
+                for (int k = 0; k < 3; k++) {
+                    const A_FireAimPoint cand = A_FireAimPointFor(centred, order[k]);
+                    if (!cand.valid) continue;
+                    const Vector3 sc = fn_WorldToScreen(cam, cand.pos);
+                    if (!(sc.z > 0.0f)) continue;
+                    const float dx = sc.x - cx;
+                    const float dy = sc.y - cy;
+                    const float d2 = dx * dx + dy * dy;
+                    if (bestSq < 0.0f || d2 < bestSq) { bestSq = d2; ap = cand; }
+                }
+                out.pawn      = centred;
+                out.aim       = ap;
+                out.aimPoint  = ap.valid ? ap.pos : camPos;
+                out.screenPos = ap.valid ? fn_WorldToScreen(cam, ap.pos) : Vector3::zero();
+                out.pxOffset  = bestSq >= 0.0f ? sqrtf(bestSq) : -1.0f;
+                out.worldDist = ap.valid ? Vector3::Distance(camPos, ap.pos) : centreHitDist;
+                out.hitbox    = ap.hitbox;
+                out.path      = 0;
+                out.visible   = true;
+                out.visibilityIdentified = true;            // the ray NAMED him
+                d.lastAimPx       = out.pxOffset;
+                d.lastWorldDist   = out.worldDist;
+                d.aimPath         = 0;
+                d.raysIdentified++;
+                g_afireLosOk      = true;
+                d.targets++;
+                return FireBlock::Fired;
+            }
+        }
 
         // ---- 1. every valid enemy whose hitbox projects into the zone ----
         constexpr int MAX_CANDIDATES = 12;
@@ -1276,15 +1608,28 @@ namespace NewFeatures
         const float spreadPx   = A_FireSpreadPx(weapon, focalPx, checkSpread);
         d.lastSpreadPx = spreadPx;
 
-        bool blockedLos = false, blockedLeadLos = false, blockedTravel = false, blockedLand = false, blockedFriend = false;
+        // Only geometry and teammates can stop a shot now. Everything else the tree
+        // can compute (ready state, fire interval, travel time, spread, lead) is
+        // reported through the diagnostics and never vetoes.
+        bool blockedLos = false, blockedFriend = false;
 
         // ---- 3. validate each candidate, closest to the crosshair first ----
         for (int oi = 0; oi < n; oi++) {
             const A_FireCandidate &c = cands[order[oi]];
 
-            // (a) LINE OF SIGHT - camera to the aim point, fail closed.
+            // (a) LINE OF SIGHT - the NEAREST thing on the camera -> aim point line
+            //     has to BE this pawn. A wall, however thin, is not this pawn, so it
+            //     blocks - while an arm, a backpack or the weapon itself reaching
+            //     toward the muzzle does not, because that is his own hierarchy.
             d.losChecked++;
-            if (!A_FireLineClear(camPos, c.aim.pos)) {
+            bool losIdentified = false;
+            float losHitDist = -1.0f;
+            const AF_Ray los = A_FireRayToTarget(camPos, c.aim.pos, c.pawn, c.aim.radius,
+                                                 &losIdentified, &losHitDist);
+            d.lastLosHitDist = losHitDist;
+            if (losIdentified) d.raysIdentified++; else d.raysBlocked++;
+            if (los == AF_Ray::Unknown) d.rayUnknown = true;   // no ray symbol -> fail closed
+            if (los != AF_Ray::Clear) {
                 d.losBlocked++;
                 d.losBlockedScan++;
                 blockedLos = true;
@@ -1302,18 +1647,20 @@ namespace NewFeatures
 
             if (wantLead && speedKnown && c.worldDist > 1.0f) {
                 travel = c.worldDist / bulletSpeed;
-                if (travel > A_FireTune::kMaxTravelTime) {
-                    d.lastTravel = travel;
-                    blockedTravel = true;
-                    continue;                       // bullet would arrive far too late
-                }
-                if (travel > 0.002f) {
+                d.lastTravel = travel;
+                if (travel > 0.002f && travel <= A_FireTune::kMaxTravelTime) {
                     predicted = c.aim.pos + c.velocity * travel;
                     lead = true;
                 }
-                if (lead && !A_FireLineClear(camPos, predicted)) {
-                    blockedLeadLos = true;
-                    continue;                       // the lead path itself is covered
+                // ADVISORY ONLY. A long flight time (kMaxTravelTime) and a covered
+                // lead path both used to `continue` and drop the shot - that was the
+                // long-range half of "sometimes it does not shoot". The lead is a
+                // prediction, so when it happens to be covered the shot is taken at
+                // the aim point instead of being refused.
+                if (lead && A_FireRaySegmentClear(camPos, predicted) != AF_Ray::Clear) {
+                    d.leadPathBlocked = true;
+                    lead = false;
+                    predicted = c.aim.pos;
                 }
             }
 
@@ -1333,10 +1680,12 @@ namespace NewFeatures
             }
             const float hitboxPx = (focalPx > 0.0f && c.worldDist > 0.01f)
                                  ? (c.aim.radius * focalPx / c.worldDist) : 0.0f;
-            if (!A_FireShotWouldLand(predPx, radius, hitboxPx, spreadPx)) {
-                blockedLand = true;
-                continue;                           // lead + cone put the shot off the hitbox
-            }
+            // ADVISORY ONLY - this used to `continue`. At range a hitbox is only a
+            // few px wide while the cone is wide, so the old test vetoed shots the
+            // user had the crosshair on: the other half of "sometimes it does not
+            // shoot". The numbers are still measured and shown in the panel.
+            if (!A_FireShotWouldLand(predPx, radius, hitboxPx, spreadPx))
+                d.spreadWarn = true;
 
             // (d) FRIENDLY IN THE LINE OF FIRE - pure geometry, catches the
             //     teammate the ray misses but the spread cone would hit.
@@ -1369,6 +1718,9 @@ namespace NewFeatures
             out.bulletSpeed = bulletSpeed;
             out.speedKnown = speedKnown;
             out.leadUsed   = lead;
+            out.path       = 1;                       // the crosshair-zone scan
+            out.visible    = true;                    // proven by the ray above
+            out.visibilityIdentified = losIdentified; // the ray NAMED this pawn
 
             d.lastAimPx  = c.pxOffset;
             d.lastPredPx = predPx;
@@ -1384,10 +1736,7 @@ namespace NewFeatures
         // Nothing survived. Report the reason that is actually worth acting on:
         // a teammate in the line first (dangerous), then the geometry reasons.
         if (blockedFriend)   return FireBlock::FriendlyInLine;
-        if (blockedLand)     return FireBlock::ShotWontLand;
-        if (blockedLeadLos)  return FireBlock::LeadNoLineOfSight;
         if (blockedLos)      return FireBlock::NoLineOfSight;
-        if (blockedTravel)   return FireBlock::TravelTooLong;
         return FireBlock::NoEnemyInZone;
     }
 
@@ -1420,14 +1769,17 @@ namespace NewFeatures
         d.heldWeapon = (void *)held;
         if (!Tools::IsPtrValid((void *)held)) return FireBlock::NoWeapon;
 
-        if (A_FireWeaponSwitching(held)) return FireBlock::WeaponSwitching;
-
-        d.ammoOk = A_FireWeaponHasAmmo(held);
-        if (!d.ammoOk) return FireBlock::NoAmmo;
-
-        d.canFire = A_FireWeaponCanFire(held);
+        // ADVISORY: a weapon that is mid-switch, mid-reload or between shots does
+        // not need to stop the trigger - Weapon.StartFire itself refuses an illegal
+        // shot, so being permissive here costs nothing and removes three more ways
+        // for the trigger to silently do nothing. All three are still measured and
+        // printed, and "Require Ready" turns Weapon.CanFire() back into a hard gate
+        // for anyone who wants it.
+        d.switching = A_FireWeaponSwitching(held);
+        d.ammoOk    = A_FireWeaponHasAmmo(held);
+        d.canFire   = A_FireWeaponCanFire(held);
         if (Config.NewFeaturesMenu.TriggerbotRequireReady && !d.canFire)
-            return FireBlock::WeaponNotReady;                // reloading / bolt / overheat / interval
+            return FireBlock::WeaponNotReady;                // redeploy: only NoWeapon/Paused are hard
         // (OFF = press anyway. StartFire itself still refuses an illegal shot, so
         //  the unchecked path can never fire during a reload - it only keeps the
         //  fire input held through those states.)
@@ -1528,7 +1880,9 @@ namespace NewFeatures
         }
 
         const double now = d.lastTickTime;
-        if (now - g_afireLastEvalTime < 0.010) return;   // ~10 ms, like V3
+        // 1 ms instead of V3's 10 ms: the throttle exists only to stop the same
+        // frame evaluating twice, and 10 ms was itself a delay on a 120 Hz display.
+        if (now - g_afireLastEvalTime < 0.001) return;
         g_afireLastEvalTime = now;
         if (g_afireInTick) return;                       // re-entrancy guard
         g_afireInTick = true;
@@ -1538,6 +1892,16 @@ namespace NewFeatures
 
         d.hookCalls++;
         d.scans++;
+        // Reset the per-scan visibility bookkeeping before the tree runs.
+        d.aimPath = 1;
+        d.crosshairPawn = 0;
+        d.crosshairHitDist = -1.0f;
+        d.raysIdentified = 0;
+        d.raysBlocked = 0;
+        d.rayUnknown = false;
+        d.lastLosHitDist = -1.0f;
+        d.leadPathBlocked = false;
+        d.spreadWarn = false;
 
         if (!Config.NewFeaturesMenu.Triggerbot) {
             A_FireReleaseTrigger(nullptr);
@@ -1589,18 +1953,13 @@ namespace NewFeatures
             return;
         }
 
-        // Re-press pacing against the weapon's own interval. Uses OUR clock, so
-        // a different game time base can never stall the trigger, and the first
-        // press after enable/burst is never delayed.
-        const float interval = A_FireWeaponInterval(held);
-        if (g_afireLastPressTime > 0.0 &&
-            now - g_afireLastPressTime < (double)interval * 0.85) {
-            A_FireReleaseTrigger(nullptr);
-            A_FireReportBlock(FireBlock::FireInterval);
-            s_dbgTriggerState = 1;
-            g_afireInTick = false;
-            return;
-        }
+        // NO RE-PRESS PACING. The old gate held the trigger off until 85 % of the
+        // weapon's own interval had elapsed, which is literally an artificial delay
+        // between shots - exactly what this feature is supposed to remove. StartFire
+        // is called the moment a visible enemy is under the crosshair and the game's
+        // own fire interval decides the rate. The interval is still measured for the
+        // diagnostics panel.
+        d.lastFireInterval = A_FireWeaponInterval(held);
 
         if (fn_Weapon_StartFire == nullptr) {
             A_FireReleaseTrigger(nullptr);
@@ -1617,10 +1976,12 @@ namespace NewFeatures
         d.fires++;
         s_dbgTriggerState = 2;                           // firing
 
-        LOGI("[NewFeatures] triggerbot: StartFire(held=%p) target=%p hitbox=%d aim=%.1fpx pred=%.1fpx "
-             "hb=%.1fpx spread=%.1fpx dist=%.3f travel=%.4f",
-             (void *)held, (void *)target.pawn, (int)target.hitbox,
-             target.pxOffset, target.predPxOffset, target.hitboxPx, target.spreadPx,
+        LOGI("[NewFeatures] triggerbot: StartFire(held=%p) target=%p path=%s hitbox=%d aim=%.1fpx "
+             "hit=%.3fm ident=%d dist=%.3f travel=%.4f",
+             (void *)held, (void *)target.pawn,
+             target.path == 0 ? "centre-ray" : "zone",
+             (int)target.hitbox, target.pxOffset,
+             d.lastLosHitDist, (int)target.visibilityIdentified,
              target.worldDist, target.travelTime);
 
         g_afireInTick = false;
@@ -1760,6 +2121,30 @@ namespace NewFeatures
             fn_PhysicsRaycastLOS =
                 (bool (*)(Vector3, Vector3, float, void *))rayAddr;
 
+        // Nearest-hit ray WITH an out RaycastHit + explicit maxDistance
+        // (0x506C188). This is the anti-wall gate: the ray can now be read as
+        // "what is the first thing on this line", not as a bare distance.
+        auto rayHitOutAddr = UnityRva(RVA::Physics_RaycastHitOut);
+        if (Tools::IsPtrValid(rayHitOutAddr))
+            fn_PhysicsRaycastHitOut =
+                (bool (*)(Vector3, Vector3, void *, float))rayHitOutAddr;
+
+        // The same bounded ray without the out struct (0x506BF60) - the
+        // conservative fallback used when a hit object cannot be named.
+        auto raySegAddr = UnityRva(RVA::Physics_RaycastSegment);
+        if (Tools::IsPtrValid(raySegAddr))
+            fn_PhysicsRaycastSegment = (bool (*)(Vector3, Vector3, float))raySegAddr;
+
+        // Scene-graph accessors used to name a hit (Transform.get_forward /
+        // Transform.get_parent, both in the proven 0x50xxxxx block).
+        auto fwdAddr = UnityRva(RVA::Transform_get_forward);
+        if (Tools::IsPtrValid(fwdAddr))
+            fn_TransformGetForward = (Vector3 (*)(void *))fwdAddr;
+
+        auto parentAddr = UnityRva(RVA::Transform_get_parent);
+        if (Tools::IsPtrValid(parentAddr))
+            fn_TransformGetParent = (void *(*)(void *))parentAddr;
+
         // Visibility cache getters (the game's own occlusion/frustum verdicts).
         auto rrAddr = UnityRva(RVA::Pawn_get_RecentlyRendered);
         if (Tools::IsPtrValid(rrAddr))
@@ -1895,10 +2280,11 @@ namespace NewFeatures
             }
         }
 
-        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p Raycast=%p RecentlyRendered=%p OccVisible=%p",
+        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p RayHitOut=%p RaySeg=%p Fwd=%p Parent=%p Raycast=%p",
              (void *)fn_Weapon_StartFire, (void *)fn_Weapon_StopFire,
-             (void *)fn_WorldToScreen, (void *)fn_PhysicsRaycastLOS,
-             (void *)fn_PawnRecentlyRendered, (void *)fn_PawnLastOccVisible);
+             (void *)fn_WorldToScreen, (void *)fn_PhysicsRaycastHitOut,
+             (void *)fn_PhysicsRaycastSegment, (void *)fn_TransformGetForward,
+             (void *)fn_TransformGetParent, (void *)fn_PhysicsRaycastLOS);
     }
 
     // True while the game-thread heartbeat has run recently.

@@ -1924,14 +1924,21 @@ if (runtimeState.activeTab == 4) {
                                     static const char* hitboxModes[] = { "Head", "Chest", "Limbs", "Any" };
                                     custom::Combo("Hitbox", &Config.NewFeaturesMenu.TriggerbotHitboxPriority, hitboxModes, IM_ARRAYSIZE(hitboxModes));
                                     
-                                    // Lead target for projectiles
+                                    // Lead target for projectiles. ADVISORY: it moves the
+                                    // aim point ahead of a moving target and reports it, but
+                                    // it can no longer refuse a shot - if the lead point is
+                                    // covered the shot falls back to the aim point.
                                     custom::Checkbox("Lead Target", &Config.NewFeaturesMenu.TriggerbotLeadTarget);
                                     
-                                    // Check spread/recoil
+                                    // Show the spread/lead containment measurement. Also
+                                    // advisory - it never blocks the trigger.
                                     custom::Checkbox("Check Spread", &Config.NewFeaturesMenu.TriggerbotCheckSpread);
 
-                                    // Honour the game's own Weapon.CanFire() before pressing
-                                    // (reload / bolt cycle / fire-mode transition).
+                                    // Hard-gate on the game's own Weapon.CanFire() (reload /
+                                    // bolt cycle / fire-mode transition / fire interval).
+                                    // OFF by default: StartFire refuses an illegal shot
+                                    // anyway, and gating here is what made the trigger go
+                                    // quiet mid-fight with no visible reason.
                                     custom::Checkbox("Require Ready", &Config.NewFeaturesMenu.TriggerbotRequireReady);
                                 }
                                 // Debug status (shows in-game). Every number below is
@@ -1987,6 +1994,21 @@ if (runtimeState.activeTab == 4) {
                                         td.radiusPx,
                                         td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx),
                                         td.losBlocked, td.friendsInLine);
+                                    // Which path accepted (or would accept) the shot, and
+                                    // what the visibility ray actually hit. "Rays=id/blk"
+                                    // is the anti-wall gate: id = the nearest thing on the
+                                    // shot line WAS the enemy, blk = something else (a wall,
+                                    // however thin) stopped it.
+                                    ImGui::TextColored(dim, "Path=%s Centre=%s@%.1fm Rays=%d/%d%s",
+                                        td.aimPath == 0 ? "centre-ray" : "zone",
+                                        td.crosshairPawn ? "pawn" : "none",
+                                        td.crosshairHitDist,
+                                        td.raysIdentified, td.raysBlocked,
+                                        td.rayUnknown ? " NO-RAY-SYMBOL" : "");
+                                    ImGui::TextColored(dim, "LOShit=%.2fm LeadBlk=%d SprWarn=%d Sw=%d Int=%.3f",
+                                        td.lastLosHitDist,
+                                        (int)td.leadPathBlocked, (int)td.spreadWarn,
+                                        (int)td.switching, td.lastFireInterval);
                                     ImGui::TextColored(dim, "Ammo=%s CanFire=%s FOV=%0.fpx",
                                         td.ammoOk ? "ok" : "NO", td.canFire ? "ok" : "NO",
                                         td.focalPx);

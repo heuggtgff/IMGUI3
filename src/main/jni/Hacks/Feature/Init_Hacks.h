@@ -241,7 +241,7 @@ sColorsESPBOT sColorsESPBOT{0};
         // fire-mode transition; OFF presses anyway (StartFire is still filtered by
         // the game, so OFF can never cause an illegal shot - it only lets the
         // trigger keep the fire input held through those states).
-        bool TriggerbotRequireReady = true;
+        bool TriggerbotRequireReady = false;
         bool NoHitFlinch = false;
         bool NoDrift = false;
         bool NoSlideFatigue = false;

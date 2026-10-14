@@ -39,3 +39,62 @@ Field-offset citations verified against the dump:
 **Limitations recorded in the file:** on-device behaviour untested (no device); the dump is a stub (no method bodies); Pawn field offsets are not from this dump; hitbox/lead/smoke-boolean are not exposed as callable APIs.
 
 **Corrections made during verification:** the first draft cited RVA *header* lines for some RVAs and used imprecise ranges for a few (`AutoFireDistance` said "694860 area" — corrected to line 695021; `get_FireSpeed` said "739176 area" which is correct since there's no single accessor line at that exact offset). Those were all fixed before this report.
+
+
+---
+
+# Verification pass 2 - ray identification ("no shooting through walls")
+
+Every citation below was read out of the same `jeudhehs/dump` `dump.cs`
+(80,758,140 bytes, md5 `78eebfe3bda6bf4276995045e8f0bd97`, 2,421,501 lines).
+
+## New symbols used by the rewritten visibility gate
+
+| Symbol | RVA | dump.cs line | Why it is here |
+| --- | --- | --- | --- |
+| `Physics.Raycast(origin, direction, out RaycastHit hit, float maxDistance)` | `0x506C188` | 173930 | nearest hit **with** an explicit limit - the only overload that can answer "what is the first thing on this line" |
+| `Physics.Raycast(origin, direction, float maxDistance)` | `0x506BF60` | 173912 | the same limit without the out struct - conservative fallback |
+| `Physics.Raycast(origin, direction, out RaycastHit hit)` | `0x506C1E4` | 173933 | the 3-parameter overload the old gate used; **no longer the verdict** |
+| `Transform.get_forward()` | `0x509C650` | 172057 | camera forward for the centre-of-screen ray |
+| `Transform.get_parent()` | `0x507BDEC` | 172105 | walks a hit's parent chain to name its owner |
+| `Transform.get_position()` | `0x507C19C` | 172009 | cross-check only: identical to `api10` in `Defines.h`, so the dump's RVA base matches the one the repo loads from |
+| `Camera.ScreenPointToRay(Vector3)` | `0x5023FB0` | 157987 | researched, **not used**: a `Ray` is a 24-byte byval return and the same ray is reproducible from the camera transform |
+
+`RaycastHit` (dump.cs 175618, TypeDefIndex 1838) is annotated
+`m_FaceID 0x18`, `m_Distance 0x1C`, `m_UV 0x20`; `m_Collider` is the next field
+after the 8-byte `Vector2 m_UV`, i.e. `0x28`, which is what the code reads
+(`AF_RAYHIT_COLLOFF`). The collider is turned into a `Transform` through
+`Component::get_transform` (`Class_Component_get_transform`), the call
+`DrawESP.h` has already used in game.
+
+Not used, and why:
+- `PlayerPawn.m_SpineBone @0x1D68` (line 723390) is declared **static**, so the
+  offset is static-storage furniture, not an instance offset.
+- `PlayerPawn.get_SpineBone()` `0x5477EA8` (line 724447) exists only on
+  `PlayerPawn`, not on `MPPawn` / `BRPlayerPawn` / `DMZPlayerPawn` /
+  `PVEPlayerPawn` / `OpenWorldPlayerPawn` / `BRGroundWarPlayerPawn`, so calling
+  it on an arbitrary enemy would be a wrong-vtable read. The torso therefore
+  stays an axis fraction (0.72 chest, 0.45 waist) between `m_Mesh 0x628` and
+  `m_HeadBone 0x308`.
+
+## Checks run
+
+- Host `g++ 13.3 -std=c++17 -fsyntax-only -Wall` over `NewFeatures.h` (with stub
+  `jni.h` / `android/log.h` and `-D__fastcall=`): **0 errors**.
+- The same check over the new `Main.cpp` diagnostics rows compiled against the
+  repo's real `imgui.h` with `-Wformat=2`: **0 errors, 0 format warnings**.
+- Brace/parenthesis balance with comments and string literals stripped:
+  `NewFeatures.h` 0/0, `Main.cpp` 0/0.
+- Both files also re-read end to end for the paths the compiler cannot judge:
+  path A (centre ray), path B (zone + named ray), the advisory-only gates, and
+  the release/hold logic in `A_FireTick`.
+
+## Not verified
+
+- No Android NDK in this environment, so `ndk-build`, the APK and any in-game
+  behaviour are untested here. The host check validates syntax and types, not the
+  NDK toolchain or the device ABI.
+- The "hit cannot be named" fallback stops the ray 0.80 of the hitbox radius
+  short of the aim point. A panel thinner than that pressed against the target's
+  own collider is the one case that fallback cannot see; the primary path names
+  the hit and has no such gap.
