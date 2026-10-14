@@ -10,9 +10,50 @@
 //  not usable as a source for gameplay functions - dump.cs is.
 //
 //  ---------------------------------------------------------------------------
-//  TRIGGERBOT  (A-Fire) - game-thread auto-fire.  Ported from the known-working
-//               reference oonalang/V3 @3dd0151 (System/Hooks/Feats.h:
-//               hook_Weapon_Tick + A_FireFindTarget), with this repo's menu.
+//  TRIGGERBOT  (A-Fire) - game-thread auto-fire.  Heartbeat and StartFire /
+//               StopFire come from the known-working reference oonalang/V3
+//               @3dd0151 (System/Hooks/Feats.h: hook_Weapon_Tick); the fire
+//               DECISION is this repo's own ShouldFire tree (below).
+//  ---------------------------------------------------------------------------
+//   THE DECISION (A_FireShouldFire -> A_FireScan): one named reason per scan,
+//   in this order, and NOT ONE of them fires on a guess:
+//     1  alive ............ Pawn::m_IsAlive @0x548, second chance
+//                           Pawn.get_IsAlive() 0x51B7C40 (Slot 49)
+//     2  in a match ....... GamePlay::get_MatchGame() 0x8569B10 +
+//                           BaseGame.get_IsPaused() 0x9CAFDC4
+//     3  weapon ........... Pawn.get_CurrentWeapon() 0x518BEA8,
+//                           Weapon.InSwitchWeaponState 0x512724C,
+//                           Weapon.HasSwitchingState 0x5124C70,
+//                           Weapon.AmmoCanFire 0x50EB73C,
+//                           Weapon.get_ClipAmmoCount 0x50EC614,
+//                           Weapon.CanFire() 0x5126CC4 (Slot 269, the game's
+//                             own readiness gate - toggle "Require Ready"),
+//                           Weapon.RealFireInterval 0x50EC250 (re-press pacing)
+//     4  trigger mode ..... Pawn.IsAiming 0x519BB10 (ADS only),
+//                           Pawn.get_IsFiring 0x51A8A38 (Firing only)
+//     5  target ........... BaseGame::EnemyPawns @0x178, team id
+//                           (Pawn.get_TeamId 0x51B89CC), alive, NOT self,
+//                           then the hitbox walk: head bone 0x308 / torso
+//                           midpoint / mesh root 0x628 must project inside the
+//                           crosshair zone (Camera.WorldToScreenPoint 0x5023B54)
+//     6  line of sight .... Physics.Raycast(origin, dir, out hit) 0x506C1E4
+//                           from the camera to the aim point INSIDE the target
+//     7  rangeless + lead . Weapon.get_CurrentFireComponent 0x50EB1E4 ->
+//                           WeaponFireComponent.get_BulletInitSpeed 0xC14A158,
+//                           Pawn.get_Velocity 0x51B38CC, then the PREDICTED
+//                           point must have its own clear ray and must stay
+//                           inside kMaxTravelTime (1.2 s)
+//     8  spread / recoil .. Weapon.get_ShotSpreadSize 0x5109B68 with the camera
+//                           focal length from Camera.get_fieldOfView 0x5021F7C:
+//                           the cone + hitbox must still cover the predicted
+//                           point (camera punch is already inside the screen
+//                           projection, so recoil needs no extra term)
+//     9  friendlies ....... BaseGame.GetTeamPawns() 0x9CAFEB4 - a living
+//                           teammate within 0.45 m of the bullet line and
+//                           closer than the target blocks the shot
+//   Diagnostics: Weapon.get_AimingTarget 0x510EAAC /
+//                Weapon.get_CurrentAimingTargetDis 0x510EABC (the game's own
+//                aim answer, shown in the menu and used as a tie-break)
 //  ---------------------------------------------------------------------------
 //   Driver:  Weapon::Tick     RVA 0x5114C34  (Slot 33)  <- game-thread tick
 //            Weapon::StartFire   RVA 0x5123C84  (Slot 55)  called via raw ptr
@@ -28,13 +69,21 @@
 //     Pawn::m_HeadBone            offset 0x308    Transform* -> get_position()
 //     Pawn::m_Mesh                offset 0x628    Transform* -> get_position()
 //     Camera::get_main()          RVA 0x5024010
-//     Camera::WorldToScreenPoint  RVA 0x5023B54   (the 1-arg overload; see
-//                                 the note in A_FireFindTarget)
+//     Camera::WorldToScreenPoint  RVA 0x5023B54   (the 1-arg overload - see the
+//                                 note above A_FireScan's candidate loop)
 //     Pawn::IsAiming()            RVA 0x519BB10   ("ADS only" mode; note
 //                                 0x516699C is Weapon::get_IsAiming, and
 //                                 calling that on a Pawn is what the old
 //                                 build did)
 //     Pawn::get_IsFiring()        RVA 0x51A8A38   ("Firing only" mode)
+//
+//   Line of sight is NOT the game's render cache: RecentlyRendered /
+//   LastOccVisible answer "was this pawn drawn anywhere on screen", which stays
+//   TRUE for a pawn behind a low wall. They are resolved and kept only as the
+//   fallback for a build where the Raycast symbol does not resolve - the gate
+//   itself is the 0x506C1E4 ray, and its result is read the only way that
+//   call can be read (no maxDistance -> first hit at/after the aim point = the
+//   path is clear, first hit before it = cover).
 //
 //   The old CheckTarget @0xC9C1B50 / HasEnemyInPort @0xC9C13F8 /
 //   WeaponFireComponent::StartFire @0xC14C29C hooks are gone: they only run on
@@ -211,6 +260,24 @@ namespace NewFeatures
         constexpr uintptr_t Weapon_get_ShotSpreadSize       = 0x5109B68; // float()  - Weapon.get_ShotSpreadSize (dump 739732)
         constexpr uintptr_t WeaponFireComponent_get_BulletInitSpeed = 0xC14A158; // float() - base WeaponFireComponent.get_BulletInitSpeed (dump 764888, m_BulletInitSpeed @0x220)
         
+        // ---- ShouldFire tree RVAs, every one checked against eliwoahzja/dump
+        // (owner class -> dump line -> RVA). None of them is virtual except
+        // Weapon.CanFire, whose only overrides are the turrets / boxing /
+        // dual wield / sentry gun / helicopter.
+        constexpr uintptr_t Weapon_get_IsSingleShot          = 0x50EBA5C; // bool()  Weapon (dump 739174)
+        constexpr uintptr_t Weapon_CanFire                   = 0x5126CC4; // bool()  Weapon Slot 269 (dump 740581)
+        constexpr uintptr_t Weapon_InSwitchWeaponState       = 0x512724C; // bool()  Weapon (dump 740662)
+        constexpr uintptr_t Weapon_HasSwitchingState         = 0x5124C70; // bool()  Weapon (dump 740707)
+        constexpr uintptr_t Weapon_RealFireInterval          = 0x50EC250; // float() Weapon (dump 739186)
+        constexpr uintptr_t Weapon_get_FireInterval          = 0x5105C74; // float() Weapon (dump 740026, same as FiringTiming::get_FireInterval)
+        constexpr uintptr_t Weapon_get_AimingTarget          = 0x510EAAC; // object() Weapon (dump 739828)
+        constexpr uintptr_t Weapon_get_CurrentAimingTargetDis = 0x510EABC;// float() Weapon (dump 739834)
+        constexpr uintptr_t Camera_get_fieldOfView           = 0x5021F7C; // float() Camera (dump 157456)
+        constexpr uintptr_t BaseGame_GetTeamPawns            = 0x9CAFEB4; // PawnList*() BaseGame (dump 702853)
+        constexpr uintptr_t BaseGame_get_IsPaused            = 0x9CAFDC4; // bool()  BaseGame (dump 702829)
+        constexpr uintptr_t Pawn_get_IsAlive                 = 0x51B7C40; // bool()  Pawn Slot 49 (dump 714397)
+        constexpr uintptr_t Pawn_get_LastFireTime            = 0x51B843C; // float() Pawn (dump 714442, diagnostics)
+
         // Pawn velocity for target leading.
         // WAS 0x713743 - that is dump.cs LINE 713743 (where get_Velocity is
         // declared), not an address; the real RVA is 0x51B38CC.
@@ -321,40 +388,188 @@ namespace NewFeatures
         return localTeam != 0 && localTeam == targetTeam;
     }
 
+    // Function pointers. The per-class pawn tick overrides are the heartbeat
+    // (see the header note); StartFire/StopFire are called through raw pointers,
+    // never hooked.
+    // fn_* are resolved once at install time - getAbsoluteAddress() re-opens
+    // and regex-scans /proc/self/maps on EVERY call, so resolving them per scan
+    // was the single biggest cost of the triggerbot loop.
+    //
+    // These live ABOVE the helpers because the ShouldFire tree below calls them,
+    // and every one of them is allowed to stay null: a missing pointer makes the
+    // gate fall through (never block), it does not disable the feature.
+    inline void (*orig_Weapon_Tick)(void *, float) = nullptr;
+    inline void (*orig_Pawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_PlayerPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_MPPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_BRPlayerPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_DMZPlayerPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_PVEPlayerPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_OpenWorldPlayerPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_BRGroundWarPlayerPawn_Tick)(void *, float) = nullptr;
+    inline void (*fn_Weapon_StartFire)(void *) = nullptr;
+    inline void (*fn_Weapon_StopFire)(void *, bool) = nullptr;
+    inline Vector3 (*fn_WorldToScreen)(void *, Vector3) = nullptr;  // 1-arg overload
+    inline bool (*fn_PhysicsRaycastLOS)(Vector3, Vector3, float, void *) = nullptr;
+    inline void *(*fn_CameraGetMain)() = nullptr;
+    inline void *(*fn_GameGetMatchGame)() = nullptr;
+    inline bool (*fn_PawnRecentlyRendered)(void *) = nullptr;
+    inline bool (*fn_PawnLastOccVisible)(void *) = nullptr;
+    inline bool (*fn_PawnIsAiming)(void *) = nullptr;
+    inline bool (*fn_PawnGetIsFiring)(void *) = nullptr;
+
+    // ---- ShouldFire tree pointers (every RVA verified, see the RVA block) ---
+    inline bool  (*fn_WeaponIsAutoFire)(void *) = nullptr;            // 0x513D704
+    inline bool  (*fn_WeaponIsBurstFire)(void *) = nullptr;           // 0x50EBB28
+    inline bool  (*fn_WeaponIsSingleShot)(void *) = nullptr;          // 0x50EBA5C
+    inline bool  (*fn_WeaponAmmoCanFire)(void *) = nullptr;           // 0x50EB73C
+    inline int   (*fn_WeaponGetClipAmmoCount)(void *) = nullptr;      // 0x50EC614
+    inline bool  (*fn_WeaponCanFire)(void *) = nullptr;               // 0x5126CC4
+    inline bool  (*fn_WeaponInSwitchWeaponState)(void *) = nullptr;   // 0x512724C
+    inline bool  (*fn_WeaponHasSwitchingState)(void *) = nullptr;     // 0x5124C70
+    inline float (*fn_WeaponRealFireInterval)(void *) = nullptr;      // 0x50EC250
+    inline void *(*fn_WeaponGetAimingTarget)(void *) = nullptr;       // 0x510EAAC
+    inline float (*fn_WeaponGetAimingTargetDis)(void *) = nullptr;    // 0x510EABC
+    inline float (*fn_CameraGetFov)(void *) = nullptr;                // 0x5021F7C
+    inline void *(*fn_BaseGameGetTeamPawns)(void *) = nullptr;        // 0x9CAFEB4
+    inline bool  (*fn_BaseGameIsPaused)(void *) = nullptr;            // 0x9CAFDC4
+    inline bool  (*fn_PawnIsAlive)(void *) = nullptr;                 // 0x51B7C40 (second chance only)
     // =====================================================================
     //  ENHANCED TRIGGERBOT HELPERS
+    //
+    //  The scan below is a decision TREE, not a chain of filters: every branch
+    //  either fires or returns ONE named reason (FireBlock) why it does not.
+    //  The menu prints that reason live, so "why did it not shoot" is never a
+    //  guess again.
+    //
+    //  Every gate answers a question the shot has to survive, in this order:
+    //    1. local player / weapon readiness   (alive, in a match, not paused,
+    //       weapon valid, not switching, ammo > 0, fire interval elapsed,
+    //       the game's own Weapon.CanFire())
+    //    2. trigger mode                      (Always / ADS only / Firing only)
+    //    3. target acquisition & validity     (enemy, alive, not self, not a
+    //       teammate, hitbox projected inside the crosshair zone)
+    //    4. line of sight                     (camera -> aim point, raycast)
+    //    5. rangeless + lead                  (travel time, predicted point,
+    //       the predicted point's own line of sight)
+    //    6. spread / recoil containment       (does the cone still cover the
+    //       hitbox where the target will be when the bullet arrives?)
+    //    7. friendly in the line of fire
+    //  Only a candidate that survives all seven is fired at, and only while the
+    //  crosshair keeps covering it (the trigger is released the moment it does
+    //  not).
     // =====================================================================
 
-    // Hitbox priority enum
+    // Which hitbox of a pawn is validated. Also the UI's Hitbox combo:
+    // 0 = Head, 1 = Chest, 2 = Limbs, 3 = Any.
     enum class HitboxPriority : int
     {
-        Head = 0,
+        Head  = 0,
         Chest = 1,
         Limbs = 2,
-        Any = 3
+        Any   = 3
     };
 
-    // Fire mode enum
+    // Weapon fire mode. Weapon has no "get_FireMode" in the dump; the three
+    // flags are asked one by one:
+    //   Weapon.get_IsAutoFire()   0x513D704  dump 742570
+    //   Weapon.get_IsBurstFire()  0x50EBB28  dump 739129
+    //   Weapon.get_IsSingleShot() 0x50EBA5C  dump 739174
     enum class FireMode : int
     {
-        Single = 0,
-        Burst = 1,
-        Auto = 2,
+        Single  = 0,
+        Burst   = 1,
+        Auto    = 2,
         Unknown = 3
     };
 
-    // Target info structure with hitbox and leading data
-    struct TriggerTarget
+    // Why the trigger did NOT fire. Exactly one of these is reported per scan.
+    enum class FireBlock : int
     {
-        Pawn *pawn = nullptr;
-        Vector3 aimPoint;           // World position to aim at (with leading)
-        Vector3 screenPos;          // Screen position
-        float dist2 = -1.0f;        // Screen distance squared from crosshair
-        float worldDist = 0.0f;     // World distance to target
-        HitboxPriority hitbox = HitboxPriority::Any;
-        bool hasLOS = false;
-        float travelTime = 0.0f;    // Bullet travel time
-        Vector3 predictedPos;       // Predicted position with leading
+        Fired = 0,
+        FeatureOff,          // the toggle is off
+        NoLocalPawn,         // GamePlay::get_LocalPawn() invalid
+        LocalNotAlive,       // Pawn::m_IsAlive @0x548 (Pawn.get_IsAlive 0x51B7C40 also asked)
+        NoMatch,             // GamePlay::get_MatchGame() invalid -> not in a match
+        MatchPaused,         // BaseGame.get_IsPaused() 0x9CAFDC4
+        NoWeapon,            // Pawn.get_CurrentWeapon() 0x518BEA8 invalid
+        WeaponSwitching,     // Weapon.InSwitchWeaponState 0x512724C / HasSwitchingState 0x5124C70
+        NoAmmo,              // Weapon.AmmoCanFire 0x50EB73C / get_ClipAmmoCount 0x50EC614
+        WeaponNotReady,      // Weapon.CanFire() 0x5126CC4 says no (reload/overheat/state)
+        FireInterval,        // pacing against Weapon.RealFireInterval 0x50EC250
+        ModeNotAds,          // TriggerbotMode 1 - not scoping (Pawn.IsAiming 0x519BB10)
+        ModeNotFiring,       // TriggerbotMode 2 - you are not already firing
+        NoEnemyInZone,       // nothing enemy/alive inside the crosshair zone
+        NoLineOfSight,       // camera -> aim point is blocked by geometry
+        LeadNoLineOfSight,   // camera -> PREDICTED point is blocked
+        TravelTooLong,       // bullet would need longer than kMaxTravelTime
+        ShotWontLand,        // spread/lead put the predicted point off the hitbox
+        FriendlyInLine,      // a teammate is inside the bullet path
+        Count
+    };
+
+    inline const char *A_FireBlockText(FireBlock b)
+    {
+        switch (b)
+        {
+            case FireBlock::Fired:             return "firing";
+            case FireBlock::FeatureOff:        return "triggerbot off";
+            case FireBlock::NoLocalPawn:       return "no local pawn";
+            case FireBlock::LocalNotAlive:     return "you are dead";
+            case FireBlock::NoMatch:           return "no match";
+            case FireBlock::MatchPaused:       return "match paused";
+            case FireBlock::NoWeapon:          return "no weapon";
+            case FireBlock::WeaponSwitching:   return "switching weapon";
+            case FireBlock::NoAmmo:            return "no ammo";
+            case FireBlock::WeaponNotReady:    return "weapon not ready";
+            case FireBlock::FireInterval:      return "fire interval";
+            case FireBlock::ModeNotAds:        return "not scoped (mode)";
+            case FireBlock::ModeNotFiring:     return "not firing (mode)";
+            case FireBlock::NoEnemyInZone:     return "no enemy in crosshair";
+            case FireBlock::NoLineOfSight:     return "wall in the way";
+            case FireBlock::LeadNoLineOfSight: return "lead path blocked";
+            case FireBlock::TravelTooLong:     return "bullet travel too long";
+            case FireBlock::ShotWontLand:      return "spread/lead would miss";
+            case FireBlock::FriendlyInLine:    return "teammate in the line";
+            default:                           return "?";
+        }
+    }
+
+    // The numbers the tree uses. All of them are physical (metres, seconds,
+    // degrees) - never a screen size - so the feature behaves the same on any
+    // resolution or aspect ratio.
+    struct A_FireTune
+    {
+        static constexpr float kRaySlack        = 0.40f;   // m   - ray must reach the aim point within this slack
+        static constexpr float kHeadRadius      = 0.14f;   // m   - head hitbox half width
+        static constexpr float kBodyRadius      = 0.30f;   // m   - torso/limb hitbox half width
+        static constexpr float kFriendlyRadius  = 0.45f;   // m   - teammate capsule half width
+        static constexpr float kMaxTravelTime   = 1.20f;   // s   - beyond this the lead is a guess
+        static constexpr float kAssumedSpeed    = 800.0f;  // m/s - only when no fire component answers
+        static constexpr float kMinFireInterval = 0.030f;  // s   - pacing floor
+        static constexpr float kFallbackFov     = 60.0f;   // deg - only if Camera.get_fieldOfView fails
+        static constexpr float kDegToRad        = 0.01745329f;
+        static constexpr float kRadToDeg        = 57.29578f;
+    };
+
+    // An aim point: where on the pawn the crosshair has to be, and how big the
+    // hitbox living there is (used by the spread-containment test).
+    struct A_FireAimPoint
+    {
+        Vector3        pos;
+        HitboxPriority hitbox;
+        float          radius;   // metres
+        bool           valid;
+    };
+
+    // One enemy inside the crosshair zone, with everything the tree needs.
+    struct A_FireCandidate
+    {
+        Pawn          *pawn;
+        A_FireAimPoint aim;
+        float          pxOffset;    // px from the crosshair to the aim point
+        float          worldDist;   // m  camera -> aim point
+        Vector3        velocity;    // m/s target velocity
     };
 
     // Weapon.CurrentFireComponent (dump 739078, RVA 0x50EB1E4). This dump prints
@@ -370,9 +585,11 @@ namespace NewFeatures
         return Tools::IsPtrValid(comp) ? comp : nullptr;
     }
 
-    // Get bullet speed from weapon (meters/second)
-    inline float GetWeaponBulletSpeed(void *weapon)
+    // Bullet speed in m/s, from the live fire component. `known` reports whether
+    // the game answered - a guessed speed must NOT be used to lead a shot.
+    inline float GetWeaponBulletSpeed(void *weapon, bool *known = nullptr)
     {
+        if (known != nullptr) *known = false;
         void *fireComp = GetCurrentFireComponent(weapon);
         if (Tools::IsPtrValid(fireComp)) {
             // WeaponFireComponent.get_BulletInitSpeed, base class @0xC14A158
@@ -380,166 +597,294 @@ namespace NewFeatures
             static auto getSpeed = (float (*)(void *))UnityRva(RVA::WeaponFireComponent_get_BulletInitSpeed);
             if (getSpeed != nullptr) {
                 const float speed = getSpeed(fireComp);
-                if (speed >= 1.0f && speed <= 5000.0f) return speed;
+                if (speed >= 1.0f && speed <= 5000.0f) {
+                    if (known != nullptr) *known = true;
+                    return speed;
+                }
             }
         }
-        // No verified answer: a fixed AR-ish speed, so leading degrades to a
-        // constant small offset instead of switching itself off.
-        return 800.0f;
+        // No verified answer. The caller must treat this as "hitscan-ish": no
+        // lead, no travel-time gate, so an unknown speed can never block a shot.
+        return A_FireTune::kAssumedSpeed;
     }
 
-    // Get fire mode of current weapon - Weapon.get_IsAutoFire / get_IsBurstFire
-    // (dump 742570 / 739129); Weapon has no int get_FireMode in the dump.
+    // Fire mode of the held weapon - the three dump flags, single-shot LAST so
+    // a weapon that reports none of them still behaves (semi) safely.
     inline FireMode GetWeaponFireMode(void *weapon)
     {
         if (!Tools::IsPtrValid(weapon)) return FireMode::Unknown;
-
-        static auto getIsAuto  = (bool (*)(void *))UnityRva(RVA::Weapon_get_IsAutoFire);
-        static auto getIsBurst = (bool (*)(void *))UnityRva(RVA::Weapon_get_IsBurstFire);
-
-        if (getIsAuto == nullptr && getIsBurst == nullptr) return FireMode::Auto;
-        if (getIsAuto != nullptr && getIsAuto(weapon))   return FireMode::Auto;
-        if (getIsBurst != nullptr && getIsBurst(weapon)) return FireMode::Burst;
-        return FireMode::Single;   // neither flag set -> semi-auto
+        if (fn_WeaponIsAutoFire != nullptr && fn_WeaponIsAutoFire(weapon)) return FireMode::Auto;
+        if (fn_WeaponIsBurstFire != nullptr && fn_WeaponIsBurstFire(weapon)) return FireMode::Burst;
+        if (fn_WeaponIsSingleShot != nullptr && fn_WeaponIsSingleShot(weapon)) return FireMode::Single;
+        // No flag answered: assume an automatic weapon so one press is enough
+        // and the weapon's own fire interval controls the rate.
+        return FireMode::Auto;
     }
 
-    // Get target velocity for leading (Pawn.get_Velocity @0x51B38CC, dump 713743)
+    // Target velocity for leading (Pawn.get_Velocity @0x51B38CC, dump 713743).
     inline Vector3 GetPawnVelocity(void *pawn)
     {
         if (!Tools::IsPtrValid(pawn)) return Vector3::zero();
-
         static auto getVelocity = (Vector3 (*)(void *))UnityRva(RVA::Pawn_get_Velocity);
-        if (getVelocity) {
-            return getVelocity(pawn);
-        }
+        if (getVelocity != nullptr) return getVelocity(pawn);
         return Vector3::zero();
     }
 
-    // Calculate bullet travel time to target
-    inline float CalculateTravelTime(float distance, float bulletSpeed)
+    // Camera focal length in pixels: (screenHeight/2) / tan(fov/2).
+    // Camera.get_fieldOfView() 0x5021F7C (dump 157456) is a plain float getter,
+    // so the shot geometry (px <-> metres at a distance) is derived, never
+    // guessed from a hardcoded field of view.
+    inline float A_FireFocalPx()
     {
-        if (bulletSpeed <= 0.0f) return 0.0f;
-        return distance / bulletSpeed;
+        float fov = A_FireTune::kFallbackFov;
+        if (fn_CameraGetFov != nullptr && fn_CameraGetMain != nullptr) {
+            void *cam = fn_CameraGetMain();
+            if (Tools::IsPtrValid(cam)) {
+                const float v = fn_CameraGetFov(cam);
+                if (v > 1.0f && v < 179.0f) fov = v;
+            }
+        }
+        const float tanHalf = tanf(fov * 0.5f * A_FireTune::kDegToRad);
+        if (!(tanHalf > 0.0001f)) return 0.0f;
+        return ((float)get_height() * 0.5f) / tanHalf;
     }
 
-    // Predict target position based on velocity and bullet travel time
-    inline Vector3 PredictTargetPosition(const Vector3 &currentPos, const Vector3 &velocity, float travelTime)
+    // Where to aim on this pawn for ONE hitbox (no fallback here - the scan walks
+    // the hitboxes in the user's priority order and stops at the first one that is
+    // actually under the crosshair, which is the "which hitbox is under the
+    // crosshair" question the shot has to answer).
+    // Head bone (Pawn.m_HeadBone 0x308) and mesh root (Pawn.m_Mesh 0x628) are the
+    // two the rest of this project already reads in game every frame (DrawESP).
+    // This build proves no chest bone, so the torso point is their midpoint -
+    // a documented approximation, not a dump symbol.
+    inline A_FireAimPoint A_FireAimPointFor(Pawn *pawn, HitboxPriority which)
     {
-        if (travelTime <= 0.0f) return currentPos;
-        return currentPos + velocity * travelTime;
+        A_FireAimPoint ap{};
+        ap.valid = false;
+        ap.hitbox = which;
+        ap.radius = A_FireTune::kBodyRadius;
+        if (!Tools::IsPtrValid((void *)pawn)) return ap;
+
+        Transform *headBone = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
+        Transform *mesh     = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
+        const bool hasHead = Tools::IsPtrValid((void *)headBone);
+        const bool hasMesh = Tools::IsPtrValid((void *)mesh);
+        if (!hasHead && !hasMesh) return ap;
+
+        if (which == HitboxPriority::Head || which == HitboxPriority::Any) {
+            if (hasHead) {
+                ap.pos = headBone->get_position();
+                ap.radius = A_FireTune::kHeadRadius;
+                ap.hitbox = HitboxPriority::Head;
+                ap.valid = true;
+                return ap;
+            }
+            if (which == HitboxPriority::Head) return ap;       // asked for head, no head bone
+        }
+
+        if (which == HitboxPriority::Chest || which == HitboxPriority::Any) {
+            if (hasHead && hasMesh) {
+                const Vector3 head = headBone->get_position();
+                const Vector3 root = mesh->get_position();
+                ap.pos = Vector3((head.x + root.x) * 0.5f,
+                                 (head.y + root.y) * 0.5f,
+                                 (head.z + root.z) * 0.5f);
+                ap.radius = A_FireTune::kBodyRadius;
+                ap.hitbox = HitboxPriority::Chest;
+                ap.valid = true;
+                return ap;
+            }
+            if (which == HitboxPriority::Chest) return ap;
+        }
+
+        if (hasMesh) {                                          // Limbs and the last Any fallback
+            const Vector3 root = mesh->get_position();
+            ap.pos = Vector3(root.x, root.y + 0.55f, root.z);   // legs: just above the mesh root
+            ap.radius = A_FireTune::kBodyRadius;
+            ap.hitbox = HitboxPriority::Limbs;
+            ap.valid = true;
+        }
+        return ap;
     }
 
-    // Is the weapon able to fire right now (ammo + the game's own gate).
-    // Both calls take a Weapon*, so no fire-component pointer is needed. (The
-    // old version called AmmoCanFire with a fire component as `this`, but that
-    // address is a *subclass* override - CarePackageGrenade.)
-    inline bool IsWeaponReadyToFire(void *weapon)
+    // The hitbox order the scan walks: the user's pick first, then the others, so
+    // a pawn whose head is not under the crosshair is still shot in the body
+    // instead of being dropped (that is the "Any" case, and the Head/Chest cases
+    // keep their pick first while still allowing the rest as a fallback).
+    inline void A_FireHitboxOrder(HitboxPriority want, HitboxPriority out[3])
+    {
+        switch (want) {
+            case HitboxPriority::Head:  out[0] = HitboxPriority::Head;  out[1] = HitboxPriority::Chest; out[2] = HitboxPriority::Limbs; break;
+            case HitboxPriority::Chest: out[0] = HitboxPriority::Chest; out[1] = HitboxPriority::Head;  out[2] = HitboxPriority::Limbs; break;
+            case HitboxPriority::Limbs: out[0] = HitboxPriority::Limbs; out[1] = HitboxPriority::Chest; out[2] = HitboxPriority::Head;  break;
+            default:                    out[0] = HitboxPriority::Head;  out[1] = HitboxPriority::Chest; out[2] = HitboxPriority::Limbs; break;
+        }
+    }
+
+    // ---- Weapon readiness -------------------------------------------------
+    // All of these sit on the same object the scan already holds (a Weapon*):
+    //   Weapon.AmmoCanFire()           0x50EB73C  dump 739774
+    //   Weapon.get_ClipAmmoCount()     0x50EC614  dump 739204
+    //   Weapon.CanFire()               0x5126CC4  dump 740581
+    //   Weapon.InSwitchWeaponState()   0x512724C  dump 740662
+    //   Weapon.HasSwitchingState()     0x5124C70  dump 740707
+    // CanFire() is the game's own gate (it covers reloading, overheat, bolt
+    // cycling, fire-mode transitions and the fire interval). Its base
+    // implementation is the one every normal gun uses - only WeaponDualWield,
+    // WeaponBoxing, the turrets, the sentry gun and the helicopter override it.
+    // Every call FAILS OPEN on a missing symbol: an unresolved address must
+    // never be the reason a legitimate shot is dropped.
+    inline bool A_FireWeaponSwitching(void *weapon)
     {
         if (!Tools::IsPtrValid(weapon)) return false;
+        if (fn_WeaponInSwitchWeaponState != nullptr && fn_WeaponInSwitchWeaponState(weapon)) return true;
+        if (fn_WeaponHasSwitchingState  != nullptr && fn_WeaponHasSwitchingState(weapon))  return true;
+        return false;
+    }
 
-        static auto ammoCanFire = (bool (*)(void *))UnityRva(RVA::AmmoCanFire);
-        if (ammoCanFire != nullptr && !ammoCanFire(weapon)) return false;
-
-        static auto getClip = (int (*)(void *))UnityRva(RVA::Weapon_get_ClipAmmoCount);
-        if (getClip != nullptr && getClip(weapon) <= 0) return false;
-
+    inline bool A_FireWeaponHasAmmo(void *weapon)
+    {
+        if (!Tools::IsPtrValid(weapon)) return false;
+        if (fn_WeaponAmmoCanFire != nullptr && !fn_WeaponAmmoCanFire(weapon)) return false;
+        if (fn_WeaponGetClipAmmoCount != nullptr && fn_WeaponGetClipAmmoCount(weapon) <= 0) return false;
         return true;
     }
 
-    // Is the weapon's current spread small enough to fire? Uses
-    // Weapon.get_ShotSpreadSize @0x5109B68 (the only spread getter in the dump).
-    // FAIL-OPEN on purpose: no getter / NaN / nonsense value all mean "fire".
-    inline bool IsShotAccurate(void *weapon, float maxAllowedSpread = 2.0f)
+    inline bool A_FireWeaponCanFire(void *weapon)
     {
-        if (!Tools::IsPtrValid(weapon)) return true;
+        if (!Tools::IsPtrValid(weapon)) return false;
+        if (fn_WeaponCanFire == nullptr) return true;      // unknown -> never block
+        return fn_WeaponCanFire(weapon);
+    }
+
+    // The weapon's own fire interval, in seconds
+    // (Weapon.RealFireInterval 0x50EC250 dump 739186, Weapon.get_FireInterval
+    // 0x5105C74 dump 740026). Used as the trigger's re-press pacing, so the
+    // triggerbot never hammers StartFire faster than the gun can shoot.
+    inline float A_FireWeaponInterval(void *weapon)
+    {
+        float interval = 0.0f;
+        if (fn_WeaponRealFireInterval != nullptr && Tools::IsPtrValid(weapon)) {
+            const float v = fn_WeaponRealFireInterval(weapon);
+            if (v > 0.0f && v < 10.0f) interval = v;
+        }
+        if (interval <= 0.0f) {
+            static auto getFireInterval = (float (*)(void *))UnityRva(RVA::Weapon_get_FireInterval);
+            if (getFireInterval != nullptr && Tools::IsPtrValid(weapon)) {
+                const float v = getFireInterval(weapon);
+                if (v > 0.0f && v < 10.0f) interval = v;
+            }
+        }
+        if (!(interval > 0.0f)) interval = A_FireTune::kMinFireInterval;
+        if (interval < A_FireTune::kMinFireInterval) interval = A_FireTune::kMinFireInterval;
+        return interval;
+    }
+
+    // A pawn is alive if the field says so (the offset the whole project already
+    // reads) or, failing that, if the game's own Pawn.get_IsAlive() 0x51B7C40
+    // says so. Two independent answers, and only "dead" from BOTH blocks a shot.
+    inline bool A_FirePawnAlive(Pawn *pawn)
+    {
+        if (!Tools::IsPtrValid((void *)pawn)) return false;
+        if (((Pawn *)pawn)->m_IsAlive()) return true;
+        if (fn_PawnIsAlive != nullptr && fn_PawnIsAlive(pawn)) return true;
+        return false;
+    }
+
+    // ---- Spread / lead containment ---------------------------------------
+    // Will the bullet still land on the hitbox?
+    // The bullet leaves along the crosshair, the target keeps moving while the
+    // bullet flies, and the weapon's spread opens a cone around that line. All
+    // of it is compared in one unit - pixels at the crosshair - using the camera's
+    // focal length from get_fieldOfView:
+    //     hitboxPx = hitboxRadius (m) * focalPx / distance   (how big the hitbox is)
+    //     spreadPx = tan(ShotSpreadSize) * focalPx           (how wide the cone is)
+    //     missPx   = px distance from the crosshair to the PREDICTED point
+    // The shot goes out while missPx <= max(zonePx, hitboxPx) + spreadPx:
+    //   - zonePx is the user's Radius slider, i.e. how much aim error is allowed
+    //     by choice; the physics test never becomes STRICTER than that slider
+    //     (at long range a 1 px hitbox would otherwise veto shots the user aimed),
+    //     and it becomes LOOSER when the hitbox is bigger than the slider zone
+    //     (point blank the head covers far more than the zone).
+    //   - spreadPx adds the weapon's own cone, so a shot that the spread alone
+    //     would throw off the hitbox is not taken.
+    //   - the LEAD lands here too: missPx is the PREDICTED point, so a crosshair
+    //     left on where the target WAS is rejected instead of fired at.
+    inline bool A_FireShotWouldLand(float missPx, float zonePx, float hitboxPx, float spreadPx)
+    {
+        if (!(missPx >= 0.0f)) return true;          // no answer -> do not block
+        float allowed = hitboxPx > zonePx ? hitboxPx : zonePx;
+        if (allowed < 1.0f) allowed = 1.0f;          // degenerate distance/px scale
+        if (spreadPx > 0.0f && spreadPx < 40000.0f) allowed += spreadPx;
+        return missPx <= allowed;
+    }
+
+    // Spread cone radius in pixels at the crosshair.
+    // Weapon.get_ShotSpreadSize 0x5109B68 (dump 739732) is the only spread getter
+    // in this dump. Its unit is not documented, so it is read as degrees and any
+    // absurd value disables the spread part (fail-open): a wrong unit must not be
+    // able to stop the trigger.
+    inline float A_FireSpreadPx(void *weapon, float focalPx, bool checkSpread)
+    {
+        if (!checkSpread) return 0.0f;
+        if (!Tools::IsPtrValid(weapon) || !(focalPx > 0.0f)) return 0.0f;
         static auto getSpread = (float (*)(void *))UnityRva(RVA::Weapon_get_ShotSpreadSize);
-        if (getSpread == nullptr) return true;
+        if (getSpread == nullptr) return 0.0f;
         const float spread = getSpread(weapon);
-        if (!(spread >= 0.0f) || spread > 90.0f) return true;   // NaN / nonsense units
-        return spread <= maxAllowedSpread;
+        if (!(spread >= 0.0f) || spread > 45.0f) return 0.0f;   // NaN / not degrees
+        return tanf(spread * A_FireTune::kDegToRad) * focalPx;
     }
 
-    // Get hitbox world position for a pawn
-    inline Vector3 GetHitboxPosition(void *pawn, HitboxPriority hitbox)
+    // ---- Friendly in the line of fire ------------------------------------
+    // The bullet flies along camera -> aim point. Any living TEAMMATE (from
+    // BaseGame.GetTeamPawns() 0x9CAFEB4, dump 702853) whose body is within
+    // kFriendlyRadius of that line and closer than the target would take the
+    // bullet. Pure geometry, so it also catches the teammate the raycast misses
+    // but the spread cone would hit.
+    inline bool A_FireFriendlyInLine(Pawn *localPawn, const Vector3 &camPos,
+                                     const Vector3 &dir, float targetDist,
+                                     int *friendsSeen = nullptr)
     {
-        if (!Tools::IsPtrValid(pawn)) return Vector3::zero();
-        
-        switch (hitbox) {
-            case HitboxPriority::Head: {
-                Transform *headBone = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
-                if (Tools::IsPtrValid((void *)headBone)) {
-                    return headBone->get_position();
-                }
-                break;
-            }
-            case HitboxPriority::Chest: {
-                // Try mesh root (body center)
-                Transform *mesh = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
-                if (Tools::IsPtrValid((void *)mesh)) {
-                    return mesh->get_position();
-                }
-                break;
-            }
-            case HitboxPriority::Limbs: {
-                // Use LastPawnPos as fallback for limbs (fn resolved once -
-                // UnityRva() here re-scanned /proc/self/maps per hitbox per
-                // candidate = the Laggy "Any" hitbox setting).
-                static auto getLastPos = (Vector3 (*)(void *))UnityRva(RVA::Pawn_get_LastPawnPos);
-                if (getLastPos) {
-                    return getLastPos(pawn);
-                }
-                break;
-            }
-            case HitboxPriority::Any:
-            default: {
-                // Try head first, then body
-                Transform *headBone = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
-                if (Tools::IsPtrValid((void *)headBone)) {
-                    return headBone->get_position();
-                }
-                Transform *mesh = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
-                if (Tools::IsPtrValid((void *)mesh)) {
-                    return mesh->get_position();
-                }
-                break;
-            }
-        }
-        return Vector3::zero();
-    }
+        if (friendsSeen != nullptr) *friendsSeen = 0;
+        if (fn_BaseGameGetTeamPawns == nullptr || fn_GameGetMatchGame == nullptr) return false;
 
-    // Check which hitbox is under crosshair
-    inline HitboxPriority GetHitboxUnderCrosshair(void *pawn, const Vector3 &camPos, const Vector3 &crosshairDir, float radius)
-    {
-        if (!Tools::IsPtrValid(pawn)) return HitboxPriority::Any;
-        
-        // Check head hitbox
-        Transform *headBone = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
-        if (Tools::IsPtrValid((void *)headBone)) {
-            Vector3 headPos = headBone->get_position();
-            Vector3 toHead = headPos - camPos;
-            float dist = sqrtf(toHead.x * toHead.x + toHead.y * toHead.y + toHead.z * toHead.z);
-            if (dist > 0.0001f) {
-                Vector3 dir = toHead / dist;
-                float dot = crosshairDir.x * dir.x + crosshairDir.y * dir.y + crosshairDir.z * dir.z;
-                // If dot product is close to 1, head is in crosshair
-                if (dot > 0.999f) return HitboxPriority::Head; // ~2.5 degrees
+        void *game = fn_GameGetMatchGame();
+        if (!Tools::IsPtrValid(game)) return false;
+        List<Pawn *> *team = (List<Pawn *> *)fn_BaseGameGetTeamPawns(game);
+        if (!Tools::IsPtrValid((void *)team)) return false;
+        Pawn **items = (Pawn **)team->getItems();
+        const int count = team->getSize();
+        if (!Tools::IsPtrValid((void *)items) || count <= 0 || count > 128) return false;
+
+        for (int i = 0; i < count; i++) {
+            Pawn *mate = items[i];
+            if (!Tools::IsPtrValid((void *)mate)) continue;
+            if (mate == localPawn) continue;
+            if (!A_FirePawnAlive(mate)) continue;
+            if (friendsSeen != nullptr) (*friendsSeen)++;
+
+            Transform *t = mate->get_transform();
+            if (!Tools::IsPtrValid((void *)t)) continue;
+            const Vector3 pos = t->get_position();
+
+            // Two probes per teammate, because m_Mesh/parent transform sits at the
+            // FEET: one at the origin and one at chest height. A teammate in front
+            // of the muzzle is normally only in the bullet path at chest height.
+            const Vector3 probe[2] = { pos, Vector3(pos.x, pos.y + 1.15f, pos.z) };
+            for (int k = 0; k < 2; k++) {
+                const Vector3 to(probe[k].x - camPos.x, probe[k].y - camPos.y, probe[k].z - camPos.z);
+                const float dist = Vector3::Magnitude(to);
+                if (dist < 0.2f || dist >= targetDist) continue;  // behind the target -> harmless
+
+                // Lateral (perpendicular) distance from that point to the shot ray.
+                const float along = Vector3::Dot(to, dir);
+                const Vector3 lat(to.x - dir.x * along, to.y - dir.y * along, to.z - dir.z * along);
+                const float lateral = Vector3::Magnitude(lat);
+
+                if (lateral <= A_FireTune::kFriendlyRadius) return true;
             }
         }
-        
-        // Check body hitbox
-        Transform *mesh = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
-        if (Tools::IsPtrValid((void *)mesh)) {
-            Vector3 bodyPos = mesh->get_position();
-            Vector3 toBody = bodyPos - camPos;
-            float dist = sqrtf(toBody.x * toBody.x + toBody.y * toBody.y + toBody.z * toBody.z);
-            if (dist > 0.0001f) {
-                Vector3 dir = toBody / dist;
-                float dot = crosshairDir.x * dir.x + crosshairDir.y * dir.y + crosshairDir.z * dir.z;
-                if (dot > 0.999f) return HitboxPriority::Chest;
-            }
-        }
-        
-        return HitboxPriority::Limbs;
+        return false;
     }
 
     // =====================================================================
@@ -601,36 +946,13 @@ namespace NewFeatures
     //  !! join.  List<Pawn*>::getItems() returns the real element array.
     // =====================================================================
 
-    // Function pointers. The per-class pawn tick overrides are the heartbeat
-    // (see the header note); StartFire/StopFire are called through raw pointers,
-    // never hooked.
-    // fn_* are resolved once at install time - getAbsoluteAddress() re-opens
-    // and regex-scans /proc/self/maps on EVERY call, so resolving them per scan
-    // was the single biggest cost of the triggerbot loop.
-    inline void (*orig_Weapon_Tick)(void *, float) = nullptr;
-    inline void (*orig_Pawn_Tick)(void *, float) = nullptr;
-    inline void (*orig_PlayerPawn_Tick)(void *, float) = nullptr;
-    inline void (*orig_MPPawn_Tick)(void *, float) = nullptr;
-    inline void (*orig_BRPlayerPawn_Tick)(void *, float) = nullptr;
-    inline void (*orig_DMZPlayerPawn_Tick)(void *, float) = nullptr;
-    inline void (*orig_PVEPlayerPawn_Tick)(void *, float) = nullptr;
-    inline void (*orig_OpenWorldPlayerPawn_Tick)(void *, float) = nullptr;
-    inline void (*orig_BRGroundWarPlayerPawn_Tick)(void *, float) = nullptr;
-    inline void (*fn_Weapon_StartFire)(void *) = nullptr;
-    inline void (*fn_Weapon_StopFire)(void *, bool) = nullptr;
-    inline Vector3 (*fn_WorldToScreen)(void *, Vector3) = nullptr;  // 1-arg overload
-    inline bool (*fn_PhysicsRaycastLOS)(Vector3, Vector3, float, void *) = nullptr;
-    inline void *(*fn_CameraGetMain)() = nullptr;
-    inline bool (*fn_PawnRecentlyRendered)(void *) = nullptr;
-    inline bool (*fn_PawnLastOccVisible)(void *) = nullptr;
-    inline bool (*fn_PawnIsAiming)(void *) = nullptr;
-    inline bool (*fn_PawnGetIsFiring)(void *) = nullptr;
-
     // State - game thread only.
     inline bool     g_afireHoldingFire       = false;
     inline void    *g_afireFiringOn          = nullptr;
     inline double   g_afireLastPressTime     = -1000.0;
     inline double   g_afireLastEvalTime      = -1000.0;
+    inline void    *g_afireTargetPawn       = nullptr; // the pawn the trigger is currently on
+
     inline bool     g_afireInTick            = false;   // re-entrancy guard
     inline std::atomic<bool> g_afireLosOk             = false;   // last scan: target has LOS (game wb / render read)
     inline bool     g_testFireRequest        = false;   // set by the menu (render thread)
@@ -658,6 +980,25 @@ namespace NewFeatures
         void  *heldWeapon;
         void  *matchGame;
         int    testFireStatus;  // 0 idle, 1 fired, 2 no pawn, 3 no weapon,
+        // ---- ShouldFire tree (see FireBlock) -----------------------------
+        int    blockCount[(int)FireBlock::Count];  // lifetime counter per FireBlock reason
+        int    lastBlock;       // FireBlock of the most recent scan
+        int    candidates;      // enemies inside the crosshair zone, last scan
+        int    losChecked;      // candidates that got a visibility ray, last scan
+        int    friendsInLine;   // teammates that blocked a shot, last scan
+        bool   ammoOk;          // Weapon.AmmoCanFire()/get_ClipAmmoCount() verdict
+        bool   canFire;         // Weapon.CanFire() verdict
+        float  focalPx;         // Camera.get_fieldOfView() -> focal length in px
+        float  lastAimPx;       // px crosshair -> chosen aim point
+        float  lastPredPx;      // px crosshair -> lead point
+        float  lastHitboxPx;    // hitbox half width in px at that distance
+        float  lastSpreadPx;    // spread cone radius in px
+        float  lastTravel;      // bullet travel time (s)
+        float  lastWorldDist;   // camera -> aim point (m)
+        float  lastBulletSpeed; // m/s (assumed speed if speedKnown is false)
+        unsigned aimingTarget;  // Weapon.get_AimingTarget() - the game's own answer
+        float  aimingTargetDis; // Weapon.get_CurrentAimingTargetDis()
+
                                 // 4 no StartFire ptr, 5 pointers ok / no heartbeat
     };
     inline TriggerbotDiag g_triggerDiag{};
@@ -700,312 +1041,424 @@ namespace NewFeatures
                ((Pawn *)localPawn)->m_IsAlive();
     }
 
-    // ---- Line of sight (the V3 wall check, for this build's exact layout) ---
-    // Physics.Raycast(out RaycastHit)  @0x506C1E4  - the plain 2-arg overload,
-    // END of the overload list after the 4-arg bool-returning one (dump.cs:
-    // 267226..267244). Cast per CANDIDATE inside the scan: its result only
-    // decides whether a pawn inside the zone is shootable, it cannot widen the
-    // candidate set, so total cast count is unchanged and the cost stays one
-    // ray per candidate (usually 0-1, hard cap below).
+    // Record why the last scan did (not) fire. Lifetime counters per reason plus
+    // the last one, which the menu prints live - "why did it not shoot" is
+    // answered by the feature itself instead of by guessing.
+    inline void A_FireReportBlock(FireBlock b)
+    {
+        TriggerbotDiag &d = g_triggerDiag;
+        const int idx = (int)b;
+        d.lastBlock = idx;
+        if (idx >= 0 && idx < (int)FireBlock::Count) d.blockCount[idx]++;
+    }
+
+
+    // =====================================================================
+    //  TARGET + SHOT VALIDATION
+    // =====================================================================
+
+    // Everything the fire path knows about the pawn it is about to shoot.
+    struct TriggerTarget
+    {
+        Pawn          *pawn = nullptr;
+        A_FireAimPoint aim;                  // the validated aim point + hitbox
+        Vector3        aimPoint;             // == aim.pos (kept for older call sites)
+        Vector3        screenPos;            // aim point in screen space
+        float          pxOffset = -1.0f;     // px from the crosshair to the aim point
+        float          worldDist = 0.0f;     // m, camera -> aim point
+        float          travelTime = 0.0f;    // s, bullet travel time
+        Vector3        predicted;            // aim point + velocity * travelTime
+        float          predPxOffset = -1.0f; // px from the crosshair to the predicted point
+        float          hitboxPx = 0.0f;      // hitbox half width at that distance, in px
+        float          spreadPx = 0.0f;      // spread cone radius, in px
+        float          focalPx = 0.0f;       // camera focal length used (px)
+        float          bulletSpeed = 0.0f;   // m/s
+        bool           speedKnown = false;   // the game answered the bullet speed
+        bool           leadUsed = false;     // the predicted point was used
+        HitboxPriority hitbox = HitboxPriority::Any;
+    };
+
+    // ---- Line of sight ---------------------------------------------------
+    // Physics.Raycast(Vector3 origin, Vector3 direction, out RaycastHit) at
+    // 0x506C1E4 - dump.cs 173932, the THREE-argument overload on the Physics
+    // class (0x506BEA8 and 0x506C188 are the maxDistance/layerMask variants).
     //
-    // RaycastHit struct layout at dump.cs line 268905 (TypeDefIndex 1838):
+    // It takes NO maxDistance, so the ray always runs to infinity and the first
+    // hit can legitimately be a wall far BEHIND the target. That is why the old
+    // "-2 = malformed" rule was wrong: it turned every "wall behind the enemy"
+    // into "no line of sight" and the trigger refused perfectly good shots.
+    // The only correct reading of this call is:
+    //     no hit            -> the ray hit nothing at all            -> clear
+    //     hit >= dist-slack -> the first thing on the path is the target
+    //                          itself (or something past it)        -> clear
+    //     hit <  dist-slack -> geometry before the aim point         -> blocked
+    //     unreadable struct -> unknown                               -> blocked
+    //
+    // RaycastHit layout, dump.cs 175618 (TypeDefIndex 1838):
     //   m_Point Vector3 @0x00, m_Normal @0x0C, m_FaceID int @0x18,
     //   m_Distance float @0x1C, m_UV @0x20, m_Collider @0x28
-    // NOTE: V3 read the distance at +0x20; THIS build has it at 0x1C. Reading
-    // a stale-struct offset returns m_UV as "distance" - fail-closed, but wrong.
+    // V3 read the distance at +0x20; THIS build has it at 0x1C.
     constexpr size_t AF_RAYHIT_SIZE    = 0x30;   // up to m_Collider @0x28 + pad
     constexpr size_t AF_RAYHIT_DISTOFF = 0x1C;   // m_Distance for THIS build
 
-
-
-    // Returns the first-hit distance for origin->dir, -1 when clear, -2 on
-    // failure/malformed (fail-closed: the caller treats that as "blocked").
-    inline float A_FireRaycastDistance(const Vector3 &origin, const Vector3 &dir, float maxDist)
+    // First-hit distance along origin->dir; -1 when the ray hit nothing at all,
+    // -2 when the query could not answer (no symbol / unrecognisable struct).
+    inline float A_FireRaycastDistance(const Vector3 &origin, const Vector3 &dir)
     {
         unsigned char hitBuf[AF_RAYHIT_SIZE];
         memset(hitBuf, 0, sizeof hitBuf);
-        bool hit;
+        if (fn_PhysicsRaycastLOS == nullptr) return -2.0f;   // no ray -> fail closed
 
-        if (fn_PhysicsRaycastLOS != nullptr) {
-            hit = fn_PhysicsRaycastLOS(origin, dir, maxDist, hitBuf);
-        } else {
-            return -2.0f;                                   // no raycast -> fail closed
-        }
-
-        if (!hit) return -1.0f;                             // clear line
-        const float d = *(const float *)(hitBuf + AF_RAYHIT_DISTOFF);
-        if (!(d >= 0.0f) || !(d <= maxDist + 0.5f)) return -2.0f;  // malformed -> blocked
-        return d;
+        // The 3rd argument (a float in an FP register) is never read by the
+        // callee; the out-struct pointer still lands in x0 because both Vector3
+        // arguments are HFAs and travel in the FP registers. Call shape is
+        // unchanged from the build that already casts successfully in game.
+        const bool hit = fn_PhysicsRaycastLOS(origin, dir, 0.0f, hitBuf);
+        if (!hit) return -1.0f;
+        const float dd = *(const float *)(hitBuf + AF_RAYHIT_DISTOFF);
+        if (!(dd >= 0.0f) || !(dd <= 100000.0f)) return -2.0f;
+        return dd;
     }
 
-    // True when the ray from the camera to the target position is NOT stopped
-    // by geometry before reaching it (0.35 m slack for skin/collider width).
-    inline bool A_FireHasLineOfSight(const Vector3 &camPos, const Vector3 &targetPos)
+    // Is the straight line from `from` to `to` free of geometry? `to` is an aim
+    // point INSIDE the target, so a first hit within kRaySlack of that distance
+    // means the bullet reaches it (the ray enters the collider it was aimed at
+    // slightly BEFORE the bone it is aimed at).
+    inline bool A_FireLineClear(const Vector3 &from, const Vector3 &to)
     {
-        Vector3 to = targetPos - camPos;
-        const float dist = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
-        if (dist < 0.01f) return true;
-        const float inv = 1.0f / dist;
-        const Vector3 dir(to.x * inv, to.y * inv, to.z * inv);
-        const float hitDist = A_FireRaycastDistance(camPos, dir, dist);
-        return hitDist < 0.0f || hitDist >= dist - 0.35f;
+        Vector3 d(to.x - from.x, to.y - from.y, to.z - from.z);
+        const float dist = Vector3::Magnitude(d);
+        if (!(dist >= 0.01f)) return true;                   // same spot
+        const Vector3 dir(d.x / dist, d.y / dist, d.z / dist);
+        const float hitDist = A_FireRaycastDistance(from, dir);
+        if (hitDist < -1.5f) return false;                   // unknown -> blocked
+        if (hitDist <  0.0f) return true;                    // ray hit nothing -> clear
+        return hitDist >= dist - A_FireTune::kRaySlack;       // reached / passed the aim point
     }
 
-    // Nearest live enemy whose hitbox projects inside the crosshair zone,
-    // is in front of the camera, and has LOS. Returns 0 when there is none.
-    // Enhanced with hitbox detection, bullet travel time prediction, and target leading.
-    inline TriggerTarget A_FireFindTargetEnhanced()
+    // =====================================================================
+    //  THE SCAN (target acquisition + shot validation)
+    //
+    //  Returns FireBlock::Fired with `out` filled, or the one reason the shot
+    //  was refused. Candidates are checked nearest-to-crosshair first, so the
+    //  pawn under the crosshair is the one that gets the ray budget.
+    // =====================================================================
+    inline FireBlock A_FireScan(Pawn *localPawn, Weapon *weapon, TriggerTarget &out)
     {
         TriggerbotDiag &d = g_triggerDiag;
-        d.enemyCount = 0;
-        d.closestPx  = -1.0f;
+        out = TriggerTarget{};
+        g_afireLosOk = false;
         d.losBlockedScan = 0;
-        
-        TriggerTarget result{};
-        
-        // MatchGame gate removed: BaseGame::EnemyPawns() (0x9CAFE38, dump
-        // 702849, PawnList : List<object>) exists on the base class and is what
-        // DrawESP already uses via get_MatchGame - rejecting a valid BaseGame
-        // only made "Match=0x0" kills the scan whenever the match object isn't
-        // a MatchGame. Accept any valid BaseGame instead.
-        BaseGame *baseGame = GamePlay::get_MatchGame();
-        d.matchGame = (void *)baseGame;
-        if (!Tools::IsPtrValid((void *)baseGame)) return result;
-        
+        d.enemyCount = 0;
+        d.closestPx = -1.0f;
+        d.candidates = 0;
+        d.losChecked = 0;
+        d.friendsInLine = 0;
+        d.lastAimPx = -1.0f;
+        d.lastPredPx = -1.0f;
+        d.lastHitboxPx = 0.0f;
+        d.lastSpreadPx = 0.0f;
+        d.lastTravel = 0.0f;
+        d.lastWorldDist = 0.0f;
+        d.lastBulletSpeed = 0.0f;
+
+        BaseGame *game = (BaseGame *)fn_GameGetMatchGame();
+        if (!Tools::IsPtrValid((void *)game)) return FireBlock::NoMatch;
+
         Camera *cam = Camera::get_main();
-        if (!Tools::IsPtrValid((void *)cam)) return result;
-        
-        List<Pawn *> *enemyPawns = baseGame->EnemyPawns();
-        if (!Tools::IsPtrValid((void *)enemyPawns)) return result;
-        
+        if (!Tools::IsPtrValid((void *)cam)) return FireBlock::NoMatch;
+        Transform *camTransform = cam->get_transform();
+        if (!Tools::IsPtrValid((void *)camTransform)) return FireBlock::NoMatch;
+        const Vector3 camPos = camTransform->get_position();
+
+        // The game's OWN aim answers (Weapon.get_AimingTarget 0x510EAAC,
+        // Weapon.get_CurrentAimingTargetDis 0x510EABC - dump 739828 / 739834).
+        // Read-only diagnostics + a tie-break: the pawn the game itself has
+        // locked is preferred when two candidates sit at the same pixel.
+        void *aimTarget = nullptr;
+        if (fn_WeaponGetAimingTarget != nullptr && Tools::IsPtrValid(weapon)) {
+            aimTarget = fn_WeaponGetAimingTarget(weapon);
+            d.aimingTarget = (unsigned)(uintptr_t)aimTarget;
+            d.aimingTargetDis = (fn_WeaponGetAimingTargetDis != nullptr && aimTarget != nullptr)
+                              ? fn_WeaponGetAimingTargetDis(weapon) : 0.0f;
+        } else {
+            d.aimingTarget = 0;
+            d.aimingTargetDis = 0.0f;
+        }
+
+        List<Pawn *> *enemyPawns = game->EnemyPawns();
+        if (!Tools::IsPtrValid((void *)enemyPawns)) return FireBlock::NoEnemyInZone;
         Pawn **items = (Pawn **)enemyPawns->getItems();
         const int count = enemyPawns->getSize();
         d.enemyCount = count;
-        if (!Tools::IsPtrValid((void *)items) || count <= 0 || count > 1024) return result;
-        
+        if (!Tools::IsPtrValid((void *)items) || count <= 0 || count > 1024)
+            return FireBlock::NoEnemyInZone;
+
         const float cx = (float)get_width()  * 0.5f;
         const float cy = (float)get_height() * 0.5f;
         const float radius = A_FireCrosshairRadiusPx();
         const float radiusSq = radius * radius;
         d.radiusPx = radius;
-        
-        auto worldToScreen = fn_WorldToScreen;
-        auto camPos = cam->get_transform()->get_position();
-        
-        // Get local pawn and weapon for bullet speed
-        Pawn *localPawn = GamePlay::get_LocalPawn();
-        Weapon *held = nullptr;
-        float bulletSpeed = 800.0f;
-        FireMode fireMode = FireMode::Auto;
-        
-        if (Tools::IsPtrValid(localPawn)) {
-            held = localPawn->get_CurrentWeapon();
-            if (Tools::IsPtrValid(held)) {
-                bulletSpeed = GetWeaponBulletSpeed(held);
-                fireMode = GetWeaponFireMode(held);
-            }
-        }
-        
-        // Hitbox priority from config
-        HitboxPriority hitboxPriority = (HitboxPriority)Config.NewFeaturesMenu.TriggerbotHitboxPriority;
-        bool enableLeading = Config.NewFeaturesMenu.TriggerbotLeadTarget;
-        bool checkSpread = Config.NewFeaturesMenu.TriggerbotCheckSpread;
-        
-        // ---- Phase 1: collect all valid enemies with hitbox info ----
-        constexpr int MAX_CANDIDATES = 16;
-        struct Candidate { 
-            Pawn *pawn; 
-            float dist2; 
-            Vector3 aimPoint;
-            Vector3 screenPos;
-            float worldDist;
-            HitboxPriority hitbox;
-            Vector3 velocity;
-        };
-        Candidate candidates[MAX_CANDIDATES];
-        int nCandidates = 0;
-        
+
+        const HitboxPriority want = (HitboxPriority)Config.NewFeaturesMenu.TriggerbotHitboxPriority;
+        const float focalPx = A_FireFocalPx();
+        d.focalPx = focalPx;
+
+        // ---- 1. every valid enemy whose hitbox projects into the zone ----
+        constexpr int MAX_CANDIDATES = 12;
+        A_FireCandidate cands[MAX_CANDIDATES];
+        int n = 0;
+
         for (int i = 0; i < count; i++) {
-            Pawn *pawn = items[i];
-            if (!Tools::IsPtrValid((void *)pawn)) continue;
-            if (!pawn->m_IsAlive()) continue;
-            
-            // Team check: RejectNearCamp is FALSE here - IsSameCamp() is a
-            // hostile-camp test (it returns true for any enemy hostiles), not a
-            // team check, so short-circuiting on it silently ignored every PVE
-            // bot in the EnemyPawns list. Bots only get the team gate.
-            if (IsSameTeamAcceptBots(localPawn, pawn)) continue;
-            
-            // Check each hitbox based on priority
-            float bestD2 = -1.0f;
-            Vector3 bestAim;
-            Vector3 bestScreen;
-            float bestWorldDist = 0.0f;
-            HitboxPriority bestHitbox = HitboxPriority::Any;
-            Vector3 pawnVelocity = GetPawnVelocity(pawn);
-            
-            // Check hitboxes in priority order
-            const HitboxPriority hitboxes[] = {HitboxPriority::Head, HitboxPriority::Chest, HitboxPriority::Limbs};
-            for (HitboxPriority hb : hitboxes) {
-                // Skip if not matching priority filter
-                if (hitboxPriority != HitboxPriority::Any && hb != hitboxPriority) continue;
-                
-                Vector3 hitboxPos = GetHitboxPosition(pawn, hb);
-                if (hitboxPos == Vector3::zero()) continue;
-                
-                const Vector3 sc = worldToScreen(cam, hitboxPos);
-                if (sc.z <= 0.0f) continue; // Behind camera
-                
+            Pawn *p = items[i];
+            if (!Tools::IsPtrValid((void *)p)) continue;
+            if (p == localPawn) continue;                        // never shoot yourself
+            if (IsSameTeamAcceptBots(localPawn, p)) continue;     // team id is the gate
+            if (!A_FirePawnAlive(p)) continue;                    // dead / downed / still ragdolling
+
+            // Walk the hitboxes in the user's order and stop at the first one that
+            // is under the crosshair: that answers "which hitbox would this shot
+            // hit" without a hitbox-enumeration API (this dump has none).
+            HitboxPriority order[3];
+            A_FireHitboxOrder(want, order);
+
+            A_FireAimPoint ap{};
+            float pxOffset = -1.0f;
+            for (int k = 0; k < 3 && !ap.valid; k++) {
+                const A_FireAimPoint cand = A_FireAimPointFor(p, order[k]);
+                if (!cand.valid) continue;
+                const Vector3 sc = fn_WorldToScreen(cam, cand.pos);
+                if (!(sc.z > 0.0f)) continue;                     // behind the camera
                 const float dx = sc.x - cx;
                 const float dy = sc.y - cy;
-                float d2 = dx * dx + dy * dy;
-                
-                if (d2 < 0.0f) continue;
-                if (d2 > radiusSq) continue; // Outside crosshair zone
-                
-                float worldDist = Vector3::Distance(camPos, hitboxPos);
-                
-                if (bestD2 < 0.0f || d2 < bestD2) {
-                    bestD2 = d2;
-                    bestAim = hitboxPos;
-                    bestScreen = sc;
-                    bestWorldDist = worldDist;
-                    bestHitbox = hb;
-                }
+                const float d2 = dx * dx + dy * dy;
+                if (!(d2 >= 0.0f)) continue;
+                if (d.closestPx < 0.0f || d2 < d.closestPx) d.closestPx = d2;   // "how close did anything get"
+                if (d2 > radiusSq) continue;                      // this hitbox is not under the crosshair
+                ap = cand;
+                pxOffset = sqrtf(d2);
             }
-            
-            if (bestD2 < 0.0f) continue;
-            
-            if (d.closestPx < 0.0f || bestD2 < d.closestPx) d.closestPx = bestD2;
-            
-            if (nCandidates < MAX_CANDIDATES) {
-                candidates[nCandidates] = {
-                    pawn, bestD2, bestAim, bestScreen, bestWorldDist, bestHitbox, pawnVelocity
-                };
-                nCandidates++;
-            }
+            if (!ap.valid) continue;                              // nothing of this pawn is under the crosshair
+            if (n >= MAX_CANDIDATES) continue;
+
+            cands[n].pawn      = p;
+            cands[n].aim       = ap;
+            cands[n].pxOffset  = pxOffset;
+            cands[n].worldDist = Vector3::Distance(camPos, ap.pos);
+            cands[n].velocity  = GetPawnVelocity(p);
+            n++;
         }
-        
-        // ---- Phase 2: LOS check and travel time calculation for candidates ----
-        // Spread and readiness do not depend on WHICH candidate - evaluate both
-        // once here instead of once per candidate (and both helpers take the
-        // Weapon*, not a fire-component pointer).
-        const bool shotAccurate = !checkSpread || IsShotAccurate(held);
-        const bool weaponReady  = IsWeaponReadyToFire(held);
+        d.candidates = n;
+        if (n <= 0) return FireBlock::NoEnemyInZone;
 
-        // HARD per-scan budgets: the crash report hit 525 blocked + 1,066
-        // raycasts in ONE scan when sixteen pawns crowded the crosshair zone.
-        // Cap candidates first, then raycasts; once either is exhausted the
-        // closest candidates (sorted below) have already been checked.
-        constexpr int   MAX_LOS_CANDIDATES = 6;   // visibility checks per scan
-        constexpr int   MAX_RAYCASTS_SCAN  = 12;  // physics queries per scan (incl. leading re-check)
-        int losChecked = 0;
-        int raycastsThisScan = 0;
-
-        // Raycast budget belongs to the CLOSEST crosshair candidates first:
-        // process in ascending screen-distance order and stop when the best
-        // possible candidate is already found/checked.
+        // ---- 2. nearest to the crosshair first, the game's own aim target
+        //         winning a near-tie (0.5 px) -------------------------------
         int order[MAX_CANDIDATES];
-        for (int i = 0; i < nCandidates; i++) order[i] = i;
-        for (int i = 1; i < nCandidates; i++) {
-            int oi = order[i];
+        for (int i = 0; i < n; i++) order[i] = i;
+        for (int i = 1; i < n; i++) {
+            const int oi = order[i];
+            float keyI = cands[oi].pxOffset;
+            if (aimTarget != nullptr && (void *)cands[oi].pawn == aimTarget) keyI -= 0.5f;
             int j = i - 1;
-            while (j >= 0 && candidates[order[j]].dist2 > candidates[oi].dist2) {
+            while (j >= 0) {
+                const int oj = order[j];
+                float keyJ = cands[oj].pxOffset;
+                if (aimTarget != nullptr && (void *)cands[oj].pawn == aimTarget) keyJ -= 0.5f;
+                if (keyJ <= keyI) break;
                 order[j + 1] = order[j];
                 j--;
             }
             order[j + 1] = oi;
         }
 
-        TriggerTarget bestTarget{};
-        float bestDist2 = radiusSq + 1.0f;
-        bool budgetExhausted = false;
-        
-        for (int oi = 0; oi < nCandidates; oi++) {
-            const int c = order[oi];
-            if (losChecked >= MAX_LOS_CANDIDATES || raycastsThisScan >= MAX_RAYCASTS_SCAN) {
-                budgetExhausted = true;
-                break;
-            }
-            Pawn *cp = candidates[c].pawn;
-            bool visible = false;
-            losChecked++;
-            
-            // Game's own visibility checks
-            if (fn_PawnRecentlyRendered != nullptr) {
-                visible = fn_PawnRecentlyRendered(cp);
-                if (!visible && fn_PawnLastOccVisible != nullptr)
-                    visible = fn_PawnLastOccVisible(cp);
-            }
-            
-            if (!visible) {
-                // Fallback: raycast
-                Vector3 to = candidates[c].aimPoint - camPos;
-                const float len = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
-                if (len < 0.0001f) continue;
-                const Vector3 dir(to.x / len, to.y / len, to.z / len);
-                raycastsThisScan++;
-                const float hit = A_FireRaycastDistance(camPos, dir, candidates[c].worldDist + 0.35f);
-                visible = (hit == -1.0f);
-            }
-            
-            if (!visible) {
+        const bool checkSpread = Config.NewFeaturesMenu.TriggerbotCheckSpread;
+        const bool wantLead    = Config.NewFeaturesMenu.TriggerbotLeadTarget;
+        const float spreadPx   = A_FireSpreadPx(weapon, focalPx, checkSpread);
+        d.lastSpreadPx = spreadPx;
+
+        bool blockedLos = false, blockedLeadLos = false, blockedTravel = false, blockedLand = false, blockedFriend = false;
+
+        // ---- 3. validate each candidate, closest to the crosshair first ----
+        for (int oi = 0; oi < n; oi++) {
+            const A_FireCandidate &c = cands[order[oi]];
+
+            // (a) LINE OF SIGHT - camera to the aim point, fail closed.
+            d.losChecked++;
+            if (!A_FireLineClear(camPos, c.aim.pos)) {
                 d.losBlocked++;
                 d.losBlockedScan++;
+                blockedLos = true;
                 continue;
             }
-            
-            // Calculate travel time for leading
-            float travelTime = 0.0f;
-            Vector3 predictedPos = candidates[c].aimPoint;
-            
-            if (enableLeading && bulletSpeed > 0.0f) {
-                travelTime = CalculateTravelTime(candidates[c].worldDist, bulletSpeed);
-                predictedPos = PredictTargetPosition(candidates[c].aimPoint, candidates[c].velocity, travelTime);
-                
-                // Re-check LOS to predicted position (respects the ray budget)
-                if (raycastsThisScan < MAX_RAYCASTS_SCAN) {
-                    Vector3 toPred = predictedPos - camPos;
-                    float predDist = sqrtf(toPred.x * toPred.x + toPred.y * toPred.y + toPred.z * toPred.z);
-                    if (predDist > 0.0001f) {
-                        Vector3 predDir(toPred.x / predDist, toPred.y / predDist, toPred.z / predDist);
-                        raycastsThisScan++;
-                        float hit = A_FireRaycastDistance(camPos, predDir, predDist + 0.35f);
-                        if (hit != -1.0f) continue; // Predicted path blocked
-                    }
+
+            // (b) RANGELESS + LEAD. No maximum range is applied (that is the
+            //     point of a rangeless trigger), but the bullet still has to
+            //     arrive while the target is still there.
+            float travel = 0.0f;
+            Vector3 predicted = c.aim.pos;
+            bool lead = false;
+            bool speedKnown = false;
+            const float bulletSpeed = GetWeaponBulletSpeed(weapon, &speedKnown);
+
+            if (wantLead && speedKnown && c.worldDist > 1.0f) {
+                travel = c.worldDist / bulletSpeed;
+                if (travel > A_FireTune::kMaxTravelTime) {
+                    d.lastTravel = travel;
+                    blockedTravel = true;
+                    continue;                       // bullet would arrive far too late
+                }
+                if (travel > 0.002f) {
+                    predicted = c.aim.pos + c.velocity * travel;
+                    lead = true;
+                }
+                if (lead && !A_FireLineClear(camPos, predicted)) {
+                    blockedLeadLos = true;
+                    continue;                       // the lead path itself is covered
                 }
             }
-            
-            // Candidate-independent gates (computed once above): if the weapon
-            // cannot fire, no candidate can pass - stop scanning.
-            if (!shotAccurate || !weaponReady) break;
-            
-            // Select best target (nearest to crosshair center)
-            if (candidates[c].dist2 < bestDist2) {
-                bestDist2 = candidates[c].dist2;
-                bestTarget = {
-                    cp,
-                    candidates[c].aimPoint,
-                    candidates[c].screenPos,
-                    candidates[c].dist2,
-                    candidates[c].worldDist,
-                    candidates[c].hitbox,
-                    true,
-                    travelTime,
-                    predictedPos
-                };
+
+            // (c) SPREAD / RECOIL CONTAINMENT - is the crosshair still on the
+            //     hitbox where the target will be when the bullet arrives?
+            float predPx = c.pxOffset;
+            if (lead) {
+                const Vector3 scPred = fn_WorldToScreen(cam, predicted);
+                if (scPred.z > 0.0f) {
+                    const float pdx = scPred.x - cx;
+                    const float pdy = scPred.y - cy;
+                    predPx = sqrtf(pdx * pdx + pdy * pdy);
+                } else {
+                    predicted = c.aim.pos;          // prediction left the screen
+                    lead = false;
+                }
             }
+            const float hitboxPx = (focalPx > 0.0f && c.worldDist > 0.01f)
+                                 ? (c.aim.radius * focalPx / c.worldDist) : 0.0f;
+            if (!A_FireShotWouldLand(predPx, radius, hitboxPx, spreadPx)) {
+                blockedLand = true;
+                continue;                           // lead + cone put the shot off the hitbox
+            }
+
+            // (d) FRIENDLY IN THE LINE OF FIRE - pure geometry, catches the
+            //     teammate the ray misses but the spread cone would hit.
+            Vector3 dirToAim(c.aim.pos.x - camPos.x, c.aim.pos.y - camPos.y, c.aim.pos.z - camPos.z);
+            const float dirLen = Vector3::Magnitude(dirToAim);
+            if (dirLen > 0.01f) {
+                dirToAim = Vector3(dirToAim.x / dirLen, dirToAim.y / dirLen, dirToAim.z / dirLen);
+                int friends = 0;
+                if (A_FireFriendlyInLine(localPawn, camPos, dirToAim, c.worldDist, &friends)) {
+                    d.friendsInLine += friends;
+                    blockedFriend = true;
+                    continue;
+                }
+            }
+
+            // ---- SURVIVES EVERYTHING -> this is the shot ----
+            out.pawn       = c.pawn;
+            out.aim        = c.aim;
+            out.aimPoint   = c.aim.pos;
+            out.screenPos  = fn_WorldToScreen(cam, c.aim.pos);
+            out.pxOffset   = c.pxOffset;
+            out.worldDist  = c.worldDist;
+            out.hitbox     = c.aim.hitbox;
+            out.travelTime = travel;
+            out.predicted  = predicted;
+            out.predPxOffset = predPx;
+            out.hitboxPx   = hitboxPx;
+            out.spreadPx   = spreadPx;
+            out.focalPx    = focalPx;
+            out.bulletSpeed = bulletSpeed;
+            out.speedKnown = speedKnown;
+            out.leadUsed   = lead;
+
+            d.lastAimPx  = c.pxOffset;
+            d.lastPredPx = predPx;
+            d.lastHitboxPx = hitboxPx;
+            d.lastTravel = travel;
+            d.lastWorldDist = c.worldDist;
+            d.lastBulletSpeed = bulletSpeed;
+            g_afireLosOk = true;
+            d.targets++;
+            return FireBlock::Fired;
         }
-        
-        g_afireLosOk = (bestTarget.pawn != nullptr);
-        if (bestTarget.pawn != nullptr) d.targets++;
-        return bestTarget;
+
+        // Nothing survived. Report the reason that is actually worth acting on:
+        // a teammate in the line first (dangerous), then the geometry reasons.
+        if (blockedFriend)   return FireBlock::FriendlyInLine;
+        if (blockedLand)     return FireBlock::ShotWontLand;
+        if (blockedLeadLos)  return FireBlock::LeadNoLineOfSight;
+        if (blockedLos)      return FireBlock::NoLineOfSight;
+        if (blockedTravel)   return FireBlock::TravelTooLong;
+        return FireBlock::NoEnemyInZone;
     }
 
-    // Backward compatibility - returns pawn pointer only
+    // =====================================================================
+    //  SHOULD FIRE - the ordered tree. Everything cheap and local is answered
+    //  before a single ray is cast; only a candidate that is genuinely under
+    //  the crosshair ever costs a physics query.
+    // =====================================================================
+    inline FireBlock A_FireShouldFire(TriggerTarget &out)
+    {
+        TriggerbotDiag &d = g_triggerDiag;
+        out = TriggerTarget{};
+
+        // ---- 1. local player --------------------------------------------
+        Pawn *localPawn = GamePlay::get_LocalPawn();
+        d.localPawn = (void *)localPawn;
+        if (!Tools::IsPtrValid((void *)localPawn)) return FireBlock::NoLocalPawn;
+        if (!A_FirePawnAlive(localPawn)) return FireBlock::LocalNotAlive;
+
+        // ---- 2. match / round state -------------------------------------
+        if (fn_GameGetMatchGame == nullptr) return FireBlock::NoMatch;
+        void *game = fn_GameGetMatchGame();
+        d.matchGame = game;
+        if (!Tools::IsPtrValid(game)) return FireBlock::NoMatch;
+        if (fn_BaseGameIsPaused != nullptr && fn_BaseGameIsPaused(game))
+            return FireBlock::MatchPaused;
+
+        // ---- 3. held weapon readiness ------------------------------------
+        Weapon *held = localPawn->get_CurrentWeapon();
+        d.heldWeapon = (void *)held;
+        if (!Tools::IsPtrValid((void *)held)) return FireBlock::NoWeapon;
+
+        if (A_FireWeaponSwitching(held)) return FireBlock::WeaponSwitching;
+
+        d.ammoOk = A_FireWeaponHasAmmo(held);
+        if (!d.ammoOk) return FireBlock::NoAmmo;
+
+        d.canFire = A_FireWeaponCanFire(held);
+        if (Config.NewFeaturesMenu.TriggerbotRequireReady && !d.canFire)
+            return FireBlock::WeaponNotReady;                // reloading / bolt / overheat / interval
+        // (OFF = press anyway. StartFire itself still refuses an illegal shot, so
+        //  the unchecked path can never fire during a reload - it only keeps the
+        //  fire input held through those states.)
+
+        // ---- 4. trigger key gating (the mode combo) ----------------------
+        // 0 = Always  : the trigger fires on its own the moment a target is under
+        //               the crosshair (0-delay, no reaction delay).
+        // 1 = ADS only: only while the player is scoping (Pawn.IsAiming 0x519BB10).
+        // 2 = Firing only: only while the player's own fire input is active
+        //               (Pawn.get_IsFiring 0x51A8A38). Note the trigger's own
+        //               press also raises that flag, which is what keeps a burst
+        //               going while the crosshair stays on the target - the same
+        //               semantics the reference implementation had.
+        if (Config.NewFeaturesMenu.TriggerbotMode == 1) {
+            if (fn_PawnIsAiming == nullptr || !fn_PawnIsAiming(localPawn))
+                return FireBlock::ModeNotAds;
+        } else if (Config.NewFeaturesMenu.TriggerbotMode == 2) {
+            if (fn_PawnGetIsFiring == nullptr || !fn_PawnGetIsFiring(localPawn))
+                return FireBlock::ModeNotFiring;
+        }
+
+        // ---- 5. targets + line of sight + lead + spread + friendlies -----
+        return A_FireScan(localPawn, held, out);
+    }
+
+    // Backward compatibility - returns the pawn pointer only. (The menu's
+    // diagnostics call the tree above; nothing else uses this.)
     inline uintptr_t A_FireFindTarget()
     {
-        TriggerTarget target = A_FireFindTargetEnhanced();
+        TriggerTarget target{};
+        if (A_FireShouldFire(target) != FireBlock::Fired) return 0;
         return target.pawn ? (uintptr_t)target.pawn : 0;
     }
 
@@ -1044,133 +1497,133 @@ namespace NewFeatures
     }
 
     // Trigger evaluation. Runs on the game thread from the tick hooks.
-    // `tickInstance` is the object the hook was called on: the fired path is
-    // taken only while the local player's *held weapon* ticks, exactly like the
-    // reference implementation. Pass nullptr when the caller is already sure the
-    // local player ticked.
+    // `tickInstance` is the object the hook was called on: the Weapon::Tick hook
+    // passes the weapon, the pawn-tick hooks pass nullptr. A scan only runs while
+    // the local player's *held weapon* (or the local player's own pawn) ticked,
+    // exactly like the reference implementation.
+    //
+    // The fire path itself is a straight read of the decision tree:
+    //   A_FireShouldFire() -> Fired?  -> press / hold / release
+    //                       -> blocked -> release (never leave the trigger down)
+    // Every scan reports its reason through A_FireReportBlock(), so the menu can
+    // show the live gate that is stopping the shot.
     inline void A_FireTick(void *tickInstance)
     {
         TriggerbotDiag &d = g_triggerDiag;
-        d.lastTickTime = A_FireNow();
-
-        const double now = d.lastTickTime;
-        if (now - g_afireLastEvalTime < 0.010) return;   // ~10 ms, like V3
-        g_afireLastEvalTime = now;
-
-        if (g_afireInTick) return;                       // re-entrancy guard
-
-        // Queued Test Fire is honoured even while the toggle is off.
-        if (g_testFireRequest) A_FireRunTestFire();
+        d.lastTickTime = A_FireNow();       // hook liveness (the menu's heartbeat row)
 
         Pawn *localPawn = GamePlay::get_LocalPawn();
         d.localPawn = (void *)localPawn;
 
-        if (!Config.NewFeaturesMenu.Triggerbot) {
-            A_FireReleaseTrigger(nullptr);
-            s_dbgTriggerState = 0;
-            return;
+        // INSTANCE FILTER FIRST. When the hook passes an instance (Weapon::Tick)
+        // only the local player's HELD weapon may spend an evaluation: the game
+        // ticks every weapon in the world through that address, and each AI tick
+        // used to consume the 10 ms slot below before the instance was even
+        // looked at - which threw away the local player's own tick that frame.
+        if (tickInstance != nullptr) {
+            Weapon *held = Tools::IsPtrValid((void *)localPawn) ? localPawn->get_CurrentWeapon() : nullptr;
+            if (!Tools::IsPtrValid((void *)held) || tickInstance != (void *)held)
+                return;
+            d.weaponHeldTicks++;
         }
 
-        if (!A_FireIsLiveLocalPawn(localPawn)) {
-            A_FireReleaseTrigger(nullptr);
-            d.heldWeapon = nullptr;
-            s_dbgTriggerState = 0;
-            return;
-        }
+        const double now = d.lastTickTime;
+        if (now - g_afireLastEvalTime < 0.010) return;   // ~10 ms, like V3
+        g_afireLastEvalTime = now;
+        if (g_afireInTick) return;                       // re-entrancy guard
+        g_afireInTick = true;
 
-        Weapon *held = localPawn->get_CurrentWeapon();
-        d.heldWeapon = (void *)held;
-        if (!Tools::IsPtrValid((void *)held)) {
-            A_FireReleaseTrigger(nullptr);
-            s_dbgTriggerState = 0;
-            return;
-        }
-
-        // Heartbeat semantics: the per-class pawn-tick hooks pass the ticking
-        // pawn - only the LOCAL pawn's tick drives a scan. Weapon::Tick (below)
-        // still keys on the held weapon instance. Both must match or the eval
-        // never explores - that is exactly the wTick=0 failure mode.
-        if (tickInstance != nullptr && tickInstance != (void *)held) return;
-        if (tickInstance != nullptr) d.weaponHeldTicks++;
+        // Queued Test Fire is honoured even while the toggle is off.
+        if (g_testFireRequest) A_FireRunTestFire();
 
         d.hookCalls++;
         d.scans++;
 
-        // Weapon swapped while the trigger was down - release the old one.
+        if (!Config.NewFeaturesMenu.Triggerbot) {
+            A_FireReleaseTrigger(nullptr);
+            A_FireReportBlock(FireBlock::FeatureOff);
+            s_dbgTriggerState = 0;
+            g_afireInTick = false;
+            return;
+        }
+
+        TriggerTarget target{};
+        const FireBlock block = A_FireShouldFire(target);
+        A_FireReportBlock(block);
+
+        if (block != FireBlock::Fired || !Tools::IsPtrValid((void *)target.pawn)) {
+            A_FireReleaseTrigger(nullptr);
+            s_dbgTriggerState = 0;
+            g_afireInTick = false;
+            return;
+        }
+
+        // A shootable target is under the crosshair right now.
+        s_dbgTriggerState = 1;
+
+        Weapon *held = (Weapon *)d.heldWeapon;
+        if (!Tools::IsPtrValid((void *)held)) {
+            A_FireReleaseTrigger(nullptr);
+            g_afireInTick = false;
+            return;
+        }
+
+        // Weapon swapped while the trigger was down - let the old one go.
         if (g_afireHoldingFire && g_afireFiringOn != (void *)held)
             A_FireReleaseTrigger(nullptr);
 
-        // Use enhanced target finding
-        TriggerTarget target = A_FireFindTargetEnhanced();
-        bool ready = target.pawn != nullptr && g_afireLosOk;
+        const FireMode mode = GetWeaponFireMode(held);
 
-        // Modes: 0 = Always, 1 = ADS only, 2 = Firing only.
-        // fn pointers are resolved ONCE at install time: UnityRva() live here
-        // re-opened and regex-scanned /proc/self/maps every ~10 ms scan - that
-        // was the "very laggy" in the ADS/Firing modes.
-        if (ready && Config.NewFeaturesMenu.TriggerbotMode == 1) {
-            ready = fn_PawnIsAiming != nullptr && fn_PawnIsAiming(localPawn);
-        } else if (ready && Config.NewFeaturesMenu.TriggerbotMode == 2) {
-            ready = fn_PawnGetIsFiring != nullptr && fn_PawnGetIsFiring(localPawn);
-        }
-
-        // Fire mode specific handling
-        if (ready && Tools::IsPtrValid(held)) {
-            FireMode mode = GetWeaponFireMode(held);
-            
-            // For single-shot weapons, only fire once per trigger press
-            if (mode == FireMode::Single && g_afireHoldingFire) {
-                ready = false; // Don't hold fire on single-shot
-            }
-            
-            // Burst needs no special handling: StartFire/StopFire repeat per burst.
-        }
-
-        if (ready && Config.NewFeaturesMenu.TriggerbotDelay > 0) {
-            if (now - g_afireLastPressTime <
-                (double)Config.NewFeaturesMenu.TriggerbotDelay / 1000.0)
-                ready = false;
-        }
-
-        if (!ready) {
-            A_FireReleaseTrigger(nullptr);
-            s_dbgTriggerState = 0;
-            return;
-        }
-
-        s_dbgTriggerState = 1;                           // target under the crosshair
-
-        // For single-shot, only fire once
-        FireMode mode = FireMode::Auto;
-        if (Tools::IsPtrValid(held)) {
-            mode = GetWeaponFireMode(held);
-        }
-        
-        if (g_afireHoldingFire && g_afireFiringOn == (void *)held) {
-            // For single-shot, release after first shot
+        // Already holding the trigger on this weapon and this target: keep
+        // holding. The game's own fire interval (and Weapon.CanFire above) is
+        // what limits the rate, so there is nothing to re-press.
+        if (g_afireHoldingFire && g_afireFiringOn == (void *)held &&
+            g_afireTargetPawn == (void *)target.pawn) {
             if (mode == FireMode::Single) {
+                // Semi-auto: one press is one shot - release now so the next
+                // scan can press again once the weapon's interval has elapsed.
                 A_FireReleaseTrigger(nullptr);
-                return;
             }
-            g_afireLastPressTime = now;
             s_dbgTriggerState = 2;
+            g_afireInTick = false;
             return;
         }
 
-        g_afireInTick      = true;                       // guard raised first
-        g_afireHoldingFire = true;
-        g_afireFiringOn    = (void *)held;
-
-        if (fn_Weapon_StartFire != nullptr) {
-            fn_Weapon_StartFire(held);
-            d.fires++;
+        // Re-press pacing against the weapon's own interval. Uses OUR clock, so
+        // a different game time base can never stall the trigger, and the first
+        // press after enable/burst is never delayed.
+        const float interval = A_FireWeaponInterval(held);
+        if (g_afireLastPressTime > 0.0 &&
+            now - g_afireLastPressTime < (double)interval * 0.85) {
+            A_FireReleaseTrigger(nullptr);
+            A_FireReportBlock(FireBlock::FireInterval);
+            s_dbgTriggerState = 1;
+            g_afireInTick = false;
+            return;
         }
 
-        g_afireLastPressTime = now;
-        g_afireInTick        = false;
-        s_dbgTriggerState    = 2;                        // firing
-        LOGI("[NewFeatures] triggerbot: StartFire(held=%p) local=%p hitbox=%d travel=%.3f",
-             (void *)held, (void *)localPawn, (int)target.hitbox, target.travelTime);
+        if (fn_Weapon_StartFire == nullptr) {
+            A_FireReleaseTrigger(nullptr);
+            A_FireReportBlock(FireBlock::WeaponNotReady);
+            g_afireInTick = false;
+            return;
+        }
+
+        g_afireHoldingFire    = true;
+        g_afireFiringOn       = (void *)held;
+        g_afireTargetPawn     = (void *)target.pawn;
+        g_afireLastPressTime  = now;
+        fn_Weapon_StartFire(held);
+        d.fires++;
+        s_dbgTriggerState = 2;                           // firing
+
+        LOGI("[NewFeatures] triggerbot: StartFire(held=%p) target=%p hitbox=%d aim=%.1fpx pred=%.1fpx "
+             "hb=%.1fpx spread=%.1fpx dist=%.3f travel=%.4f",
+             (void *)held, (void *)target.pawn, (int)target.hitbox,
+             target.pxOffset, target.predPxOffset, target.hitboxPx, target.spreadPx,
+             target.worldDist, target.travelTime);
+
+        g_afireInTick = false;
     }
 
     // MemoryPatches for spawn-time safety: reset held-weapon reference on the
@@ -1178,6 +1631,7 @@ namespace NewFeatures
     inline void A_FireResetForNewMatch()
     {
         g_afireHoldingFire = false;
+        g_afireTargetPawn  = nullptr;
         g_afireFiringOn    = nullptr;
         g_afireLastPressTime = -1000.0;
         g_afireLastEvalTime  = -1000.0;
@@ -1326,6 +1780,71 @@ namespace NewFeatures
         auto firingAddr = UnityRva(RVA::Pawn_get_IsFiring);
         if (Tools::IsPtrValid(firingAddr))
             fn_PawnGetIsFiring = (bool (*)(void *))firingAddr;
+        // ---- ShouldFire tree pointers ------------------------------------
+        auto ggmAddr = UnityRva(RVA::Gameplay_get_MatchGame);
+        if (Tools::IsPtrValid(ggmAddr))
+            fn_GameGetMatchGame = (void *(*)())ggmAddr;
+
+        auto autoFireAddr = UnityRva(RVA::Weapon_get_IsAutoFire);
+        if (Tools::IsPtrValid(autoFireAddr))
+            fn_WeaponIsAutoFire = (bool (*)(void *))autoFireAddr;
+
+        auto burstAddr = UnityRva(RVA::Weapon_get_IsBurstFire);
+        if (Tools::IsPtrValid(burstAddr))
+            fn_WeaponIsBurstFire = (bool (*)(void *))burstAddr;
+
+        auto singleAddr = UnityRva(RVA::Weapon_get_IsSingleShot);
+        if (Tools::IsPtrValid(singleAddr))
+            fn_WeaponIsSingleShot = (bool (*)(void *))singleAddr;
+
+        auto ammoOkAddr = UnityRva(RVA::AmmoCanFire);
+        if (Tools::IsPtrValid(ammoOkAddr))
+            fn_WeaponAmmoCanFire = (bool (*)(void *))ammoOkAddr;
+
+        auto clipAddr = UnityRva(RVA::Weapon_get_ClipAmmoCount);
+        if (Tools::IsPtrValid(clipAddr))
+            fn_WeaponGetClipAmmoCount = (int (*)(void *))clipAddr;
+
+        auto canFireAddr = UnityRva(RVA::Weapon_CanFire);
+        if (Tools::IsPtrValid(canFireAddr))
+            fn_WeaponCanFire = (bool (*)(void *))canFireAddr;
+
+        auto swallowingAddr = UnityRva(RVA::Weapon_InSwitchWeaponState);
+        if (Tools::IsPtrValid(swallowingAddr))
+            fn_WeaponInSwitchWeaponState = (bool (*)(void *))swallowingAddr;
+
+        auto switchingAddr = UnityRva(RVA::Weapon_HasSwitchingState);
+        if (Tools::IsPtrValid(switchingAddr))
+            fn_WeaponHasSwitchingState = (bool (*)(void *))switchingAddr;
+
+        auto realIntervalAddr = UnityRva(RVA::Weapon_RealFireInterval);
+        if (Tools::IsPtrValid(realIntervalAddr))
+            fn_WeaponRealFireInterval = (float (*)(void *))realIntervalAddr;
+
+        auto aimTargetAddr = UnityRva(RVA::Weapon_get_AimingTarget);
+        if (Tools::IsPtrValid(aimTargetAddr))
+            fn_WeaponGetAimingTarget = (void *(*)(void *))aimTargetAddr;
+
+        auto aimTargetDisAddr = UnityRva(RVA::Weapon_get_CurrentAimingTargetDis);
+        if (Tools::IsPtrValid(aimTargetDisAddr))
+            fn_WeaponGetAimingTargetDis = (float (*)(void *))aimTargetDisAddr;
+
+        auto fovAddr = UnityRva(RVA::Camera_get_fieldOfView);
+        if (Tools::IsPtrValid(fovAddr))
+            fn_CameraGetFov = (float (*)(void *))fovAddr;
+
+        auto teamPawnsAddr = UnityRva(RVA::BaseGame_GetTeamPawns);
+        if (Tools::IsPtrValid(teamPawnsAddr))
+            fn_BaseGameGetTeamPawns = (void *(*)(void *))teamPawnsAddr;
+
+        auto pausedAddr = UnityRva(RVA::BaseGame_get_IsPaused);
+        if (Tools::IsPtrValid(pausedAddr))
+            fn_BaseGameIsPaused = (bool (*)(void *))pausedAddr;
+
+        auto isAliveAddr = UnityRva(RVA::Pawn_get_IsAlive);
+        if (Tools::IsPtrValid(isAliveAddr))
+            fn_PawnIsAlive = (bool (*)(void *))isAliveAddr;
+
 
         void *weaponTick = UnityRva(RVA::Weapon_Tick);
         if (Tools::IsPtrValid(weaponTick)) {

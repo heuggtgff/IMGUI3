@@ -1912,7 +1912,12 @@ if (runtimeState.activeTab == 4) {
                                 if (Config.NewFeaturesMenu.Triggerbot) {
                                     static const char* triggerModes[] = { "Always", "ADS Only", "Firing Only" };
                                     custom::Combo("Mode", &Config.NewFeaturesMenu.TriggerbotMode, triggerModes, IM_ARRAYSIZE(triggerModes));
-                                    custom::SliderInt("Delay", &Config.NewFeaturesMenu.TriggerbotDelay, 0, 500, "%d ms");
+                                    // No "Delay" slider: the trigger fires the frame the
+                                    // target is under the crosshair, and the re-press rate
+                                    // is the weapon's OWN fire interval (Weapon.
+                                    // RealFireInterval), not a configured ms value. The
+                                    // TriggerbotDelay field is kept only so old config
+                                    // files keep loading.
                                     custom::SliderInt("Radius", &Config.NewFeaturesMenu.TriggerbotRadius, 4, 240, "%d px");
                                     
                                     // Hitbox priority
@@ -1924,32 +1929,36 @@ if (runtimeState.activeTab == 4) {
                                     
                                     // Check spread/recoil
                                     custom::Checkbox("Check Spread", &Config.NewFeaturesMenu.TriggerbotCheckSpread);
+
+                                    // Honour the game's own Weapon.CanFire() before pressing
+                                    // (reload / bolt cycle / fire-mode transition).
+                                    custom::Checkbox("Require Ready", &Config.NewFeaturesMenu.TriggerbotRequireReady);
                                 }
-                                // Debug status (shows in-game). The counters below are
-                                // written by the GAME-THREAD scan in A_FireTick, so they
-                                // stay live while the trigger is armed. A_FireRenderTick()
-                                // is scan-free now: it only resolves a Test Fire the game
-                                // thread never picked up. The render thread therefore never
-                                // runs A_FireFindTarget / Physics.Raycast - the physics
-                                // world has one caller only, A_FireTick on the game thread.
+                                // Debug status (shows in-game). Every number below is
+                                // written by the GAME-THREAD decision tree
+                                // (NewFeatures::A_FireShouldFire) inside A_FireTick, so
+                                // the headline IS the reason of the last scan: it prints
+                                // the exact gate that refused the shot (FireBlock), not
+                                // a guess. A_FireRenderTick() stays scan-free - the
+                                // render thread must never run A_FireScan /
+                                // Physics.Raycast, the physics world has exactly one
+                                // caller (A_FireTick, game thread).
                                 ImGui::Spacing();
                                 NewFeatures::A_FireRenderTick();
                                 NewFeatures::TriggerbotDiag& td = NewFeatures::GetTriggerbotDiag();
                                 int dbgState = NewFeatures::GetTriggerbotDebugState();
                                 const bool hbAlive = NewFeatures::A_FireHeartbeatAlive();
+                                const NewFeatures::FireBlock lastBlock =
+                                    (NewFeatures::FireBlock)td.lastBlock;
                                 if (!hbAlive) {
                                     ImGui::TextColored(ImVec4(1, 0.25f, 0.25f, 1), "NO GAME-THREAD TICK");
                                 } else if (dbgState == 2) {
                                     ImGui::TextColored(ImVec4(0, 1, 0, 1), ">> FIRING <<");
                                 } else if (dbgState == 1) {
-                                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "TARGET LOCKED");
+                                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "HOLDING: aimed in");
                                 } else {
-                                    // Per-scan verdict only: a candidate denied
-                                    // geometry this exact scan. The lifetime
-                                    // counter must not decide this headline -
-                                    // it made "WALL BETWEEN" stick forever.
-                                    ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
-                                                       td.losBlockedScan > 0 ? "WALL BETWEEN" : "NO TARGET");
+                                    ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "BLOCKED: %s",
+                                                       NewFeatures::A_FireBlockText(lastBlock));
                                 }
                                 // Test Fire: this menu runs on the render thread and the game
                                 // only reacts to StartFire on the game thread, so the click just
@@ -1967,19 +1976,38 @@ if (runtimeState.activeTab == 4) {
                                     else if (td.testFireStatus == 4) testTxt = "TestFire: no StartFire ptr";
                                     else if (td.testFireStatus == 5) testTxt = "TestFire: queued, no tick";
                                     ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "%s", testTxt);
-                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
-                                        "HB %s  wTick=%d held=%d pawn=%d",
+                                    const ImVec4 dim(0.65f, 0.65f, 0.72f, 1);
+                                    ImGui::TextColored(dim, "HB %s  wTick=%d held=%d pawn=%d",
                                         hbAlive ? "OK" : "DEAD",
                                         td.weaponTicks, td.weaponHeldTicks, td.pawnLocalTicks);
-                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
-                                        "Scan=%d Enemy=%d Tgt=%d Fire=%d LOSblk=%d",
-                                        td.scans, td.enemyCount,
-                                        td.targets, td.fires, td.losBlocked);
-                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
-                                        "R=%.0f Near=%.0f px", td.radiusPx,
-                                        td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx));
-                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
-                                        "Pawn=%p Wpn=%p Match=%p", td.localPawn, td.heldWeapon, td.matchGame);
+                                    ImGui::TextColored(dim, "Scan=%d Enemy=%d Cand=%d Ray=%d Tgt=%d Fire=%d",
+                                        td.scans, td.enemyCount, td.candidates,
+                                        td.losChecked, td.targets, td.fires);
+                                    ImGui::TextColored(dim, "R=%.0f Closest=%.0fpx LOSblk=%d Friend=%d",
+                                        td.radiusPx,
+                                        td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx),
+                                        td.losBlocked, td.friendsInLine);
+                                    ImGui::TextColored(dim, "Ammo=%s CanFire=%s FOV=%0.fpx",
+                                        td.ammoOk ? "ok" : "NO", td.canFire ? "ok" : "NO",
+                                        td.focalPx);
+                                    ImGui::TextColored(dim, "Aim=%.0f Pred=%.0f HB=%.0f Spr=%.0f px",
+                                        td.lastAimPx, td.lastPredPx, td.lastHitboxPx, td.lastSpreadPx);
+                                    ImGui::TextColored(dim, "Dist=%.1fm Travel=%.3fs V=%.0f",
+                                        td.lastWorldDist, td.lastTravel, td.lastBulletSpeed);
+                                    ImGui::TextColored(dim, "GameAim=%p %.1fm",
+                                        (void *)(uintptr_t)td.aimingTarget, td.aimingTargetDis);
+                                    ImGui::TextColored(dim, "Pawn=%p Wpn=%p Match=%p",
+                                        td.localPawn, td.heldWeapon, td.matchGame);
+                                    // Lifetime per-reason counters: what stopped the
+                                    // most shots since the toggle went on.
+                                    for (int bi = 1, shown = 0;
+                                         bi < (int)NewFeatures::FireBlock::Count && shown < 5; bi++) {
+                                        if (td.blockCount[bi] <= 0) continue;
+                                        ImGui::TextColored(ImVec4(0.78f, 0.78f, 0.88f, 1), "%s x%d",
+                                            NewFeatures::A_FireBlockText((NewFeatures::FireBlock)bi),
+                                            td.blockCount[bi]);
+                                        shown++;
+                                    }
                                 }
                                 EndContentChild(left);
                             }

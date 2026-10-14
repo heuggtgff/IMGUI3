@@ -236,6 +236,12 @@ sColorsESPBOT sColorsESPBOT{0};
         int TriggerbotHitboxPriority = 3; // 0=Head, 1=Chest, 2=Limbs, 3=Any
         bool TriggerbotLeadTarget = true;  // Enable target leading for projectiles
         bool TriggerbotCheckSpread = true; // Check bullet spread/recoil before firing
+        // Honour the game's own Weapon.CanFire() before pressing fire. ON keeps
+        // the trigger off while the gun is reloading / cycling the bolt / in a
+        // fire-mode transition; OFF presses anyway (StartFire is still filtered by
+        // the game, so OFF can never cause an illegal shot - it only lets the
+        // trigger keep the fire input held through those states).
+        bool TriggerbotRequireReady = true;
         bool NoHitFlinch = false;
         bool NoDrift = false;
         bool NoSlideFatigue = false;

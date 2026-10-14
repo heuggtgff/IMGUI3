@@ -73,6 +73,7 @@ void LoadConfig() {
         else if (key == "NewFeatures.TriggerbotHitboxPriority") Config.NewFeaturesMenu.TriggerbotHitboxPriority = std::stoi(valueStr);
         else if (key == "NewFeatures.TriggerbotLeadTarget") Config.NewFeaturesMenu.TriggerbotLeadTarget = (valueStr == "1");
         else if (key == "NewFeatures.TriggerbotCheckSpread") Config.NewFeaturesMenu.TriggerbotCheckSpread = (valueStr == "1");
+        else if (key == "NewFeatures.TriggerbotRequireReady") Config.NewFeaturesMenu.TriggerbotRequireReady = (valueStr == "1");
         else if (key == "NewFeatures.NoHitFlinch") Config.NewFeaturesMenu.NoHitFlinch = (valueStr == "1");
         else if (key == "NewFeatures.NoDrift") Config.NewFeaturesMenu.NoDrift = (valueStr == "1");
         else if (key == "NewFeatures.NoSlideFatigue") Config.NewFeaturesMenu.NoSlideFatigue = (valueStr == "1");
@@ -133,6 +134,7 @@ void SaveConfig() {
     file << "NewFeatures.TriggerbotHitboxPriority " << Config.NewFeaturesMenu.TriggerbotHitboxPriority << "\n";
     file << "NewFeatures.TriggerbotLeadTarget " << Config.NewFeaturesMenu.TriggerbotLeadTarget << "\n";
     file << "NewFeatures.TriggerbotCheckSpread " << Config.NewFeaturesMenu.TriggerbotCheckSpread << "\n";
+    file << "NewFeatures.TriggerbotRequireReady " << Config.NewFeaturesMenu.TriggerbotRequireReady << "\n";
     file << "NewFeatures.NoHitFlinch " << Config.NewFeaturesMenu.NoHitFlinch << "\n";
     file << "NewFeatures.NoDrift " << Config.NewFeaturesMenu.NoDrift << "\n";
     file << "NewFeatures.NoSlideFatigue " << Config.NewFeaturesMenu.NoSlideFatigue << "\n";

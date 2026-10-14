@@ -70,6 +70,7 @@ void SaveConfiguration(const std::string& filename) {
     config["NewFeatures"]["TriggerbotHitboxPriority"] = Config.NewFeaturesMenu.TriggerbotHitboxPriority;
     config["NewFeatures"]["TriggerbotLeadTarget"] = Config.NewFeaturesMenu.TriggerbotLeadTarget;
     config["NewFeatures"]["TriggerbotCheckSpread"] = Config.NewFeaturesMenu.TriggerbotCheckSpread;
+    config["NewFeatures"]["TriggerbotRequireReady"] = Config.NewFeaturesMenu.TriggerbotRequireReady;
     config["NewFeatures"]["NoCrouch"] = Config.NewFeaturesMenu.NoCrouch;
 
     config["menu"][0] = menu[0];
@@ -148,6 +149,8 @@ bool LoadConfiguration(const std::string& filename) {
             Config.NewFeaturesMenu.TriggerbotLeadTarget = config["NewFeatures"]["TriggerbotLeadTarget"].get<bool>();
         if (config["NewFeatures"].contains("TriggerbotCheckSpread"))
             Config.NewFeaturesMenu.TriggerbotCheckSpread = config["NewFeatures"]["TriggerbotCheckSpread"].get<bool>();
+        if (config["NewFeatures"].contains("TriggerbotRequireReady"))
+            Config.NewFeaturesMenu.TriggerbotRequireReady = config["NewFeatures"]["TriggerbotRequireReady"].get<bool>();
         Config.NewFeaturesMenu.NoHitFlinch = config["NewFeatures"]["NoHitFlinch"].get<bool>();
         Config.NewFeaturesMenu.NoDrift = config["NewFeatures"]["NoDrift"].get<bool>();
         if (config["NewFeatures"].contains("NoSlideFatigue"))
