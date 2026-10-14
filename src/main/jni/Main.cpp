@@ -1918,13 +1918,15 @@ if (runtimeState.activeTab == 4) {
                                     // 2.5% of screen width, so this is deliberately user-tunable.
                                     custom::SliderInt("Radius", &Config.NewFeaturesMenu.TriggerbotRadius, 4, 240, "%d px");
                                 }
-                                // Debug status (shows in-game). READ-ONLY on this thread:
-                                // the render-thread scan (A_FireRenderTick, present here in
-                                // commit 5e6d323) is deliberately NOT called - it ran the full
-                                // A_FireFindTarget incl. Physics.Raycast on the render thread
-                                // every frame, and that concurrent scan was the crash-on-scan
-                                // bug. The counters below are written by the GAME-THREAD scan
-                                // in A_FireTick, so they stay live while the trigger is armed.
+                                // Debug status (shows in-game). The counters below are
+                                // written by the GAME-THREAD scan in A_FireTick, so they
+                                // stay live while the trigger is armed. A_FireRenderTick()
+                                // is scan-free now: it only resolves a Test Fire the game
+                                // thread never picked up. The render thread therefore never
+                                // runs A_FireFindTarget / Physics.Raycast - the physics
+                                // world has one caller only, A_FireTick on the game thread.
+                                ImGui::Spacing();
+                                NewFeatures::A_FireRenderTick();
                                 NewFeatures::TriggerbotDiag& td = NewFeatures::GetTriggerbotDiag();
                                 int dbgState = NewFeatures::GetTriggerbotDebugState();
                                 const bool hbAlive = NewFeatures::A_FireHeartbeatAlive();
@@ -1963,8 +1965,8 @@ if (runtimeState.activeTab == 4) {
                                         hbAlive ? "OK" : "DEAD",
                                         td.weaponTicks, td.weaponHeldTicks, td.pawnLocalTicks);
                                     ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
-                                        "Scan=%d R=%d Enemy=%d Tgt=%d Fire=%d LOSblk=%d",
-                                        td.scans, td.renderScans, td.enemyCount,
+                                        "Scan=%d Enemy=%d Tgt=%d Fire=%d LOSblk=%d",
+                                        td.scans, td.enemyCount,
                                         td.targets, td.fires, td.losBlocked);
                                     ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
                                         "R=%.0f Near=%.0f px", td.radiusPx,

@@ -388,7 +388,6 @@ namespace NewFeatures
         int    pawnLocalTicks;
         int    hookCalls;       // evaluations that reached the scan (game thread)
         int    scans;           // game-thread A_FireFindTarget() runs
-        int    renderScans;     // render-thread diagnostic scans
         int    enemyCount;      // last EnemyPawns size
         int    targets;         // scans that returned a pawn
         int    fires;           // StartFire calls made by the trigger
@@ -892,17 +891,24 @@ namespace NewFeatures
     }
 
     // ---- Render-thread diagnostics ---------------------------------------
-    // Called from the menu (render thread) every frame. Contains no
-    // game-thread-only call: it reads pointers and projects bones, exactly like
-    // the ESP pass that already runs on this thread every frame. Purpose: keep
-    // the on-screen state honest even if the in-game heartbeat is dead, and tell
-    // the user whether the heartbeat is alive at all.
+    // Called from the menu (render thread) every frame. Deliberately RAY-FREE
+    // and SCAN-FREE: it must NOT call A_FireFindTarget(). That scan casts
+    // Physics.Raycast (A_FireHasLineOfSight / the candidate visibility
+    // fallback), and doing it here ran a second scan of the same world
+    // concurrently with the game-thread scan inside A_FireTick - two physics
+    // scene queries at once = the crash that appeared the moment the
+    // crosshair-ray gate was added to the render path. The physics world now
+    // has exactly ONE caller: A_FireTick, on the game thread.
+    //
+    // All this keeps is the part that was genuinely useful and is safe on any
+    // thread: a Test Fire the game thread never picked up means the heartbeat
+    // is dead, so report the pointer chain instead of silently doing nothing.
+    // It only reads pointers the menu already reads every frame (local pawn,
+    // held weapon, the StartFire ptr resolved once at install time).
     inline void A_FireRenderTick()
     {
         TriggerbotDiag &d = g_triggerDiag;
 
-        // A Test Fire that the game thread never picked up means the heartbeat
-        // is dead; report the pointer chain instead of silently doing nothing.
         if (g_testFireRequest && A_FireNow() - g_testFireRequestTime > 0.35) {
             g_testFireRequest = false;
             Pawn *local = GamePlay::get_LocalPawn();
@@ -912,19 +918,7 @@ namespace NewFeatures
             d.heldWeapon = (void *)held;
             if (!Tools::IsPtrValid((void *)held)) { d.testFireStatus = 3; return; }
             d.testFireStatus = (fn_Weapon_StartFire == nullptr) ? 4 : 5;
-            return;
         }
-
-        if (!Config.NewFeaturesMenu.Triggerbot) return;
-
-        d.renderScans++;
-        const uintptr_t t = A_FireFindTarget();
-
-        // The game thread owns s_dbgTriggerState while its heartbeat is alive;
-        // this thread only takes over when that heartbeat is missing, so the
-        // indicator can never claim a target the firing path is not seeing.
-        if (!A_FireHeartbeatAlive())
-            s_dbgTriggerState = (t != 0) ? 1 : 0;
     }
 
     inline int GetTriggerbotDebugState() { return s_dbgTriggerState; }
