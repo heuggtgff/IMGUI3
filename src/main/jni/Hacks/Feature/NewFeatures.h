@@ -103,6 +103,7 @@
 //
 #include <random>
 #include <chrono>
+#include <atomic>
 
 #include <cstdint>
 #include <cstring>
@@ -161,6 +162,18 @@ namespace NewFeatures
         // Pawn::Tick can never be the only heartbeat. Kept as a second chance.
         constexpr uintptr_t Weapon_Tick                     = 0x5114C34; // void(float) Slot 33 - Weapon.Tick  [HEARTBEAT]
         constexpr uintptr_t Pawn_Tick                       = 0x51C366C; // void(float) Slot 33 - Pawn.Tick (base only)
+        // REAL heartbeats for the *held weapon's* eval path. Weapon::Tick and
+        // Pawn::Tick above are BASE implementations; il2cpp virtual dispatch
+        // calls each subclass override instead, so neither ever runs for the
+        // local player's gun - which is exactly why wTick=0 pawn=0 on device.
+        // Slots all 33, dump-verified per class:
+        constexpr uintptr_t PlayerPawn_Tick                 = 0x54816D8; // dump 724744
+        constexpr uintptr_t MPPawn_Tick                     = 0xB5D0DC8; // dump 778862
+        constexpr uintptr_t BRPlayerPawn_Tick               = 0x78B68FC; // dump 506871
+        constexpr uintptr_t DMZPlayerPawn_Tick              = 0x7FF06EC; // dump 786307
+        constexpr uintptr_t PVEPlayerPawn_Tick              = 0x78378AC; // dump 755326
+        constexpr uintptr_t BRGroundWarPlayerPawn_Tick      = 0x6FB04A8; // dump 489851
+        constexpr uintptr_t OpenWorldPlayerPawn_Tick        = 0x5A0E994; // dump 788122
         constexpr uintptr_t Pawn_GetCurrentWeapon           = 0x518BEA8; // Weapon*() - Pawn.get_CurrentWeapon
         constexpr uintptr_t Pawn_IsAiming                   = 0x519BB10; // bool() - Pawn.IsAiming() (V3 api15; 0x516699C is Weapon::get_IsAiming, NOT callable on a Pawn)
         constexpr uintptr_t Pawn_get_IsFiring               = 0x51A8A38; // bool() - Pawn.get_IsFiring
@@ -281,6 +294,25 @@ namespace NewFeatures
         // /proc/self/maps on EVERY call, and this runs per enemy per scan.
         static auto isSameCamp = (bool (*)(void *, void *))UnityRva(RVA::Pawn_IsSameCamp); // Slot 84
         if (isSameCamp != nullptr && isSameCamp(localPawn, targetPawn)) return true;
+
+        static auto getTeamId = (uint32_t (*)(void *))UnityRva(RVA::Pawn_GetTeamId);       // Slot 216
+        if (getTeamId == nullptr) return false;
+        const uint32_t localTeam  = getTeamId(localPawn);
+        const uint32_t targetTeam = getTeamId(targetPawn);
+        return localTeam != 0 && localTeam == targetTeam;
+    }
+
+    // Team gate used by the trigger scan: team id ONLY. IsSameCamp() is a
+    // HOSTILE-camp test (true for any enemy hostile, bots included) - not a
+    // team check - and Pawn::m_IsBot is only a marker (0x46464600 placeholder
+    // in this dump), not trustworthy as "skip AI pawns". Short-circuiting on
+    // either field silently dropped every PVE/training bot from the candidate
+    // list - the "doesn't work against bots" report. Team id stays a real team
+    // gate, so it alone decides "same team => skip".
+    inline bool IsSameTeamAcceptBots(void *localPawn, void *targetPawn)
+    {
+        if (!IsReadable(localPawn) || !IsReadable(targetPawn)) return false;
+        if (localPawn == targetPawn) return true;
 
         static auto getTeamId = (uint32_t (*)(void *))UnityRva(RVA::Pawn_GetTeamId);       // Slot 216
         if (getTeamId == nullptr) return false;
@@ -449,8 +481,10 @@ namespace NewFeatures
                 break;
             }
             case HitboxPriority::Limbs: {
-                // Use LastPawnPos as fallback for limbs
-                auto getLastPos = (Vector3 (*)(void *))UnityRva(RVA::Pawn_get_LastPawnPos);
+                // Use LastPawnPos as fallback for limbs (fn resolved once -
+                // UnityRva() here re-scanned /proc/self/maps per hitbox per
+                // candidate = the Laggy "Any" hitbox setting).
+                static auto getLastPos = (Vector3 (*)(void *))UnityRva(RVA::Pawn_get_LastPawnPos);
                 if (getLastPos) {
                     return getLastPos(pawn);
                 }
@@ -567,13 +601,21 @@ namespace NewFeatures
     //  !! join.  List<Pawn*>::getItems() returns the real element array.
     // =====================================================================
 
-    // Function pointers. Weapon::Tick is the heartbeat (see the header note);
-    // StartFire/StopFire are called through raw pointers, never hooked.
+    // Function pointers. The per-class pawn tick overrides are the heartbeat
+    // (see the header note); StartFire/StopFire are called through raw pointers,
+    // never hooked.
     // fn_* are resolved once at install time - getAbsoluteAddress() re-opens
     // and regex-scans /proc/self/maps on EVERY call, so resolving them per scan
     // was the single biggest cost of the triggerbot loop.
     inline void (*orig_Weapon_Tick)(void *, float) = nullptr;
     inline void (*orig_Pawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_PlayerPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_MPPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_BRPlayerPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_DMZPlayerPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_PVEPlayerPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_OpenWorldPlayerPawn_Tick)(void *, float) = nullptr;
+    inline void (*orig_BRGroundWarPlayerPawn_Tick)(void *, float) = nullptr;
     inline void (*fn_Weapon_StartFire)(void *) = nullptr;
     inline void (*fn_Weapon_StopFire)(void *, bool) = nullptr;
     inline Vector3 (*fn_WorldToScreen)(void *, Vector3) = nullptr;  // 1-arg overload
@@ -581,6 +623,8 @@ namespace NewFeatures
     inline void *(*fn_CameraGetMain)() = nullptr;
     inline bool (*fn_PawnRecentlyRendered)(void *) = nullptr;
     inline bool (*fn_PawnLastOccVisible)(void *) = nullptr;
+    inline bool (*fn_PawnIsAiming)(void *) = nullptr;
+    inline bool (*fn_PawnGetIsFiring)(void *) = nullptr;
 
     // State - game thread only.
     inline bool     g_afireHoldingFire       = false;
@@ -588,7 +632,7 @@ namespace NewFeatures
     inline double   g_afireLastPressTime     = -1000.0;
     inline double   g_afireLastEvalTime      = -1000.0;
     inline bool     g_afireInTick            = false;   // re-entrancy guard
-    inline bool     g_afireLosOk             = false;   // last scan: target has LOS
+    inline std::atomic<bool> g_afireLosOk             = false;   // last scan: target has LOS (game wb / render read)
     inline bool     g_testFireRequest        = false;   // set by the menu (render thread)
     inline double   g_testFireRequestTime    = -1000.0;
 
@@ -619,7 +663,7 @@ namespace NewFeatures
     inline TriggerbotDiag g_triggerDiag{};
 
     // Debug state for the menu: 0 = no target, 1 = target, 2 = firing.
-    inline int s_dbgTriggerState = 0;
+    inline std::atomic<int> s_dbgTriggerState = 0;
 
     inline double A_FireNow()
     {
@@ -719,14 +763,19 @@ namespace NewFeatures
         
         TriggerTarget result{};
         
-        MatchGame *matchGame = GamePlay::get_MatchGame();
-        d.matchGame = (void *)matchGame;
-        if (!Tools::IsPtrValid((void *)matchGame)) return result;
+        // MatchGame gate removed: BaseGame::EnemyPawns() (0x9CAFE38, dump
+        // 702849, PawnList : List<object>) exists on the base class and is what
+        // DrawESP already uses via get_MatchGame - rejecting a valid BaseGame
+        // only made "Match=0x0" kills the scan whenever the match object isn't
+        // a MatchGame. Accept any valid BaseGame instead.
+        BaseGame *baseGame = GamePlay::get_MatchGame();
+        d.matchGame = (void *)baseGame;
+        if (!Tools::IsPtrValid((void *)baseGame)) return result;
         
         Camera *cam = Camera::get_main();
         if (!Tools::IsPtrValid((void *)cam)) return result;
         
-        List<Pawn *> *enemyPawns = matchGame->EnemyPawns();
+        List<Pawn *> *enemyPawns = baseGame->EnemyPawns();
         if (!Tools::IsPtrValid((void *)enemyPawns)) return result;
         
         Pawn **items = (Pawn **)enemyPawns->getItems();
@@ -781,8 +830,11 @@ namespace NewFeatures
             if (!Tools::IsPtrValid((void *)pawn)) continue;
             if (!pawn->m_IsAlive()) continue;
             
-            // Team check
-            if (IsSameTeam(localPawn, pawn)) continue;
+            // Team check: RejectNearCamp is FALSE here - IsSameCamp() is a
+            // hostile-camp test (it returns true for any enemy hostiles), not a
+            // team check, so short-circuiting on it silently ignored every PVE
+            // bot in the EnemyPawns list. Bots only get the team gate.
+            if (IsSameTeamAcceptBots(localPawn, pawn)) continue;
             
             // Check each hitbox based on priority
             float bestD2 = -1.0f;
@@ -841,12 +893,43 @@ namespace NewFeatures
         const bool shotAccurate = !checkSpread || IsShotAccurate(held);
         const bool weaponReady  = IsWeaponReadyToFire(held);
 
+        // HARD per-scan budgets: the crash report hit 525 blocked + 1,066
+        // raycasts in ONE scan when sixteen pawns crowded the crosshair zone.
+        // Cap candidates first, then raycasts; once either is exhausted the
+        // closest candidates (sorted below) have already been checked.
+        constexpr int   MAX_LOS_CANDIDATES = 6;   // visibility checks per scan
+        constexpr int   MAX_RAYCASTS_SCAN  = 12;  // physics queries per scan (incl. leading re-check)
+        int losChecked = 0;
+        int raycastsThisScan = 0;
+
+        // Raycast budget belongs to the CLOSEST crosshair candidates first:
+        // process in ascending screen-distance order and stop when the best
+        // possible candidate is already found/checked.
+        int order[MAX_CANDIDATES];
+        for (int i = 0; i < nCandidates; i++) order[i] = i;
+        for (int i = 1; i < nCandidates; i++) {
+            int oi = order[i];
+            int j = i - 1;
+            while (j >= 0 && candidates[order[j]].dist2 > candidates[oi].dist2) {
+                order[j + 1] = order[j];
+                j--;
+            }
+            order[j + 1] = oi;
+        }
+
         TriggerTarget bestTarget{};
         float bestDist2 = radiusSq + 1.0f;
+        bool budgetExhausted = false;
         
-        for (int c = 0; c < nCandidates; c++) {
+        for (int oi = 0; oi < nCandidates; oi++) {
+            const int c = order[oi];
+            if (losChecked >= MAX_LOS_CANDIDATES || raycastsThisScan >= MAX_RAYCASTS_SCAN) {
+                budgetExhausted = true;
+                break;
+            }
             Pawn *cp = candidates[c].pawn;
             bool visible = false;
+            losChecked++;
             
             // Game's own visibility checks
             if (fn_PawnRecentlyRendered != nullptr) {
@@ -861,6 +944,7 @@ namespace NewFeatures
                 const float len = sqrtf(to.x * to.x + to.y * to.y + to.z * to.z);
                 if (len < 0.0001f) continue;
                 const Vector3 dir(to.x / len, to.y / len, to.z / len);
+                raycastsThisScan++;
                 const float hit = A_FireRaycastDistance(camPos, dir, candidates[c].worldDist + 0.35f);
                 visible = (hit == -1.0f);
             }
@@ -879,13 +963,16 @@ namespace NewFeatures
                 travelTime = CalculateTravelTime(candidates[c].worldDist, bulletSpeed);
                 predictedPos = PredictTargetPosition(candidates[c].aimPoint, candidates[c].velocity, travelTime);
                 
-                // Re-check LOS to predicted position
-                Vector3 toPred = predictedPos - camPos;
-                float predDist = sqrtf(toPred.x * toPred.x + toPred.y * toPred.y + toPred.z * toPred.z);
-                if (predDist > 0.0001f) {
-                    Vector3 predDir(toPred.x / predDist, toPred.y / predDist, toPred.z / predDist);
-                    float hit = A_FireRaycastDistance(camPos, predDir, predDist + 0.35f);
-                    if (hit != -1.0f) continue; // Predicted path blocked
+                // Re-check LOS to predicted position (respects the ray budget)
+                if (raycastsThisScan < MAX_RAYCASTS_SCAN) {
+                    Vector3 toPred = predictedPos - camPos;
+                    float predDist = sqrtf(toPred.x * toPred.x + toPred.y * toPred.y + toPred.z * toPred.z);
+                    if (predDist > 0.0001f) {
+                        Vector3 predDir(toPred.x / predDist, toPred.y / predDist, toPred.z / predDist);
+                        raycastsThisScan++;
+                        float hit = A_FireRaycastDistance(camPos, predDir, predDist + 0.35f);
+                        if (hit != -1.0f) continue; // Predicted path blocked
+                    }
                 }
             }
             
@@ -999,7 +1086,10 @@ namespace NewFeatures
             return;
         }
 
-        // V3 semantics: only act on the local player's held weapon tick.
+        // Heartbeat semantics: the per-class pawn-tick hooks pass the ticking
+        // pawn - only the LOCAL pawn's tick drives a scan. Weapon::Tick (below)
+        // still keys on the held weapon instance. Both must match or the eval
+        // never explores - that is exactly the wTick=0 failure mode.
         if (tickInstance != nullptr && tickInstance != (void *)held) return;
         if (tickInstance != nullptr) d.weaponHeldTicks++;
 
@@ -1015,12 +1105,13 @@ namespace NewFeatures
         bool ready = target.pawn != nullptr && g_afireLosOk;
 
         // Modes: 0 = Always, 1 = ADS only, 2 = Firing only.
+        // fn pointers are resolved ONCE at install time: UnityRva() live here
+        // re-opened and regex-scanned /proc/self/maps every ~10 ms scan - that
+        // was the "very laggy" in the ADS/Firing modes.
         if (ready && Config.NewFeaturesMenu.TriggerbotMode == 1) {
-            auto isAiming = (bool (*)(void *))UnityRva(RVA::Pawn_IsAiming);
-            ready = isAiming != nullptr && isAiming(localPawn);
+            ready = fn_PawnIsAiming != nullptr && fn_PawnIsAiming(localPawn);
         } else if (ready && Config.NewFeaturesMenu.TriggerbotMode == 2) {
-            auto getIsFiring = (bool (*)(void *))UnityRva(RVA::Pawn_get_IsFiring);
-            ready = getIsFiring != nullptr && getIsFiring(localPawn);
+            ready = fn_PawnGetIsFiring != nullptr && fn_PawnGetIsFiring(localPawn);
         }
 
         // Fire mode specific handling
@@ -1078,17 +1169,38 @@ namespace NewFeatures
         g_afireLastPressTime = now;
         g_afireInTick        = false;
         s_dbgTriggerState    = 2;                        // firing
-        LOGI("[NewFeatures] triggerbot: StartFire(held=%p) local=%p hitbox=%d travel=%.3f", 
+        LOGI("[NewFeatures] triggerbot: StartFire(held=%p) local=%p hitbox=%d travel=%.3f",
              (void *)held, (void *)localPawn, (int)target.hitbox, target.travelTime);
     }
 
+    // MemoryPatches for spawn-time safety: reset held-weapon reference on the
+    // triggerbot side when a stale weapon pointer is being held across matches.
+    inline void A_FireResetForNewMatch()
+    {
+        g_afireHoldingFire = false;
+        g_afireFiringOn    = nullptr;
+        g_afireLastPressTime = -1000.0;
+        g_afireLastEvalTime  = -1000.0;
+        g_afireInTick        = false;
+        g_afireLosOk         = false;
+    }
+
     // ---- Heartbeats -------------------------------------------------------
-    // Weapon::Tick IS called on the local player's held weapon every frame in
-    // this build (V3 hooks the same address and its triggerbot fires), and it is
-    // the address the earlier crashing build of this repo was demonstrably
-    // reaching. Pawn::Tick is kept as a second chance, but note that PlayerPawn /
-    // MPPawn / BRPlayerPawn / ... each override Tick at their own RVA, so
-    // Pawn::Tick alone is NOT enough and must never be the only heartbeat.
+    // Weapon::Tick / Pawn::Tick are BASE implementations; il2cpp virtual
+    // dispatch invokes each subclass's Slot-33 override instead, so neither
+    // base ever runs for the local player's gun (device proof: wTick=0,pawn=0
+    // while everything else resolved). The real drivers are the per-class pawn
+    // tick overrides below - each passes the pawn instance.
+    inline void A_FirePawnTicked(void *pawnInstance)
+    {
+        TriggerbotDiag &d = g_triggerDiag;
+        d.pawnTicks++;
+        if (GamePlay::get_LocalPawn() == (Pawn *)pawnInstance) {
+            d.pawnLocalTicks++;
+            A_FireTick(nullptr);        // the local player's own pawn ticked
+        }
+    }
+
     inline void Hook_Weapon_Tick(void *instance, float deltaTime)
     {
         if (orig_Weapon_Tick != nullptr)
@@ -1106,13 +1218,63 @@ namespace NewFeatures
             orig_Pawn_Tick(instance, deltaTime);
 
         if (instance == nullptr) return;
+        A_FirePawnTicked(instance);
+    }
 
-        TriggerbotDiag &d = g_triggerDiag;
-        d.pawnTicks++;
-        if ((void *)GamePlay::get_LocalPawn() != instance) return;
+    inline void Hook_PlayerPawn_Tick(void *instance, float deltaTime)
+    {
+        if (orig_PlayerPawn_Tick != nullptr)
+            orig_PlayerPawn_Tick(instance, deltaTime);
+        if (instance == nullptr) return;
+        A_FirePawnTicked(instance);
+    }
 
-        d.pawnLocalTicks++;
-        A_FireTick(nullptr);        // the local player's own pawn ticked
+    inline void Hook_MPPawn_Tick(void *instance, float deltaTime)
+    {
+        if (orig_MPPawn_Tick != nullptr)
+            orig_MPPawn_Tick(instance, deltaTime);
+        if (instance == nullptr) return;
+        A_FirePawnTicked(instance);
+    }
+
+    inline void Hook_BRPlayerPawn_Tick(void *instance, float deltaTime)
+    {
+        if (orig_BRPlayerPawn_Tick != nullptr)
+            orig_BRPlayerPawn_Tick(instance, deltaTime);
+        if (instance == nullptr) return;
+        A_FirePawnTicked(instance);
+    }
+
+    inline void Hook_DMZPlayerPawn_Tick(void *instance, float deltaTime)
+    {
+        if (orig_DMZPlayerPawn_Tick != nullptr)
+            orig_DMZPlayerPawn_Tick(instance, deltaTime);
+        if (instance == nullptr) return;
+        A_FirePawnTicked(instance);
+    }
+
+    inline void Hook_PVEPlayerPawn_Tick(void *instance, float deltaTime)
+    {
+        if (orig_PVEPlayerPawn_Tick != nullptr)
+            orig_PVEPlayerPawn_Tick(instance, deltaTime);
+        if (instance == nullptr) return;
+        A_FirePawnTicked(instance);
+    }
+
+    inline void Hook_OpenWorldPlayerPawn_Tick(void *instance, float deltaTime)
+    {
+        if (orig_OpenWorldPlayerPawn_Tick != nullptr)
+            orig_OpenWorldPlayerPawn_Tick(instance, deltaTime);
+        if (instance == nullptr) return;
+        A_FirePawnTicked(instance);
+    }
+
+    inline void Hook_BRGroundWarPlayerPawn_Tick(void *instance, float deltaTime)
+    {
+        if (orig_BRGroundWarPlayerPawn_Tick != nullptr)
+            orig_BRGroundWarPlayerPawn_Tick(instance, deltaTime);
+        if (instance == nullptr) return;
+        A_FirePawnTicked(instance);
     }
 
     // Installation: Weapon::Tick + Pawn::Tick hooks and the two raw
@@ -1157,6 +1319,14 @@ namespace NewFeatures
         if (Tools::IsPtrValid(camMainAddr))
             fn_CameraGetMain = (void *(*)())camMainAddr;
 
+        auto aimingAddr = UnityRva(RVA::Pawn_IsAiming);
+        if (Tools::IsPtrValid(aimingAddr))
+            fn_PawnIsAiming = (bool (*)(void *))aimingAddr;
+
+        auto firingAddr = UnityRva(RVA::Pawn_get_IsFiring);
+        if (Tools::IsPtrValid(firingAddr))
+            fn_PawnGetIsFiring = (bool (*)(void *))firingAddr;
+
         void *weaponTick = UnityRva(RVA::Weapon_Tick);
         if (Tools::IsPtrValid(weaponTick)) {
             Tools::Hook(weaponTick, (void *)&Hook_Weapon_Tick, (void **)&orig_Weapon_Tick);
@@ -1178,6 +1348,32 @@ namespace NewFeatures
         } else {
             LOGE("[NewFeatures] triggerbot: Pawn::Tick RVA 0x%llX did not resolve",
                  (unsigned long long)RVA::Pawn_Tick);
+        }
+
+        // The ACTUAL game-thread heartbeat: every pawn class overrides Tick at
+        // its own RVA, so il2cpp dispatch never reaches the base Pawn::Tick /
+        // Weapon::Tick bodies for the local player's pawn/gun. Hook the
+        // concrete overrides instead - these are what the game calls per frame.
+        struct TickTarget { uintptr_t rva; void *hook; void **orig; const char *name; };
+        const TickTarget pawnTickTargets[] = {
+            { RVA::PlayerPawn_Tick,            (void *)&Hook_PlayerPawn_Tick,            (void **)&orig_PlayerPawn_Tick,            "PlayerPawn::Tick" },
+            { RVA::MPPawn_Tick,                (void *)&Hook_MPPawn_Tick,                (void **)&orig_MPPawn_Tick,                "MPPawn::Tick"     },
+            { RVA::BRPlayerPawn_Tick,          (void *)&Hook_BRPlayerPawn_Tick,          (void **)&orig_BRPlayerPawn_Tick,          "BRPlayerPawn::Tick" },
+            { RVA::DMZPlayerPawn_Tick,         (void *)&Hook_DMZPlayerPawn_Tick,         (void **)&orig_DMZPlayerPawn_Tick,         "DMZPlayerPawn::Tick" },
+            { RVA::PVEPlayerPawn_Tick,         (void *)&Hook_PVEPlayerPawn_Tick,         (void **)&orig_PVEPlayerPawn_Tick,         "PVEPlayerPawn::Tick" },
+            { RVA::OpenWorldPlayerPawn_Tick,   (void *)&Hook_OpenWorldPlayerPawn_Tick,   (void **)&orig_OpenWorldPlayerPawn_Tick,   "OpenWorldPlayerPawn::Tick" },
+            { RVA::BRGroundWarPlayerPawn_Tick, (void *)&Hook_BRGroundWarPlayerPawn_Tick, (void **)&orig_BRGroundWarPlayerPawn_Tick, "BRGroundWarPlayerPawn::Tick" },
+        };
+        for (const TickTarget &t : pawnTickTargets) {
+            void *addr = UnityRva(t.rva);
+            if (Tools::IsPtrValid(addr)) {
+                Tools::Hook(addr, t.hook, t.orig);
+                LOGI("[NewFeatures] triggerbot: hooked %s @%p -> orig %p",
+                     t.name, addr, *t.orig);
+            } else {
+                LOGE("[NewFeatures] triggerbot: %s RVA 0x%llX did not resolve",
+                     t.name, (unsigned long long)t.rva);
+            }
         }
 
         LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p Raycast=%p RecentlyRendered=%p OccVisible=%p",
