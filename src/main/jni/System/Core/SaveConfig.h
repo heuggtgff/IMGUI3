@@ -63,6 +63,13 @@ void SaveConfiguration(const std::string& filename) {
     config["NewFeatures"]["Triggerbot"] = Config.NewFeaturesMenu.Triggerbot;
     config["NewFeatures"]["TriggerbotMode"] = Config.NewFeaturesMenu.TriggerbotMode;
     config["NewFeatures"]["TriggerbotRadius"] = Config.NewFeaturesMenu.TriggerbotRadius;
+    // LoadConfiguration() already reads these four back (each behind
+    // .contains()), but nothing was ever WRITING them - the new triggerbot
+    // options silently reset to defaults on every save/load cycle.
+    config["NewFeatures"]["TriggerbotDelay"] = Config.NewFeaturesMenu.TriggerbotDelay;
+    config["NewFeatures"]["TriggerbotHitboxPriority"] = Config.NewFeaturesMenu.TriggerbotHitboxPriority;
+    config["NewFeatures"]["TriggerbotLeadTarget"] = Config.NewFeaturesMenu.TriggerbotLeadTarget;
+    config["NewFeatures"]["TriggerbotCheckSpread"] = Config.NewFeaturesMenu.TriggerbotCheckSpread;
     config["NewFeatures"]["NoCrouch"] = Config.NewFeaturesMenu.NoCrouch;
 
     config["menu"][0] = menu[0];

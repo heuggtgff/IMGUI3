@@ -184,7 +184,12 @@ namespace NewFeatures
         constexpr uintptr_t CheckTarget                     = 0xC9C1B50; // bool(AttackableTarget,Vector3,Vector3,int,float)
         constexpr uintptr_t HasEnemyInPort                  = 0xC9C13F8; // bool(bool)
         constexpr uintptr_t GetIsAiming                     = 0xC9AF4E0; // bool()  (fire component ADS flag)
-        constexpr uintptr_t AmmoCanFire                     = 0xC160CEC; // bool() Slot 58 - WeaponFireComponent_Instant.AmmoCanFire
+        // WAS 0xC160CEC, annotated "WeaponFireComponent_Instant.AmmoCanFire" -
+        // in the dump that address is WeaponFireComponent_CarePackageGrenade's
+        // Slot-58 override (dump.cs 766768), a subclass that assumes care-package
+        // state. Weapon's own AmmoCanFire is 0x50EB73C (the address Feats.h.bak
+        // already hooks) - every call below passes a Weapon* as `this`.
+        constexpr uintptr_t AmmoCanFire                     = 0x50EB73C; // bool() - Weapon.AmmoCanFire
 
         // V3 working triggerbot RVAs (from IL2CPP dump)
         constexpr uintptr_t Weapon_StartFire                = 0x5123C84; // void() Slot 55 - Weapon.StartFire
@@ -223,25 +228,36 @@ namespace NewFeatures
         constexpr uintptr_t Pawn_IsLocalPlayer              = 0x518872C; // bool()
 
         // ===== ENHANCED TRIGGERBOT RVAs =====
-        // WeaponData fields for bullet speed and fire mode
-        constexpr uintptr_t Weapon_get_WeaponData           = 0x510C0A0; // WeaponData*() - Weapon.get_WeaponData
-        constexpr uintptr_t WeaponFireComponent_GetData     = 0x513F8A0; // WeaponFireComponentData*()
-        constexpr uintptr_t WeaponFireComponent_get_FireInterval = 0x513CBC4; // float()
-        constexpr uintptr_t WeaponFireComponent_get_BulletSpeed = 0x9DA0774; // float() - TraitBulletInitSpeed (Slot 107)
-        constexpr uintptr_t Weapon_get_FireMode             = 0x510E000; // int() - FireMode (auto/burst/single)
-        constexpr uintptr_t Weapon_get_IsBurst              = 0x510E100; // bool()
-        constexpr uintptr_t Weapon_get_IsAuto               = 0x510E200; // bool()
+        // Every address here was re-checked line by line against the reference
+        // dump (eliwoahzja/dump dump.cs - the SAME build as this repo: it gives
+        // Weapon.StartFire 0x5123C84 Slot 55 and Weapon.Tick 0x5114C34 Slot 33,
+        // both exactly what this file already used).
+        //
+        // The first cut of this block contained addresses that are NOT in the
+        // dump at all - 0x510C0A0 (WeaponData), 0x513F8A0 (GetData), 0x510E000 /
+        // 0x510E100 / 0x510E200 (fire mode), 0x513E000 / 0x513E100 (spread) and
+        // 0x9DA0774 (that one exists but is WeaponFireComponent_TraitCXB's
+        // override, wrong `this` for a generic fire component). Calling a
+        // non-existent RVA jumps into the middle of unrelated code, so all of
+        // them are replaced with the dump-verified equivalents below.
+        constexpr uintptr_t Weapon_get_CurrentFireComponent = 0x50EB1E4; // object() - Weapon.CurrentFireComponent (dump 739078)
+        constexpr uintptr_t Weapon_get_IsAutoFire           = 0x513D704; // bool()   - Weapon.get_IsAutoFire (dump 742570)
+        constexpr uintptr_t Weapon_get_IsBurstFire          = 0x50EBB28; // bool()   - Weapon.get_IsBurstFire (dump 739129)
+        constexpr uintptr_t Weapon_get_ClipAmmoCount        = 0x50EC614; // int()    - Weapon.get_ClipAmmoCount (dump 739204)
+        constexpr uintptr_t Weapon_get_ShotSpreadSize       = 0x5109B68; // float()  - Weapon.get_ShotSpreadSize (dump 739732)
+        constexpr uintptr_t WeaponFireComponent_get_BulletInitSpeed = 0xC14A158; // float() - base WeaponFireComponent.get_BulletInitSpeed (dump 764888, m_BulletInitSpeed @0x220)
         
-        // Pawn velocity for target leading
-        constexpr uintptr_t Pawn_get_Velocity               = 0x713743; // ref object() - Pawn.get_Velocity
-        
-        // Camera transform for accurate raycast origin
-        constexpr uintptr_t Camera_get_transform            = 0x5023A00; // Transform*()
-        constexpr uintptr_t Transform_get_position          = 0x50206AC; // Vector3()
-        
-        // Weapon spread/recoil
-        constexpr uintptr_t WeaponFireComponent_get_CurrentSpread = 0x513E000; // float()
-        constexpr uintptr_t WeaponFireComponent_get_CurrentRecoil = 0x513E100; // float()
+        // Pawn velocity for target leading.
+        // WAS 0x713743 - that is dump.cs LINE 713743 (where get_Velocity is
+        // declared), not an address; the real RVA is 0x51B38CC.
+        constexpr uintptr_t Pawn_get_Velocity               = 0x51B38CC; // Vector3() - Pawn.get_Velocity (dump 713743)
+
+        // Camera.get_transform 0x5023A00 / Transform.get_position 0x50206AC were
+        // also not in the dump (0x50206AC is Transform.set_position) and were
+        // never referenced - the code goes through cam->get_transform()->get_position().
+        //
+        // Spread: the dump has no get_CurrentSpread / get_CurrentRecoil anywhere;
+        // the real per-weapon answer is Weapon.get_ShotSpreadSize @0x5109B68.
         
         // Sprint-to-fire and hipfire delay
         constexpr uintptr_t Weapon_get_DelaySprintFire      = 0x513CBC4; // float()
@@ -311,10 +327,12 @@ namespace NewFeatures
         if (!IsReadable(localPawn) || !IsReadable(targetPawn)) return false;
         if (localPawn == targetPawn) return true;
 
-        auto isSameCamp = (bool (*)(void *, void *))UnityRva(RVA::Pawn_IsSameCamp); // Slot 84
+        // `static`: UnityRva -> getAbsoluteAddress() re-opens and regex-scans
+        // /proc/self/maps on EVERY call, and this runs per enemy per scan.
+        static auto isSameCamp = (bool (*)(void *, void *))UnityRva(RVA::Pawn_IsSameCamp); // Slot 84
         if (isSameCamp != nullptr && isSameCamp(localPawn, targetPawn)) return true;
 
-        auto getTeamId = (uint32_t (*)(void *))UnityRva(RVA::Pawn_GetTeamId);       // Slot 216
+        static auto getTeamId = (uint32_t (*)(void *))UnityRva(RVA::Pawn_GetTeamId);       // Slot 216
         if (getTeamId == nullptr) return false;
         const uint32_t localTeam  = getTeamId(localPawn);
         const uint32_t targetTeam = getTeamId(targetPawn);
@@ -357,66 +375,64 @@ namespace NewFeatures
         Vector3 predictedPos;       // Predicted position with leading
     };
 
+    // Weapon.CurrentFireComponent (dump 739078, RVA 0x50EB1E4). The dump prints
+    // it "ref object" - this dump prints EVERY object/struct return that way
+    // (GamePlay.get_MatchGame 0x8569B10 and Camera.WorldToScreenPoint 0x5023B54
+    // are printed identically and this repo already calls both by value, in
+    // game), so it is called by value and the component pointer comes back in x0.
+    inline void *GetCurrentFireComponent(void *weapon)
+    {
+        if (!Tools::IsPtrValid(weapon)) return nullptr;
+        static auto fn = (void *(*)(void *))UnityRva(RVA::Weapon_get_CurrentFireComponent);
+        if (fn == nullptr) return nullptr;
+        void *comp = fn(weapon);
+        return Tools::IsPtrValid(comp) ? comp : nullptr;
+    }
+
     // Get bullet speed from weapon (meters/second)
     inline float GetWeaponBulletSpeed(void *weapon)
     {
-        if (!Tools::IsPtrValid(weapon)) return 0.0f;
-        
-        // Try WeaponFireComponent first (most accurate for current fire mode)
-        auto getBulletSpeed = (float (*)(void *))UnityRva(RVA::WeaponFireComponent_get_BulletSpeed);
-        if (getBulletSpeed) {
-            // Get current fire component
-            void *fireComp = *(void **)((uintptr_t)weapon + Offsets::WeaponFire_CurrentComponent);
-            if (Tools::IsPtrValid(fireComp)) {
-                float speed = getBulletSpeed(fireComp);
-                if (speed > 0.0f) return speed;
+        void *fireComp = GetCurrentFireComponent(weapon);
+        if (Tools::IsPtrValid(fireComp)) {
+            // WeaponFireComponent.get_BulletInitSpeed, base class @0xC14A158
+            // (reads m_BulletInitSpeed @0x220) - correct for every subclass.
+            static auto getSpeed = (float (*)(void *))UnityRva(RVA::WeaponFireComponent_get_BulletInitSpeed);
+            if (getSpeed != nullptr) {
+                const float speed = getSpeed(fireComp);
+                if (speed >= 1.0f && speed <= 5000.0f) return speed;
             }
         }
-        
-        // Try WeaponData
-        auto getWeaponData = (void* (*)(void *))UnityRva(RVA::Weapon_get_WeaponData);
-        if (getWeaponData) {
-            void *data = getWeaponData(weapon);
-            if (Tools::IsPtrValid(data)) {
-                // WeaponData has various speed fields - check ProjectileDataDic or specific fields
-                // For now, use a reasonable default based on weapon type
-            }
-        }
-        
-        // Default fallback speeds by weapon category (meters/sec)
-        return 800.0f; // Default assault rifle speed
+        // No verified answer: a fixed AR-ish speed, so leading degrades to a
+        // constant small offset instead of switching itself off.
+        return 800.0f;
     }
 
-    // Get fire mode of current weapon
+    // Get fire mode of current weapon - Weapon.get_IsAutoFire / get_IsBurstFire
+    // (dump 742570 / 739129). Weapon has NO int get_FireMode in the dump; the
+    // only get_FireMode is WeaponFireComponent's, and it returns a byte.
     inline FireMode GetWeaponFireMode(void *weapon)
     {
         if (!Tools::IsPtrValid(weapon)) return FireMode::Unknown;
-        
-        auto getIsAuto = (bool (*)(void *))UnityRva(RVA::Weapon_get_IsAuto);
-        auto getIsBurst = (bool (*)(void *))UnityRva(RVA::Weapon_get_IsBurst);
-        auto getFireMode = (int (*)(void *))UnityRva(RVA::Weapon_get_FireMode);
-        
-        if (getIsAuto && getIsAuto(weapon)) return FireMode::Auto;
-        if (getIsBurst && getIsBurst(weapon)) return FireMode::Burst;
-        if (getFireMode) {
-            int mode = getFireMode(weapon);
-            if (mode == 1) return FireMode::Single;
-            if (mode == 2) return FireMode::Burst;
-            if (mode == 3) return FireMode::Auto;
-        }
-        return FireMode::Auto; // Default to auto
+
+        static auto getIsAuto  = (bool (*)(void *))UnityRva(RVA::Weapon_get_IsAutoFire);
+        static auto getIsBurst = (bool (*)(void *))UnityRva(RVA::Weapon_get_IsBurstFire);
+
+        if (getIsAuto == nullptr && getIsBurst == nullptr) return FireMode::Auto;
+        if (getIsAuto != nullptr && getIsAuto(weapon))   return FireMode::Auto;
+        if (getIsBurst != nullptr && getIsBurst(weapon)) return FireMode::Burst;
+        return FireMode::Single;   // neither flag set -> semi-auto
     }
 
-    // Get target velocity for leading
+    // Get target velocity for leading (Pawn.get_Velocity @0x51B38CC, dump 713743)
     inline Vector3 GetPawnVelocity(void *pawn)
     {
-        if (!Tools::IsPtrValid(pawn)) return Vector3::Zero();
-        
-        auto getVelocity = (Vector3 (*)(void *))UnityRva(RVA::Pawn_get_Velocity);
+        if (!Tools::IsPtrValid(pawn)) return Vector3::zero();
+
+        static auto getVelocity = (Vector3 (*)(void *))UnityRva(RVA::Pawn_get_Velocity);
         if (getVelocity) {
             return getVelocity(pawn);
         }
-        return Vector3::Zero();
+        return Vector3::zero();
     }
 
     // Calculate bullet travel time to target
@@ -433,68 +449,47 @@ namespace NewFeatures
         return currentPos + velocity * travelTime;
     }
 
-    // Check if weapon is ready to fire (comprehensive readiness)
-    inline bool IsWeaponReadyToFire(void *weapon, void *fireComp)
+    // Is the weapon able to fire right now (ammo + the game's own gate).
+    // Both calls take a Weapon*: Weapon.AmmoCanFire @0x50EB73C and
+    // Weapon.get_ClipAmmoCount @0x50EC614 - so no fire-component pointer and no
+    // raw field read is needed. The old version called RVA::AmmoCanFire with a
+    // fire component as `this`, but that address is a *subclass* override
+    // (CarePackageGrenade), and the two sprint/get-ready branches it carried
+    // were empty placeholders that never changed the result.
+    inline bool IsWeaponReadyToFire(void *weapon)
     {
-        if (!Tools::IsPtrValid(weapon) || !Tools::IsPtrValid(fireComp)) return false;
-        
-        // Check ammo
-        auto ammoCanFire = (bool (*)(void *))UnityRva(RVA::AmmoCanFire);
-        if (ammoCanFire && !ammoCanFire(fireComp)) return false;
-        
-        int clipAmmo = *(int *)((uintptr_t)fireComp + Offsets::WeaponFire_ClipAmmoCount);
-        if (clipAmmo <= 0) return false;
-        
-        // Check sprint-to-fire delay
-        auto getDelaySprintFire = (float (*)(void *))UnityRva(RVA::Weapon_get_DelaySprintFire);
-        if (getDelaySprintFire) {
-            float delay = getDelaySprintFire(weapon);
-            if (delay > 0.0f) {
-                // Check if we're sprinting - if so, delay applies
-                // This would need pawn state check
-            }
-        }
-        
-        // Check hipfire get-ready delay
-        auto getUseGetReadyTime = (bool (*)(void *))UnityRva(RVA::Weapon_get_UseGetReadyTime);
-        if (getUseGetReadyTime && getUseGetReadyTime(weapon)) {
-            auto getGetReadyTime = (float (*)(void *))UnityRva(RVA::Weapon_get_GetReadyTime);
-            if (getGetReadyTime) {
-                float readyTime = getGetReadyTime(weapon);
-                if (readyTime > 0.0f) {
-                    // Check if enough time has passed since equip/stop sprint
-                }
-            }
-        }
-        
+        if (!Tools::IsPtrValid(weapon)) return false;
+
+        static auto ammoCanFire = (bool (*)(void *))UnityRva(RVA::AmmoCanFire);
+        if (ammoCanFire != nullptr && !ammoCanFire(weapon)) return false;
+
+        static auto getClip = (int (*)(void *))UnityRva(RVA::Weapon_get_ClipAmmoCount);
+        if (getClip != nullptr && getClip(weapon) <= 0) return false;
+
         return true;
     }
 
-    // Check bullet spread/recoil - returns true if shot would be accurate
-    inline bool IsShotAccurate(void *fireComp, float maxAllowedSpread = 0.1f)
+    // Is the weapon's current spread small enough to fire? Uses
+    // Weapon.get_ShotSpreadSize @0x5109B68 - the only spread getter the dump
+    // contains (there is no get_CurrentSpread / get_CurrentRecoil at all).
+    // FAIL-OPEN on purpose: no getter, a NaN, or an out-of-range reading all
+    // mean "fire". The old version failed CLOSED on a 0.1 threshold against
+    // getters that do not exist, and with Check Spread defaulting to ON that
+    // would have silenced the triggerbot entirely.
+    inline bool IsShotAccurate(void *weapon, float maxAllowedSpread = 2.0f)
     {
-        if (!Tools::IsPtrValid(fireComp)) return false;
-        
-        auto getSpread = (float (*)(void *))UnityRva(RVA::WeaponFireComponent_get_CurrentSpread);
-        auto getRecoil = (float (*)(void *))UnityRva(RVA::WeaponFireComponent_get_CurrentRecoil);
-        
-        if (getSpread) {
-            float spread = getSpread(fireComp);
-            if (spread > maxAllowedSpread) return false;
-        }
-        
-        if (getRecoil) {
-            float recoil = getRecoil(fireComp);
-            if (recoil > maxAllowedSpread) return false;
-        }
-        
-        return true;
+        if (!Tools::IsPtrValid(weapon)) return true;
+        static auto getSpread = (float (*)(void *))UnityRva(RVA::Weapon_get_ShotSpreadSize);
+        if (getSpread == nullptr) return true;
+        const float spread = getSpread(weapon);
+        if (!(spread >= 0.0f) || spread > 90.0f) return true;   // NaN / nonsense units
+        return spread <= maxAllowedSpread;
     }
 
     // Get hitbox world position for a pawn
     inline Vector3 GetHitboxPosition(void *pawn, HitboxPriority hitbox)
     {
-        if (!Tools::IsPtrValid(pawn)) return Vector3::Zero();
+        if (!Tools::IsPtrValid(pawn)) return Vector3::zero();
         
         switch (hitbox) {
             case HitboxPriority::Head: {
@@ -534,7 +529,7 @@ namespace NewFeatures
                 break;
             }
         }
-        return Vector3::Zero();
+        return Vector3::zero();
     }
 
     // Check which hitbox is under crosshair
@@ -863,7 +858,7 @@ namespace NewFeatures
                 if (hitboxPriority != HitboxPriority::Any && hb != hitboxPriority) continue;
                 
                 Vector3 hitboxPos = GetHitboxPosition(pawn, hb);
-                if (hitboxPos.IsZero()) continue;
+                if (hitboxPos == Vector3::zero()) continue;
                 
                 const Vector3 sc = worldToScreen(cam, hitboxPos);
                 if (sc.z <= 0.0f) continue; // Behind camera
@@ -899,6 +894,12 @@ namespace NewFeatures
         }
         
         // ---- Phase 2: LOS check and travel time calculation for candidates ----
+        // Spread and readiness do not depend on WHICH candidate - evaluate both
+        // once here instead of once per candidate (and both helpers take the
+        // Weapon*, not a fire-component pointer).
+        const bool shotAccurate = !checkSpread || IsShotAccurate(held);
+        const bool weaponReady  = IsWeaponReadyToFire(held);
+
         TriggerTarget bestTarget{};
         float bestDist2 = radiusSq + 1.0f;
         
@@ -947,17 +948,9 @@ namespace NewFeatures
                 }
             }
             
-            // Check spread/recoil
-            if (checkSpread && Tools::IsPtrValid(held)) {
-                void *fireComp = *(void **)((uintptr_t)held + Offsets::WeaponFire_CurrentComponent);
-                if (!IsShotAccurate(fireComp)) continue;
-            }
-            
-            // Check weapon readiness
-            if (Tools::IsPtrValid(held)) {
-                void *fireComp = *(void **)((uintptr_t)held + Offsets::WeaponFire_CurrentComponent);
-                if (!IsWeaponReadyToFire(held, fireComp)) continue;
-            }
+            // Candidate-independent gates (computed once above): if the weapon
+            // cannot fire, no candidate can pass - stop scanning.
+            if (!shotAccurate || !weaponReady) break;
             
             // Select best target (nearest to crosshair center)
             if (candidates[c].dist2 < bestDist2) {
