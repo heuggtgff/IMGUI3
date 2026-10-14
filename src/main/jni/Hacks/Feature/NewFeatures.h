@@ -116,17 +116,15 @@ namespace NewFeatures
     }
     
     // Triggerbot: Human reaction delay
+    // NOTE: intentionally does NOT sleep. This ran on the game's render
+    // thread inside hot hooks (CreateBulletLine/Projectile) and stalling it
+    // froze the frame for [delay] ms per shot - the same class of game corrupt
+    // caused by the earlier Dobby trampoline bugs. The randomized-delay knobs
+    // remain in the config for a future off-thread implementation.
     inline void TriggerbotDelay()
     {
         if (!g_Features.triggerbot) return;
-        if (g_Features.triggerbotDelayMin >= g_Features.triggerbotDelayMax) return;
-        
-        std::uniform_int_distribution<int> dist(g_Features.triggerbotDelayMin, 
-                                                  g_Features.triggerbotDelayMax);
-        int delayMs = dist(rng);
-        if (delayMs > 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(delayMs));
-        }
+        // No-op: no blocking sleeps on the render thread.
     }
     
     // No Hit Flinch: Zero out flinch effect
