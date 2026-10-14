@@ -515,7 +515,6 @@ namespace android::anwcreator::detail::framework
                 return *this;
             }
 
-            //  Surface ng mod mo
             Transaction &SetParent(jobject child, jobject newParent)
             {
                 if (!transaction || !child || !newParent)
@@ -796,7 +795,7 @@ namespace android
             context->surfaceControl     =
                 std::make_unique<anwcreator::detail::jni::GlobalRef>(jniEnv, localSurfaceControl);
 
-            // NEW: parent root surface store
+            // Parent root surface store
             if (parentSC)
             {
                 context->parentSurfaceControl =
@@ -905,7 +904,7 @@ namespace android
             return true;
         }
 
-        // 🔥 NEW: ensure overlay surface is attached to the current root and visible
+        // Ensure the overlay surface is attached to the current root and visible
         static void EnsureVisible(ANativeActivity *activity, ANativeWindow *nativeWindow)
         {
             if (!activity || !activity->vm || !nativeWindow)

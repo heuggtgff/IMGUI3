@@ -1,7 +1,7 @@
 #pragma once
 
 // ============================================================================
-//  NewFeatures.h  -  combat (Triggerbot) + sniper (Stable Scope) features
+//  NewFeatures.h  -  combat (Triggerbot) features
 //
 //  EVERY address/offset below was resolved from "dump (GR .57).cs"
 //  (huggingface.co/datasets/jeudhehs/dump).  The libanogs(.57).so.lst file in
@@ -36,13 +36,6 @@
 //                                 build did)
 //     Pawn::get_IsFiring()        RVA 0x51A8A38   ("Firing only" mode)
 //
-//     !!  NEVER index the List object itself (*(uintptr_t**)(list + 0x10)).
-//     !!  That yields the il2cpp ARRAY HEADER, whose first slots are the
-//     !!  klass / bounds pointers - 8-byte aligned and mapped, so they pass an
-//     !!  alignment + IsPtrValid() check - and handing one of those to a Pawn
-//     !!  virtual getter is what crashed the client as soon as a game (Training
-//     !!  Ground) was joined with the triggerbot enabled.
-//
 //   The old CheckTarget @0xC9C1B50 / HasEnemyInPort @0xC9C13F8 /
 //   WeaponFireComponent::StartFire @0xC14C29C hooks are gone: they only run on
 //   the game's own aim-assist path (too late for an auto-fire).
@@ -51,43 +44,11 @@
 //     m_IsAlive            0x548
 //
 //  ---------------------------------------------------------------------------
-//  STABLE SCOPE  (the old "No Drift" only pinned m_AimmingBreatheCountDown
-//                0x774, which is *breathing*.  Movement sway and the landing
-//                punch are different systems.)
+//  STABLE SCOPE was removed with its UI; its four hooks (GetBreatheTremblingPos
+//  0xC9BD880, CollectWeaponShakeOffsets 0x9B774C0, UpdateFirstPersonCameraOffset
+//  0x51C489C, OnJumpHitGround 0x8599460) are gone. NoDrift now = the
+//  UpdateBreatheTrembling patch in Main.cpp (Patches.NoDrift).
 //  ---------------------------------------------------------------------------
-//   Breathing
-//     WeaponFireComponent_Instant::GetBreatheTremblingPos  RVA 0xC9BD880
-//        protected virtual Vector2 GetBreatheTremblingPos()  (Slot 116)
-//     m_AimmingBreatheCountDown  0x774
-//     m_BreatheTremblingPos      0x5A0
-//
-//   Movement / locomotion sway + landing shake mode (the system that moves the
-//   reticle while strafing and dips it on landing):
-//     WeaponShakeController::CollectWeaponShakeOffsets  RVA 0x9B774C0
-//        (TypeDefIndex 20710, dump 1066212)
-//        private WeaponShakeOffsets CollectWeaponShakeOffsets(float dt, float weight)
-//        WeaponShakeOffsets is the struct that carries
-//          rotationOffset (0x00)  positionOffset (0x0C)
-//          AimRotationOffset (0x18)  gunKickAimRotationOffset (0x24)
-//          crosshairOffset (0x30)    <-- the crosshair/scope reticle offset
-//          ikWeaponRootRotationOffset (0x3C) ikWeaponRootPositionOffset (0x48)
-//          pawnRootRotationOffset (0x54)     pawnRootPositionOffset (0x60)
-//        WeaponShakeController::m_Pawn = 0x78  (owner pawn)
-//        (the controller also tracks m_PrePawnPhysicsState / m_CurPawnPhysicsState
-//         at 0x150/0x154, i.e. walk/jump/land shake modes)
-//
-//   Lateral 1P camera shift while strafing:
-//     Pawn::UpdateFirstPersonCameraOffset(float)  RVA 0x51C489C  (dump 797151)
-//        writes m_FirstPersonCameraCurrentOffsetX (0x6FC)
-//               m_FirstPersonCameraDestOffsetX    (0x700)
-//
-//   Landing impact ("crosshair dips down and springs back"):
-//     HitGroundComponent::OnJumpHitGround(float fLandHeight, bool bIsUltLanding)
-//        RVA 0x8599460  (TypeDefIndex 20394, dump 1050352)
-//     HitGroundComponent : PawnComponent -> PawnComponent::m_Pawn = 0x20
-//
-//   Pawn::IsAiming() RVA 0x519BB10  (dump 803813, == Defines.h api15)
-//        -> "the local player is scoping / hardscoping"
 //
 //  HOOK SAFETY: the repo already learned (DrawESP.h comment block) that Dobby
 //  inline trampolines on tiny shared callers corrupt game state.  Every target
@@ -184,11 +145,8 @@ namespace NewFeatures
         constexpr uintptr_t CheckTarget                     = 0xC9C1B50; // bool(AttackableTarget,Vector3,Vector3,int,float)
         constexpr uintptr_t HasEnemyInPort                  = 0xC9C13F8; // bool(bool)
         constexpr uintptr_t GetIsAiming                     = 0xC9AF4E0; // bool()  (fire component ADS flag)
-        // WAS 0xC160CEC, annotated "WeaponFireComponent_Instant.AmmoCanFire" -
-        // in the dump that address is WeaponFireComponent_CarePackageGrenade's
-        // Slot-58 override (dump.cs 766768), a subclass that assumes care-package
-        // state. Weapon's own AmmoCanFire is 0x50EB73C (the address Feats.h.bak
-        // already hooks) - every call below passes a Weapon* as `this`.
+        // WAS 0xC160CEC = CarePackageGrenade's Slot-58 override (dump 766768);
+        // Weapon's own AmmoCanFire is 0x50EB73C - every call passes a Weapon*.
         constexpr uintptr_t AmmoCanFire                     = 0x50EB73C; // bool() - Weapon.AmmoCanFire
 
         // V3 working triggerbot RVAs (from IL2CPP dump)
@@ -228,18 +186,11 @@ namespace NewFeatures
         constexpr uintptr_t Pawn_IsLocalPlayer              = 0x518872C; // bool()
 
         // ===== ENHANCED TRIGGERBOT RVAs =====
-        // Every address here was re-checked line by line against the reference
-        // dump (eliwoahzja/dump dump.cs - the SAME build as this repo: it gives
-        // Weapon.StartFire 0x5123C84 Slot 55 and Weapon.Tick 0x5114C34 Slot 33,
-        // both exactly what this file already used).
-        //
-        // The first cut of this block contained addresses that are NOT in the
-        // dump at all - 0x510C0A0 (WeaponData), 0x513F8A0 (GetData), 0x510E000 /
-        // 0x510E100 / 0x510E200 (fire mode), 0x513E000 / 0x513E100 (spread) and
-        // 0x9DA0774 (that one exists but is WeaponFireComponent_TraitCXB's
-        // override, wrong `this` for a generic fire component). Calling a
-        // non-existent RVA jumps into the middle of unrelated code, so all of
-        // them are replaced with the dump-verified equivalents below.
+        // All addresses verified against eliwoahzja/dump (same build: it gives
+        // Weapon.StartFire 0x5123C84 Slot 55 and Weapon.Tick 0x5114C34 Slot 33).
+        // NEVER add an unverified RVA here - a bogus address jumps into unrelated
+        // code (the first cut of this block carried several that are not in the
+        // dump: 0x510C0A0, 0x513F8A0, 0x510E000/100/200, 0x513E000/100).
         constexpr uintptr_t Weapon_get_CurrentFireComponent = 0x50EB1E4; // object() - Weapon.CurrentFireComponent (dump 739078)
         constexpr uintptr_t Weapon_get_IsAutoFire           = 0x513D704; // bool()   - Weapon.get_IsAutoFire (dump 742570)
         constexpr uintptr_t Weapon_get_IsBurstFire          = 0x50EBB28; // bool()   - Weapon.get_IsBurstFire (dump 739129)
@@ -252,10 +203,9 @@ namespace NewFeatures
         // declared), not an address; the real RVA is 0x51B38CC.
         constexpr uintptr_t Pawn_get_Velocity               = 0x51B38CC; // Vector3() - Pawn.get_Velocity (dump 713743)
 
-        // Camera.get_transform 0x5023A00 / Transform.get_position 0x50206AC were
-        // also not in the dump (0x50206AC is Transform.set_position) and were
-        // never referenced - the code goes through cam->get_transform()->get_position().
-        //
+        // Camera.get_transform 0x5023A00 / Transform.get_position 0x50206AC are
+        // NOT in the dump (0x50206AC is set_position) and were never used -
+        // transform access goes through cam->get_transform()->get_position().
         // Spread: the dump has no get_CurrentSpread / get_CurrentRecoil anywhere;
         // the real per-weapon answer is Weapon.get_ShotSpreadSize @0x5109B68.
         
@@ -375,11 +325,10 @@ namespace NewFeatures
         Vector3 predictedPos;       // Predicted position with leading
     };
 
-    // Weapon.CurrentFireComponent (dump 739078, RVA 0x50EB1E4). The dump prints
-    // it "ref object" - this dump prints EVERY object/struct return that way
-    // (GamePlay.get_MatchGame 0x8569B10 and Camera.WorldToScreenPoint 0x5023B54
-    // are printed identically and this repo already calls both by value, in
-    // game), so it is called by value and the component pointer comes back in x0.
+    // Weapon.CurrentFireComponent (dump 739078, RVA 0x50EB1E4). This dump prints
+    // every object/struct return as "ref object" (get_MatchGame and
+    // WorldToScreenPoint print identically and both are called by value here in
+    // game), so it is called by value.
     inline void *GetCurrentFireComponent(void *weapon)
     {
         if (!Tools::IsPtrValid(weapon)) return nullptr;
@@ -408,8 +357,7 @@ namespace NewFeatures
     }
 
     // Get fire mode of current weapon - Weapon.get_IsAutoFire / get_IsBurstFire
-    // (dump 742570 / 739129). Weapon has NO int get_FireMode in the dump; the
-    // only get_FireMode is WeaponFireComponent's, and it returns a byte.
+    // (dump 742570 / 739129); Weapon has no int get_FireMode in the dump.
     inline FireMode GetWeaponFireMode(void *weapon)
     {
         if (!Tools::IsPtrValid(weapon)) return FireMode::Unknown;
@@ -450,12 +398,9 @@ namespace NewFeatures
     }
 
     // Is the weapon able to fire right now (ammo + the game's own gate).
-    // Both calls take a Weapon*: Weapon.AmmoCanFire @0x50EB73C and
-    // Weapon.get_ClipAmmoCount @0x50EC614 - so no fire-component pointer and no
-    // raw field read is needed. The old version called RVA::AmmoCanFire with a
-    // fire component as `this`, but that address is a *subclass* override
-    // (CarePackageGrenade), and the two sprint/get-ready branches it carried
-    // were empty placeholders that never changed the result.
+    // Both calls take a Weapon*, so no fire-component pointer is needed. (The
+    // old version called AmmoCanFire with a fire component as `this`, but that
+    // address is a *subclass* override - CarePackageGrenade.)
     inline bool IsWeaponReadyToFire(void *weapon)
     {
         if (!Tools::IsPtrValid(weapon)) return false;
@@ -470,12 +415,8 @@ namespace NewFeatures
     }
 
     // Is the weapon's current spread small enough to fire? Uses
-    // Weapon.get_ShotSpreadSize @0x5109B68 - the only spread getter the dump
-    // contains (there is no get_CurrentSpread / get_CurrentRecoil at all).
-    // FAIL-OPEN on purpose: no getter, a NaN, or an out-of-range reading all
-    // mean "fire". The old version failed CLOSED on a 0.1 threshold against
-    // getters that do not exist, and with Check Spread defaulting to ON that
-    // would have silenced the triggerbot entirely.
+    // Weapon.get_ShotSpreadSize @0x5109B68 (the only spread getter in the dump).
+    // FAIL-OPEN on purpose: no getter / NaN / nonsense value all mean "fire".
     inline bool IsShotAccurate(void *weapon, float maxAllowedSpread = 2.0f)
     {
         if (!Tools::IsPtrValid(weapon)) return true;
@@ -1091,8 +1032,7 @@ namespace NewFeatures
                 ready = false; // Don't hold fire on single-shot
             }
             
-            // For burst weapons, we could add burst counting logic here
-            // For now, treat burst as auto with delay
+            // Burst needs no special handling: StartFire/StopFire repeat per burst.
         }
 
         if (ready && Config.NewFeaturesMenu.TriggerbotDelay > 0) {

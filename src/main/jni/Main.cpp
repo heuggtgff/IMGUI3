@@ -2552,13 +2552,8 @@ void Init_Thread() {
         LOGE("BulletTrack: CreateBulletProjectile RVA 0xC9C33A4 did not resolve");
     }
 
-    // NewFeatures (dump-verified, see NewFeatures.h header block):
-    //   Triggerbot   -> WeaponFireComponent_Instant::CheckTarget   @0xC9C1B50
-    //                   WeaponFireComponent_Instant::HasEnemyInPort@0xC9C13F8
-    //   Stable Scope -> GetBreatheTremblingPos                      @0xC9BD880
-    //                   WeaponShakeController::CollectWeaponShakeOffsets @0x9B774C0
-    //                   Pawn::UpdateFirstPersonCameraOffset         @0x51C489C
-    //                   HitGroundComponent::OnJumpHitGround         @0x8599460
+    // NewFeatures: Weapon::Tick / Pawn::Tick hooks + 8-byte patches - the
+    // dump-verified targets and citations live in NewFeatures.h.
     NewFeatures::InstallHooks();
 
     InstallBRClassEspConfigHook();
@@ -2625,8 +2620,3 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     std::thread(Skins_Thread).detach();
     return JNI_VERSION_1_6;
 }
-//
-//
-// 2. Triggerbot (Combat)
-//
-//

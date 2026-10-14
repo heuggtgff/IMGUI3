@@ -223,7 +223,7 @@ public:
         auto _MatchGame__get_DroppedPickUpMgr = (BRDroppedPickUpMgr *(*)(MatchGame *))(Class_MatchGame_get_DroppedPickUpMgr);
         return _MatchGame__get_DroppedPickUpMgr(this);
     }
-}; //--
+};
 
 class GamePlay {
 public:

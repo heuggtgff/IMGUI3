@@ -217,8 +217,7 @@ bool CaptureFeedbackScreenshotJPG(const std::string& savePath, std::string* erro
         return false; 
     } 
 
-    // Auto blur setup para sa customer safety
-    // BlurRGBA(pixels, width, height, 15);  <-- COMMENTED OUT TO REMOVE BLUR
+    // (auto blur deliberately disabled for this build)
 
     std::vector<unsigned char> flipped(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u); 
     for (int y = 0; y < height; y++) { 
@@ -317,7 +316,6 @@ std::string BuildFeedbackPayload(const FeedbackState& snapshot) {
     oss << "<b>🔧 Version:</b> <code>1.6.57</code>\n"; 
     oss << "<b>🛡️ Status:</b> <code>Safe</code>\n\n"; 
     
-    // oss << "<b>Note:</b> <code>The pictures are made unclear to keep customer information safe.</code>\n\n";
     oss << "<b>🛒 BUY KEY TO:</b> @ThaxxylHax"; 
     if (snapshot.note[0] != '\0') { 
         oss << "\n<b>📝 Logs:</b> " << snapshot.note; 

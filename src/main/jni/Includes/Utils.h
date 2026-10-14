@@ -57,7 +57,6 @@ jboolean isGameLibLoaded(JNIEnv *env, jobject thiz) {
 }
 
 bool isLibraryLoaded(const char *libraryName) {
-    //libLoaded = true;
     char line[512] = {0};
     FILE *fp = fopen(OBFUSCATE("/proc/self/maps"), OBFUSCATE("rt"));
     if (fp != NULL) {
@@ -88,8 +87,7 @@ uintptr_t string2Offset(const char *c) {
         return strtoul(c, nullptr, base);
     }
 
-    // All other options exhausted, sizeof(uintptr_t) == sizeof(unsigned long long))
-    return strtoull(c, nullptr, base);
+    // All other options exhausted, sizeof(uintptr_t) == sizeof(unsigned long long))return strtoull(c, nullptr, base);
 }
 
 namespace ToastLength {

@@ -108,9 +108,9 @@ struct sWeaponAim {
         float FpsLevel1;
         bool showFPSLevelSlider;
 
-        bool FpsLevelUltra;              // New: toggle for Ultra FPS
+        bool FpsLevelUltra;              // Ultra FPS toggle
         float FpsLevelUltra1 = 240.0f;   // Default Ultra FPS value
-        bool showFPSLevelUltraSlider;    // New: show Ultra FPS slider
+        bool showFPSLevelUltraSlider;    // Show the Ultra FPS slider
     };
     sWeaponAim Aim{0};
     
