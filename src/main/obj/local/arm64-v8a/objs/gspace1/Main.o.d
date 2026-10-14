@@ -1,599 +1,734 @@
-src/main/obj/local/arm64-v8a/objs/gspace1/Main.o: src/main/jni/Main.cpp \
-  src/main/jni/Includes/Logger.h src/main/jni/Includes/Macros.h \
-  src/main/jni/And64InlineHook/And64InlineHook.hpp \
-  src/main/jni/Includes/obfuscate.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstddef \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string_view \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__string \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/algorithm \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/initializer_list \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstring \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/utility \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__tuple \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdint \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__debug \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/memory \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/typeinfo \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/exception \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdlib \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdlib.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/new \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/limits \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iterator \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iosfwd \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/wchar.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__functional_base \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/tuple \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdexcept \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cassert \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/atomic \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdio \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdio.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cwchar \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cwctype \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cctype \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ctype.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/wctype.h \
-  src/main/jni/Includes/Utils.h src/main/jni/ImGui/Call_ImGui.h \
-  src/main/jni/ImGui/imgui.h src/main/jni/ImGui/imconfig.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stddef.h \
-  src/main/jni/ImGui/imgui_impl_android.h \
-  src/main/jni/ImGui/imgui_impl_opengl3.h \
-  src/main/jni/ImGui/imgui_internal.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/math.h \
-  src/main/jni/ImGui/imstb_textedit.h src/main/jni/ImGui/fontch.h \
-  src/main/jni/ImGui/Icon.h src/main/jni/ImGui/Iconcpp.h \
-  src/main/jni/ImGui/ImguiPP.h \
-  src/main/jni/IL2CppSDKGenerator/BasicStructs/Call_BasicStructs.h \
-  src/main/jni/IL2CppSDKGenerator/BasicStructs/Includes.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iostream \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ios \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__locale \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/mutex \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__mutex_base \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/chrono \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ctime \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ratio \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/climits \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/system_error \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cerrno \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/errno.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__threading_support \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/functional \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/locale.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/streambuf \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/istream \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ostream \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/locale \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdarg \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__bsd_locale_fallbacks.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/bitset \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__bit_reference \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/inttypes.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/vector \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__split_buffer \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/map \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__tree \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/fstream \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/thread \
-  src/main/jni/IL2CppSDKGenerator/BasicStructs/Vector3.hpp \
-  src/main/jni/IL2CppSDKGenerator/BasicStructs/Vector2.h \
-  src/main/jni/IL2CppSDKGenerator/BasicStructs/Color.h \
-  src/main/jni/IL2CppSDKGenerator/BasicStructs/Rect.h \
-  src/main/jni/IL2CppSDKGenerator/BasicStructs/Quaternion.h \
-  src/main/jni/IL2CppSDKGenerator/IL2Cpp/Call_IL2Cpp.h \
-  src/main/jni/IL2CppSDKGenerator/IL2Cpp/Il2Cpp.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/codecvt \
-  src/main/jni/IL2CppSDKGenerator/IL2Cpp/plthook.h \
-  src/main/jni/IL2CppSDKGenerator/IL2Cpp/Fake_dlfcn.h \
-  src/main/jni/IL2CppSDKGenerator/IL2Cpp/Tools.h \
-  src/main/jni/IL2CppSDKGenerator/Dobby/dobby.h \
-  src/main/jni/Hacks/Hacks.h src/main/jni/Hacks/StructGame/StructGame.h \
-  src/main/jni/Hacks/StructGame/Defines.h \
-  src/main/jni/Hacks/StructGame/StructSDK.h \
-  src/main/jni/Hacks/StructGame/../Feature/ToString.h \
-  src/main/jni/Hacks/Feature/Feature.h \
-  src/main/jni/Hacks/StructGame/../Feature/Init_Hacks.h \
-  src/main/jni/Hacks/StructGame/../Feature/DrawESP.h \
-  src/main/jni/Hacks/StructGame/../Feature/Icon.h \
-  src/main/jni/Hacks/StructGame/../Feature/../XPremium/Skeleton.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/array \
-  src/main/jni/System/Hooks/ThrowableAlert.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/unordered_map \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__hash_table \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cmath \
-  src/main/jni/System/Hooks/ArmorEsp.h \
-  src/main/jni/Hacks/StructGame/../Feature/BRClassEsp.h \
-  src/main/jni/Hacks/StructGame/../Feature/NoGravity.h \
-  src/main/jni/IL2CppSDKGenerator/KittyMemory/MemoryPatch.h \
-  src/main/jni/IL2CppSDKGenerator/KittyMemory/KittyUtils.h \
-  src/main/jni/IL2CppSDKGenerator/KittyMemory/KittyMemory.h \
-  src/main/jni/AstralPrtctn/AntiHook.h \
-  src/main/jni/curl/curl-android-arm64-v8a/include/curl/curl.h \
-  src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlver.h \
-  src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlbuild.h \
-  src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlrules.h \
-  src/main/jni/curl/curl-android-arm64-v8a/include/curl/easy.h \
-  src/main/jni/curl/curl-android-arm64-v8a/include/curl/multi.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/sstream \
-  src/main/jni/foxcheats/include/ScanEngine.hpp \
-  src/main/jni/Includes/Jni_Stuff.h \
-  src/main/jni/Includes/../AstralPrtctn/json.hpp \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/numeric \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/forward_list \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/valarray \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/clocale \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/rsa.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/opensslconf.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/asn1.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/e_os2.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/bio.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/crypto.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/stack.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/safestack.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/opensslv.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/ossl_typ.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/symhacks.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/bn.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pem.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/evp.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/objects.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/obj_mac.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/x509.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/buffer.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/ec.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/dsa.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/dh.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/sha.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/x509_vfy.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/lhash.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pkcs7.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pem2.h \
-  src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/md5.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iomanip \
-  src/main/jni/oxorany/source/oxorany.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cfloat \
-  src/main/jni/oxorany/source/oxorany.cpp \
-  src/main/jni/oxorany/source/oxorany_include.h \
-  src/main/jni/FeedbackService.h src/main/jni/MainFeatureIncludes.h \
-  src/main/jni/System/Hooks/Feats.h src/main/jni/System/Core/FileUtils.h \
-  src/main/jni/System/Core/ConfigManager.h \
-  src/main/jni/System/Core/SaveConfig.h \
-  src/main/jni/foxcheats/../foxcheats/include/json.hpp \
-  src/main/jni/System/Core/Bypass.h \
-  src/main/jni/System/UI/GuestAccount.h \
-  src/main/jni/System/UI/SearchFunction.h \
-  src/main/jni/System/UI/TextureLoader.h src/main/jni/ImGui/stb_image.h \
-  src/main/jni/System/UI/MiscTab.h \
-  src/main/jni/foxcheats/../ImGui/imgui_settings.h \
-  src/main/jni/ImGui/../System/Texture/box_shadow.h \
-  src/main/jni/foxcheats/../ImGui/custom_widgets.hpp \
-  src/main/jni/foxcheats/../Fonts/Icon.h \
-  src/main/jni/System/UI/SkinTab.h src/main/jni/System/UI/Keyboard.h \
-  src/main/jni/foxcheats/../Skin/Fields.h \
-  src/main/jni/foxcheats/../Skin/Thread.h \
-  src/main/jni/foxcheats/../Skin/Camo.h \
-  src/main/jni/System/UI/SettingsTab.h src/main/jni/System/UI/Logo.h \
-  src/main/jni/System/UI/LoadingAnimation.h \
-  src/main/jni/System/UI/FloatingInfo.h \
-  src/main/jni/System/Texture/main.h src/main/jni/IMAGE/astral.h \
-  src/main/jni/AstralPrtctn/StrEnc.h src/main/jni/AstralPrtctn/md5.h \
-  src/main/jni/SDK/Xhook/xhook.h \
-  src/main/jni/ImGui/runtime_preview_menu.h \
-  src/main/jni/ImGui/../IMAGE/bg.h \
-  src/main/jni/ImGui/runtime_preview_helpers.h \
-  src/main/jni/Fonts/Iconcpp.h src/main/jni/Fonts/fonts.h \
-  src/main/jni/Fonts/SPECIAL.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/unordered_set \
-  src/main/jni/Substrate/SubstrateHook.h \
-  src/main/jni/Substrate/CydiaSubstrate.h
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/obj/local/arm64-v8a/objs/gspace1/Main.o: \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Main.cpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/Logger.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/Macros.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/And64InlineHook/And64InlineHook.hpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/obfuscate.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstddef \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/version \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string_view \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__string \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/algorithm \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/initializer_list \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/type_traits \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstring \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/utility \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__tuple \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdint \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdint.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__debug \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iosfwd \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/wchar.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/memory \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/typeinfo \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/exception \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdlib \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdlib.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/new \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/limits \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iterator \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__functional_base \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/tuple \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdexcept \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/atomic \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__threading_support \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/chrono \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ctime \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ratio \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/climits \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/limits.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/errno.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/functional \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/bit \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdio \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdio.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cwchar \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cwctype \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cctype \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ctype.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/wctype.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/Utils.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/Call_ImGui.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imconfig.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/float.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stddef.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_impl_android.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_impl_opengl3.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_internal.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/math.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imstb_textedit.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/fontch.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/Icon.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/Iconcpp.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/ImguiPP.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Call_BasicStructs.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Includes.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iostream \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ios \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__locale \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/mutex \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__mutex_base \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/system_error \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__errc \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cerrno \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/locale.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/support/android/locale_bionic.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/streambuf \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/istream \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ostream \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/locale \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdarg \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__bsd_locale_fallbacks.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/bitset \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__bit_reference \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/inttypes.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/vector \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__split_buffer \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/map \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__tree \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__node_handle \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/optional \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/fstream \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/filesystem \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stack \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/deque \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iomanip \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/thread \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Vector3.hpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Vector2.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Color.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Rect.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Quaternion.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/IL2Cpp/Call_IL2Cpp.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/IL2Cpp/Il2Cpp.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/codecvt \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/IL2Cpp/plthook.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/IL2Cpp/Fake_dlfcn.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/IL2Cpp/Tools.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/Dobby/dobby.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdbool.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/Hacks.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/StructGame.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/Defines.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/StructSDK.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/ToString.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/Feature/Feature.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/Init_Hacks.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/DrawESP.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/Icon.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../XPremium/Skeleton.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/array \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Hooks/ThrowableAlert.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/unordered_map \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__hash_table \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cmath \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Hooks/ArmorEsp.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/BRClassEsp.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/NoGravity.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/KittyMemory/MemoryPatch.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/KittyMemory/KittyUtils.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/KittyMemory/KittyMemory.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/AstralPrtctn/AntiHook.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/include/ScanEngine.hpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/Jni_Stuff.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/../AstralPrtctn/json.hpp \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/numeric \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/forward_list \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/valarray \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cassert \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/clocale \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/curl.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlver.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlbuild.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlrules.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/easy.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/multi.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/rsa.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/opensslconf.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/asn1.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/e_os2.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/bio.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/crypto.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/stack.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/safestack.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/opensslv.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/ossl_typ.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/symhacks.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/bn.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pem.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/evp.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/objects.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/obj_mac.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/x509.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/buffer.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/ec.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/dsa.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/dh.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/sha.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/x509_vfy.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/lhash.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pkcs7.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pem2.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/md5.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/sstream \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/oxorany/source/oxorany.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cfloat \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/oxorany/source/oxorany.cpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/oxorany/source/oxorany_include.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/FeedbackService.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/Feature/NewFeatures.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/random \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../IL2CppSDKGenerator/BasicStructs/Vector3.hpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../IL2CppSDKGenerator/BasicStructs/Vector2.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../IL2CppSDKGenerator/IL2Cpp/Tools.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../IL2CppSDKGenerator/KittyMemory/MemoryPatch.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../foxcheats/include/ScanEngine.hpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../Includes/Utils.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../Includes/Macros.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../StructGame/StructGame.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/MainFeatureIncludes.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Hooks/Feats.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Core/FileUtils.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Core/ConfigManager.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Core/SaveConfig.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../foxcheats/include/json.hpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Core/../../Hacks/Feature/Init_Hacks.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Core/Bypass.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/GuestAccount.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/SearchFunction.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../ImGui/imgui.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../ImGui/imgui_internal.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/TextureLoader.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/stb_image.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/MiscTab.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../ImGui/imgui_settings.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/Texture/box_shadow.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../ImGui/custom_widgets.hpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../Fonts/Icon.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/SkinTab.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/Keyboard.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/../../ImGui/imgui.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../Skin/Fields.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../Skin/Thread.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../Skin/Camo.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/SettingsTab.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/../Core/SaveConfig.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/Logo.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/LoadingAnimation.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/../../ImGui/imgui_settings.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/FloatingInfo.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Texture/main.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IMAGE/astral.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/AstralPrtctn/StrEnc.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/AstralPrtctn/json.hpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/AstralPrtctn/md5.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/SDK/Xhook/xhook.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/runtime_preview_menu.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_settings.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/Core/SaveConfig.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/UI/TextureLoader.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/UI/Logo.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/UI/SkinTab.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../Fonts/Icon.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../IMAGE/bg.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/runtime_preview_helpers.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/UI/MiscTab.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/UI/SettingsTab.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Fonts/Iconcpp.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Fonts/fonts.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Fonts/SPECIAL.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/unordered_set \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateHook.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/CydiaSubstrate.h
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/Logger.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/Macros.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/And64InlineHook/And64InlineHook.hpp:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/obfuscate.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstddef:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/version:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string_view:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__string:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/algorithm:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/initializer_list:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/type_traits:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstring:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/utility:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__tuple:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdint:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdint.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__debug:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iosfwd:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/wchar.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/memory:
 
-src/main/jni/Includes/Logger.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/typeinfo:
 
-src/main/jni/Includes/Macros.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/exception:
 
-src/main/jni/And64InlineHook/And64InlineHook.hpp:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdlib:
 
-src/main/jni/Includes/obfuscate.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdlib.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstddef:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/new:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/limits:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string_view:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iterator:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__string:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__functional_base:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/algorithm:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/tuple:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/initializer_list:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdexcept:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstring:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/atomic:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__threading_support:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/utility:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/chrono:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__tuple:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ctime:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdint:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ratio:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__debug:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/climits:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/memory:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/limits.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/typeinfo:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/errno.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/exception:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/functional:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdlib:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/bit:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdlib.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdio:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/new:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdio.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/limits:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cwchar:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iterator:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cwctype:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iosfwd:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cctype:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/wchar.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ctype.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__functional_base:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/wctype.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/tuple:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/Utils.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdexcept:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/Call_ImGui.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cassert:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/atomic:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imconfig.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdio:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/float.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdio.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stddef.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cwchar:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_impl_android.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cwctype:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_impl_opengl3.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cctype:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_internal.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ctype.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/math.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/wctype.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imstb_textedit.h:
 
-src/main/jni/Includes/Utils.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/fontch.h:
 
-src/main/jni/ImGui/Call_ImGui.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/Icon.h:
 
-src/main/jni/ImGui/imgui.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/Iconcpp.h:
 
-src/main/jni/ImGui/imconfig.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/ImguiPP.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stddef.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Call_BasicStructs.h:
 
-src/main/jni/ImGui/imgui_impl_android.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Includes.h:
 
-src/main/jni/ImGui/imgui_impl_opengl3.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iostream:
 
-src/main/jni/ImGui/imgui_internal.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ios:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/math.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__locale:
 
-src/main/jni/ImGui/imstb_textedit.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/mutex:
 
-src/main/jni/ImGui/fontch.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__mutex_base:
 
-src/main/jni/ImGui/Icon.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/system_error:
 
-src/main/jni/ImGui/Iconcpp.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__errc:
 
-src/main/jni/ImGui/ImguiPP.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cerrno:
 
-src/main/jni/IL2CppSDKGenerator/BasicStructs/Call_BasicStructs.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/locale.h:
 
-src/main/jni/IL2CppSDKGenerator/BasicStructs/Includes.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/support/android/locale_bionic.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iostream:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/streambuf:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ios:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/istream:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__locale:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ostream:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/mutex:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/locale:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__mutex_base:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdarg:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/chrono:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__bsd_locale_fallbacks.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ctime:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/bitset:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ratio:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__bit_reference:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/climits:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/inttypes.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/system_error:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/vector:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cerrno:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__split_buffer:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/errno.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/map:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__threading_support:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__tree:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/functional:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__node_handle:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/locale.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/optional:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/streambuf:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/fstream:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/istream:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/filesystem:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ostream:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stack:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/locale:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/deque:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdarg:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iomanip:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__bsd_locale_fallbacks.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/thread:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/bitset:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Vector3.hpp:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__bit_reference:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Vector2.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/inttypes.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Color.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/vector:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Rect.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__split_buffer:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/BasicStructs/Quaternion.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/map:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/IL2Cpp/Call_IL2Cpp.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__tree:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/IL2Cpp/Il2Cpp.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/fstream:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/codecvt:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/thread:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/IL2Cpp/plthook.h:
 
-src/main/jni/IL2CppSDKGenerator/BasicStructs/Vector3.hpp:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/IL2Cpp/Fake_dlfcn.h:
 
-src/main/jni/IL2CppSDKGenerator/BasicStructs/Vector2.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/IL2Cpp/Tools.h:
 
-src/main/jni/IL2CppSDKGenerator/BasicStructs/Color.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/Dobby/dobby.h:
 
-src/main/jni/IL2CppSDKGenerator/BasicStructs/Rect.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdbool.h:
 
-src/main/jni/IL2CppSDKGenerator/BasicStructs/Quaternion.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/Hacks.h:
 
-src/main/jni/IL2CppSDKGenerator/IL2Cpp/Call_IL2Cpp.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/StructGame.h:
 
-src/main/jni/IL2CppSDKGenerator/IL2Cpp/Il2Cpp.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/Defines.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/codecvt:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/StructSDK.h:
 
-src/main/jni/IL2CppSDKGenerator/IL2Cpp/plthook.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/ToString.h:
 
-src/main/jni/IL2CppSDKGenerator/IL2Cpp/Fake_dlfcn.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/Feature/Feature.h:
 
-src/main/jni/IL2CppSDKGenerator/IL2Cpp/Tools.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/Init_Hacks.h:
 
-src/main/jni/IL2CppSDKGenerator/Dobby/dobby.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/DrawESP.h:
 
-src/main/jni/Hacks/Hacks.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/Icon.h:
 
-src/main/jni/Hacks/StructGame/StructGame.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../XPremium/Skeleton.h:
 
-src/main/jni/Hacks/StructGame/Defines.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/array:
 
-src/main/jni/Hacks/StructGame/StructSDK.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Hooks/ThrowableAlert.h:
 
-src/main/jni/Hacks/StructGame/../Feature/ToString.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/unordered_map:
 
-src/main/jni/Hacks/Feature/Feature.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__hash_table:
 
-src/main/jni/Hacks/StructGame/../Feature/Init_Hacks.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cmath:
 
-src/main/jni/Hacks/StructGame/../Feature/DrawESP.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Hooks/ArmorEsp.h:
 
-src/main/jni/Hacks/StructGame/../Feature/Icon.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/BRClassEsp.h:
 
-src/main/jni/Hacks/StructGame/../Feature/../XPremium/Skeleton.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/NoGravity.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/array:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/KittyMemory/MemoryPatch.h:
 
-src/main/jni/System/Hooks/ThrowableAlert.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/KittyMemory/KittyUtils.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/unordered_map:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IL2CppSDKGenerator/KittyMemory/KittyMemory.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__hash_table:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/AstralPrtctn/AntiHook.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cmath:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/include/ScanEngine.hpp:
 
-src/main/jni/System/Hooks/ArmorEsp.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/Jni_Stuff.h:
 
-src/main/jni/Hacks/StructGame/../Feature/BRClassEsp.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Includes/../AstralPrtctn/json.hpp:
 
-src/main/jni/Hacks/StructGame/../Feature/NoGravity.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/numeric:
 
-src/main/jni/IL2CppSDKGenerator/KittyMemory/MemoryPatch.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/forward_list:
 
-src/main/jni/IL2CppSDKGenerator/KittyMemory/KittyUtils.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/valarray:
 
-src/main/jni/IL2CppSDKGenerator/KittyMemory/KittyMemory.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cassert:
 
-src/main/jni/AstralPrtctn/AntiHook.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/clocale:
 
-src/main/jni/curl/curl-android-arm64-v8a/include/curl/curl.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/curl.h:
 
-src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlver.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlver.h:
 
-src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlbuild.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlbuild.h:
 
-src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlrules.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/curlrules.h:
 
-src/main/jni/curl/curl-android-arm64-v8a/include/curl/easy.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/easy.h:
 
-src/main/jni/curl/curl-android-arm64-v8a/include/curl/multi.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/curl-android-arm64-v8a/include/curl/multi.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/sstream:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/rsa.h:
 
-src/main/jni/foxcheats/include/ScanEngine.hpp:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/opensslconf.h:
 
-src/main/jni/Includes/Jni_Stuff.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/asn1.h:
 
-src/main/jni/Includes/../AstralPrtctn/json.hpp:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/e_os2.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/numeric:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/bio.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/forward_list:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/crypto.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/valarray:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/stack.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/clocale:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/safestack.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/rsa.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/opensslv.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/opensslconf.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/ossl_typ.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/asn1.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/symhacks.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/e_os2.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/bn.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/bio.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pem.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/crypto.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/evp.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/stack.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/objects.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/safestack.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/obj_mac.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/opensslv.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/x509.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/ossl_typ.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/buffer.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/symhacks.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/ec.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/bn.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/dsa.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pem.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/dh.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/evp.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/sha.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/objects.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/x509_vfy.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/obj_mac.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/lhash.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/x509.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pkcs7.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/buffer.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pem2.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/ec.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/md5.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/dsa.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/sstream:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/dh.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/oxorany/source/oxorany.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/sha.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cfloat:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/x509_vfy.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/oxorany/source/oxorany.cpp:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/lhash.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/oxorany/source/oxorany_include.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pkcs7.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/FeedbackService.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/pem2.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/Feature/NewFeatures.h:
 
-src/main/jni/curl/openssl-android-arm64-v8a/include/openssl/md5.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/random:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iomanip:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../IL2CppSDKGenerator/BasicStructs/Vector3.hpp:
 
-src/main/jni/oxorany/source/oxorany.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../IL2CppSDKGenerator/BasicStructs/Vector2.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cfloat:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../IL2CppSDKGenerator/IL2Cpp/Tools.h:
 
-src/main/jni/oxorany/source/oxorany.cpp:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../IL2CppSDKGenerator/KittyMemory/MemoryPatch.h:
 
-src/main/jni/oxorany/source/oxorany_include.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../foxcheats/include/ScanEngine.hpp:
 
-src/main/jni/FeedbackService.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../Includes/Utils.h:
 
-src/main/jni/MainFeatureIncludes.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../../Includes/Macros.h:
 
-src/main/jni/System/Hooks/Feats.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Hacks/StructGame/../Feature/../StructGame/StructGame.h:
 
-src/main/jni/System/Core/FileUtils.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/MainFeatureIncludes.h:
 
-src/main/jni/System/Core/ConfigManager.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Hooks/Feats.h:
 
-src/main/jni/System/Core/SaveConfig.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Core/FileUtils.h:
 
-src/main/jni/foxcheats/../foxcheats/include/json.hpp:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Core/ConfigManager.h:
 
-src/main/jni/System/Core/Bypass.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Core/SaveConfig.h:
 
-src/main/jni/System/UI/GuestAccount.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../foxcheats/include/json.hpp:
 
-src/main/jni/System/UI/SearchFunction.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Core/../../Hacks/Feature/Init_Hacks.h:
 
-src/main/jni/System/UI/TextureLoader.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Core/Bypass.h:
 
-src/main/jni/ImGui/stb_image.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/GuestAccount.h:
 
-src/main/jni/System/UI/MiscTab.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/SearchFunction.h:
 
-src/main/jni/foxcheats/../ImGui/imgui_settings.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../ImGui/imgui.h:
 
-src/main/jni/ImGui/../System/Texture/box_shadow.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../ImGui/imgui_internal.h:
 
-src/main/jni/foxcheats/../ImGui/custom_widgets.hpp:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/TextureLoader.h:
 
-src/main/jni/foxcheats/../Fonts/Icon.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/stb_image.h:
 
-src/main/jni/System/UI/SkinTab.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/MiscTab.h:
 
-src/main/jni/System/UI/Keyboard.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../ImGui/imgui_settings.h:
 
-src/main/jni/foxcheats/../Skin/Fields.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/Texture/box_shadow.h:
 
-src/main/jni/foxcheats/../Skin/Thread.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../ImGui/custom_widgets.hpp:
 
-src/main/jni/foxcheats/../Skin/Camo.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../Fonts/Icon.h:
 
-src/main/jni/System/UI/SettingsTab.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/SkinTab.h:
 
-src/main/jni/System/UI/Logo.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/Keyboard.h:
 
-src/main/jni/System/UI/LoadingAnimation.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/../../ImGui/imgui.h:
 
-src/main/jni/System/UI/FloatingInfo.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../Skin/Fields.h:
 
-src/main/jni/System/Texture/main.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../Skin/Thread.h:
 
-src/main/jni/IMAGE/astral.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/foxcheats/../Skin/Camo.h:
 
-src/main/jni/AstralPrtctn/StrEnc.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/SettingsTab.h:
 
-src/main/jni/AstralPrtctn/md5.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/../Core/SaveConfig.h:
 
-src/main/jni/SDK/Xhook/xhook.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/Logo.h:
 
-src/main/jni/ImGui/runtime_preview_menu.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/LoadingAnimation.h:
 
-src/main/jni/ImGui/../IMAGE/bg.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/../../ImGui/imgui_settings.h:
 
-src/main/jni/ImGui/runtime_preview_helpers.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/UI/FloatingInfo.h:
 
-src/main/jni/Fonts/Iconcpp.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Texture/main.h:
 
-src/main/jni/Fonts/fonts.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/IMAGE/astral.h:
 
-src/main/jni/Fonts/SPECIAL.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/AstralPrtctn/StrEnc.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/unordered_set:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/AstralPrtctn/json.hpp:
 
-src/main/jni/Substrate/SubstrateHook.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/AstralPrtctn/md5.h:
 
-src/main/jni/Substrate/CydiaSubstrate.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/SDK/Xhook/xhook.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/runtime_preview_menu.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_settings.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/Core/SaveConfig.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/UI/TextureLoader.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/UI/Logo.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/UI/SkinTab.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../Fonts/Icon.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../IMAGE/bg.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/runtime_preview_helpers.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/UI/MiscTab.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/UI/SettingsTab.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Fonts/Iconcpp.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Fonts/fonts.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Fonts/SPECIAL.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/unordered_set:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateHook.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/CydiaSubstrate.h:

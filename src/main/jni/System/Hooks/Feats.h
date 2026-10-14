@@ -160,11 +160,21 @@ inline void hook_OnFlashBangExplode(void *instance, int weaponItemID, float whit
 }
 
 //-- Firerate Speed  (+ Unlimited Fly reuses these hooks)
+//
+// These three Weapon getters are also the hook points for the NewFeatures
+// firing-timing toggles (see NewFeatures.h, Task 3).  There is exactly ONE
+// hook per address - the new toggles are folded into these bodies instead of
+// installing a second trampoline on the same prologue:
+//   get_FireBoltTime    @0x51237F4 (No Fire Delay feature removed per request)
+//   get_FireInterval    @0x5105C74 (No Fire Delay feature removed per request)
+//   get_DelaySprintFire @0x513CBC4 -> No Sprint Fire Delay (sprint-out timer)
+// NewFeatures::NoSprintFireDelayActive() requires the instance to be the local player's
+// current weapon, so nothing is changed for remote players.
 inline float (*orig_get_FireBoltTime)(void *) = nullptr;
 inline float get_FireBoltTime(void * instance) {
     if (instance != NULL) {
         if (Config.ExtraMenu.Fire || UnlimitedFly) {
-            return 0.00001f;
+            return 0.05f;
         }
     }
     return orig_get_FireBoltTime(instance);
@@ -174,7 +184,7 @@ inline float (*orig_get_FireInterval)(void *) = nullptr;
 inline float get_FireInterval(void * instance) {
     if (instance != NULL) {
         if (Config.ExtraMenu.Fire || UnlimitedFly) {
-            return 0.00001f;
+            return 0.05f;
         }
     }
     return orig_get_FireInterval(instance);
@@ -184,6 +194,9 @@ inline float (*orig_get_DelaySprintFire)(void *) = nullptr;
 inline float get_DelaySprintFire(void * instance) {
     if (instance != NULL) {
         if (Config.ExtraMenu.Fire || UnlimitedFly) {
+            return 0.00001f;
+        }
+        if (NewFeatures::NoSprintFireDelayActive(instance)) {
             return 0.00001f;
         }
     }
@@ -212,6 +225,132 @@ inline float hook_GetMaxJumpHeight(void* instance) {
 }
 
 //-- Increase Damage
+// ---------------------------------------------------------------------------
+// Bullet Track (Config.Aim.AimSilent) -- the HIT path, not just the tracer.
+//
+// The DrawESP.h hooks (WeaponFireComponent_Instant::CreateBulletLine /
+// CreateBulletProjectile) only bend the *visible* bullet line towards the
+// enemy. Whether a shot REGISTERS is decided by the game's own sweep,
+// WeaponFireComponent_Instant::SingleLineCheckPhysics @0xC9B2A9C (Slot 90,
+// dump.cs 769628) -- the override a real gun actually dispatches to (the base
+// WeaponFireComponent::SingleLineCheckPhysics @0xC1514C0 is the one hooked
+// above for Hitbox). Redirecting `dir` on THAT ray is what turns a tracer that
+// hits nothing into shots that land.
+//
+// Guards, so nothing but the local player's own shot is ever touched:
+//   * the feature has to be on (AimSilent / Aimbot360), including the Trigger
+//     (None / Shooting / Scoping) setting -- exactly the gate the DrawESP
+//     tracer handler uses, so ray and tracer always agree;
+//   * the fire component must belong to the weapon the local player is holding
+//     (WeaponFireComponent::m_WeaponEntity @0x10, dump.cs 764177), so a bot's
+//     shot is never redirected;
+//   * without a live enemy the original `dir` is passed through untouched and
+//     the shot resolves exactly as the game intended.
+// ---------------------------------------------------------------------------
+inline bool A_BulletTrackIsLocalShot(void *fireComponent)
+{
+    if (!Tools::IsPtrValid(fireComponent)) return false;
+
+    // WeaponFireComponent::m_WeaponEntity @0x10 (dump.cs 764173/764177).
+    // NOTE: there is no owner-pawn field at +0x28 - m_Owner there is a const
+    // PropertyName, which is why the weapon pointer is used instead.
+    void *weapon = *(void **)((uintptr_t)fireComponent + 0x10);
+    if (!Tools::IsPtrValid(weapon)) return false;
+
+    Pawn *local = GamePlay::get_LocalPawn();
+    if (!Tools::IsPtrValid(local)) return false;
+
+    return (void *)local->get_CurrentWeapon() == weapon;
+}
+
+// Same Trigger gate DrawESP.h's WeaponHandlerByAstral uses.
+inline bool A_BulletTrackTriggerReady()
+{
+    Pawn *local = GamePlay::get_LocalPawn();
+    if (!Tools::IsPtrValid(local)) return false;
+
+    if (Config.Aim.Trigger == EAimTrigger::Shooting)
+        return ((bool (*)(uintptr_t))(Class_Pawn_get_IsFiring))((uintptr_t)local);
+    if (Config.Aim.Trigger == EAimTrigger::Scoping)
+        return ((bool (*)(uintptr_t))(Class_Pawn_IsAiming))((uintptr_t)local);
+    return true;                                    // EAimTrigger::None
+}
+
+// Target head to aim the ray at. Distance mode (the default) takes the enemy
+// nearest the shot origin - the same choice GetClosestTarget() makes in
+// DrawESP.h; FOV mode takes the enemy whose head lies closest to the ray.
+inline bool A_BulletTrackTargetHead(const Vector3 &startPos, const Vector3 &dir, Vector3 &outHead)
+{
+    auto getMatchGame = (uintptr_t (*)()) (Class_Gameplay_get_MatchGame);
+    uintptr_t matchGame = (getMatchGame != nullptr) ? getMatchGame() : 0;
+    if (!Tools::IsPtrValid((void *) matchGame)) return false;
+
+    auto EnemyPawns = *(List<uintptr_t> **) (matchGame + Class_BaseGame_EnemyPawns);
+    if (!Tools::IsPtrValid((void *) EnemyPawns)) return false;
+    auto Items = EnemyPawns->getItems();
+    if (!Items) return false;
+
+    const int count = EnemyPawns->getSize();
+    if (count <= 0 || count > 1024) return false;
+
+    const bool byFov = (Config.Aim.By == EAim::Crosshair);
+    const Vector3 rayAxis = Vector3::Normalized(dir);
+
+    bool found = false;
+    float best = 0.0f;
+    for (int i = 0; i < count; i++) {
+        uintptr_t pawnU = Items[i];
+        if (!Tools::IsPtrValid((void *) pawnU)) continue;
+
+        Pawn *pawn = (Pawn *) pawnU;
+        if (!pawn->m_IsAlive()) continue;
+
+        const Vector3 head = pawn->get_HeadPosition();
+        const Vector3 toHead = head - startPos;
+
+        float metric;
+        if (byFov) {
+            const float along = Vector3::Dot(toHead, rayAxis);
+            if (along <= 0.0f) continue;             // behind the shot
+            metric = Vector3::Dot(toHead, toHead) - along * along;  // perpendicular^2
+        } else {
+            metric = Vector3::SqrMagnitude(toHead);  // nearest to the shooter
+        }
+
+        if (!found || metric < best) {
+            best = metric;
+            outHead = head;
+            found = true;
+        }
+    }
+    return found;
+}
+
+// Rewrites the shot ray. No-op (dir passed through untouched) unless every
+// guard above lines up.
+inline void A_BulletTrackAimRay(void *fireComponent, const Vector3 &startPos, Vector3 &dir)
+{
+    if (!Config.Aim.AimSilent && !Config.Aim.Aimbot360) return;
+    if (!A_BulletTrackTriggerReady()) return;
+    if (!A_BulletTrackIsLocalShot(fireComponent)) return;
+
+    Vector3 head;
+    if (!A_BulletTrackTargetHead(startPos, dir, head)) return;
+
+    const Vector3 toTarget = head - startPos;
+    if (!(Vector3::SqrMagnitude(toTarget) > 0.0001f)) return;   // also rejects NaN
+
+    dir = toTarget;
+}
+
+inline bool (*orig_SingleLineCheckPhysics_Instant)(void* instance, int hitType, void* hitTarget, void* hitCollider, Vector3 startPos, Vector3 dir, void* impactInfo) = nullptr;
+inline bool SingleLineCheckPhysics_Instant_Hook(void* instance, int hitType, void* hitTarget, void* hitCollider, Vector3 startPos, Vector3 dir, void* impactInfo) {
+    A_BulletTrackAimRay(instance, startPos, dir);
+    if (orig_SingleLineCheckPhysics_Instant != nullptr)
+        return orig_SingleLineCheckPhysics_Instant(instance, hitType, hitTarget, hitCollider, startPos, dir, impactInfo);
+    return false;
+}
+
 inline bool (*orig_SingleLineCheckPhysics)(void* instance, int hitType, void* hitTarget, void* hitCollider, Vector3 startPos, Vector3 dir, void* impactInfo) = nullptr;
 inline bool SingleLineCheckPhysics(void* instance, int hitType, void* hitTarget, void* hitCollider, Vector3 startPos, Vector3 dir, void* impactInfo) {
     if (instance != NULL) {
@@ -338,15 +477,12 @@ inline float get_UnequipTime(void* instance) {
 }
 
 //-- Red Wallhack
-bool (*orig_IsInEM3Eye)(void *instance);
-bool get_IsInEM3Eye(void *instance) {
-    if (instance != NULL) {
-        if (Config.ExtraMenu.RedWallhack) {
-            return true;
-        }
-    }
-    return orig_IsInEM3Eye(instance);
-}
+// get_IsInEM3Eye() @0x9677554 is only 8 bytes long (ldrb w0,[x0,#..]; ret) and
+// the very next function in libunity.so is set_IsInEM3Eye() @0x967755C. A64
+// inline hooking (hook()/HOOK_LIB/And64InlineHook) overwrites the target with a
+// 16-byte LDR/BR stub whenever the replacement sits further than +/-128MB away,
+// which wipes out that neighbour. The flag is forced with Patches.Em3Eye
+// (mov x0,#1 ; ret) from Main.cpp instead - exactly the 8 bytes of the getter.
 
 float (*orig_GetAccDistance)(void *instance);
 float GetAccDistance(void *instance) {
@@ -406,15 +542,10 @@ inline float hooked_CalcFinalMoveScale(void* instance) {
 }
 
 //-- Weapon Kinetic
-inline bool (*orig_get_IsKineticArmor)(void* instance) = nullptr;
-inline bool get_IsKineticArmor(void* instance) {
-    if (instance != NULL) {
-        if (Config.ExtraMenu.Kinetic) {
-            return true;
-        }
-    }
-    return orig_get_IsKineticArmor(instance);
-}
+// get_IsKineticArmor() @0x51B3D64 is only 8 bytes long and the very next
+// function is the *virtual* Pawn::get_CurrentSeatMode() @0x51B3D6C (0xAC bytes),
+// so a 16-byte inline stub here would break every seat query in the game. The
+// flag is forced with Patches.KineticArmor (mov x0,#1 ; ret) from Main.cpp.
 
 //-- Zero Recoil
 inline float (*orig_GetScaleRecoil)(void* instance) = nullptr;
@@ -720,6 +851,11 @@ inline void InitializeAllHooks() {
     //-- Increase Damage
     HOOK_LIB("libunity.so", "0xC1514C0", SingleLineCheckPhysics, orig_SingleLineCheckPhysics);
 
+    //-- Bullet Track (silent aim): the hit ray a real gun dispatches to.
+    //   See the A_BulletTrack* block above - this is what makes the redirected
+    //   shot actually register instead of only bending the tracer.
+    HOOK_LIB("libunity.so", "0xC9B2A9C", SingleLineCheckPhysics_Instant_Hook, orig_SingleLineCheckPhysics_Instant);
+
     //-- No Parachute
     HOOK_LIB("libunity.so", "0x68823FC", OpenParachute, orig_OpenParachute);
 
@@ -733,7 +869,8 @@ inline void InitializeAllHooks() {
     HOOK_LIB("libunity.so", "0x50ED8D4", get_EquipTime, orig_get_EquipTime);
 
     //-- Red Wallhack
-    HOOK_LIB("libunity.so", "0x9677554", get_IsInEM3Eye, orig_IsInEM3Eye); 
+    //   get_IsInEM3Eye @0x9677554 is an 8-byte getter: never inline-hook it,
+    //   it stays a patch (Patches.Em3Eye, Main.cpp).
     HOOK_LIB("libunity.so", "0xAD1DD78", GetAccDistance, orig_GetAccDistance);
 
     //-- Skip Tutorial
@@ -750,7 +887,8 @@ inline void InitializeAllHooks() {
     HOOK_LIB("libunity.so", "0x51D2EB8", hooked_CalcFinalMoveScale, original_CalcFinalMoveScale);
 
     //-- Weapon Kinetic
-    HOOK_LIB("libunity.so", "0x51B3D64", get_IsKineticArmor, orig_get_IsKineticArmor);
+    //   get_IsKineticArmor @0x51B3D64 is an 8-byte getter: never inline-hook it,
+    //   it stays a patch (Patches.KineticArmor, Main.cpp).
 
     //-- Zero Recoil
     HOOK_LIB("libunity.so", "0xC9BAFF8", GetScaleRecoil, orig_GetScaleRecoil);
@@ -761,9 +899,14 @@ inline void InitializeAllHooks() {
     HOOK_LIB("libunity.so", "0xC9C76C4", DisperseBase, orig_DisperseBase);
     
     //-- Spectate
+    // NOTE: ObserverDelayManager::ProcessForDelay @0x519676C must be hooked
+    // exactly ONCE. It used to be hooked twice into the same orig pointer; the
+    // second A64 hook built its trampoline from the *already patched* prologue,
+    // so o_ProcessForDelay ended up branching back into h_ProcessForDelay, which
+    // calls o_ProcessForDelay - unbounded recursion (stack overflow / SIGSEGV)
+    // the first time the game ran ProcessForDelay.
     HOOK_LIB("libunity.so", "0x519676C", h_ProcessForDelay, o_ProcessForDelay);
     HOOK_LIB("libunity.so", "0x51966D8", h_NeedDelayProcess, o_NeedDelayProcess);
-    HOOK_LIB("libunity.so", "0x519676C", h_ProcessForDelay, o_ProcessForDelay);  
 
     //-- No smoke
     UnityObject_get_name = reinterpret_cast<String *(*)(void *)>(

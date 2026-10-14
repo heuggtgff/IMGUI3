@@ -230,12 +230,20 @@ sColorsESPBOT sColorsESPBOT{0};
     {
         bool NoCrouch = false;
         bool Triggerbot = false;
-        int TriggerbotDelayMin = 0;
-        int TriggerbotDelayMax = 50;
+        int TriggerbotMode = 0; // 0 = Always, 1 = ADS only, 2 = Firing only (matches V3)
+        // TriggerbotDelay removed: the trigger fires the frame the target enters
+        // the crosshair zone. The field name is kept only as a save-file no-op.
+        int TriggerbotDelay = 0; // ms (UNUSED - forced 0; UI/logic removed)
+        int TriggerbotRadius = 40; // crosshair zone width in px (V3 default is 2.5% of width)
         bool NoHitFlinch = false;
         bool NoDrift = false;
-        // Login bypass - skip license key authentication
-        bool DevBypass = false;
+        // No Slide Fatigue: SlideTackleComponent::get_UseSlideTackleLimit -> false
+        // (local pawn only) - unlimited slides, no slide idle/fatigue decay.
+        bool NoSlideFatigue = false;
+        // Firing timing - each removes exactly one delay, nothing else
+        bool NoSprintToFireDelay = false;  // sprint-out timer before the gun fires
+        bool NoHipfireDelay = false;       // hipfire get-ready / wind-up gate
+        // NoFireDelay removed (per request). field dropped from config struct.
     };
     sNewFeaturesMenu NewFeaturesMenu{0};
 };

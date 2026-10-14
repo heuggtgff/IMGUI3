@@ -60,6 +60,11 @@ void SaveConfiguration(const std::string& filename) {
     config["isSpeedHackEnabled"] = isSpeedHackEnabled;
     config["speedHackMultiplier"] = speedHackMultiplier;
 
+    config["NewFeatures"]["Triggerbot"] = Config.NewFeaturesMenu.Triggerbot;
+    config["NewFeatures"]["TriggerbotMode"] = Config.NewFeaturesMenu.TriggerbotMode;
+    config["NewFeatures"]["TriggerbotRadius"] = Config.NewFeaturesMenu.TriggerbotRadius;
+    config["NewFeatures"]["NoCrouch"] = Config.NewFeaturesMenu.NoCrouch;
+
     config["menu"][0] = menu[0];
     config["menu"][1] = menu[1];
     config["menu"][2] = menu[2];
@@ -125,11 +130,18 @@ bool LoadConfiguration(const std::string& filename) {
     if (config.contains("NewFeatures")) {
         Config.NewFeaturesMenu.NoCrouch = config["NewFeatures"]["NoCrouch"].get<bool>();
         Config.NewFeaturesMenu.Triggerbot = config["NewFeatures"]["Triggerbot"].get<bool>();
-        Config.NewFeaturesMenu.TriggerbotDelayMin = config["NewFeatures"]["TriggerbotDelayMin"].get<int>();
-        Config.NewFeaturesMenu.TriggerbotDelayMax = config["NewFeatures"]["TriggerbotDelayMax"].get<int>();
+        Config.NewFeaturesMenu.TriggerbotMode = config["NewFeatures"]["TriggerbotMode"].get<int>();
+        if (config["NewFeatures"].contains("TriggerbotDelay"))
+            Config.NewFeaturesMenu.TriggerbotDelay = 0; // no-op, feature removed
+        if (config["NewFeatures"].contains("TriggerbotRadius"))
+            Config.NewFeaturesMenu.TriggerbotRadius = config["NewFeatures"]["TriggerbotRadius"].get<int>();
         Config.NewFeaturesMenu.NoHitFlinch = config["NewFeatures"]["NoHitFlinch"].get<bool>();
         Config.NewFeaturesMenu.NoDrift = config["NewFeatures"]["NoDrift"].get<bool>();
-        Config.NewFeaturesMenu.DevBypass = config["NewFeatures"]["DevBypass"].get<bool>();
+        if (config["NewFeatures"].contains("NoSlideFatigue"))
+            Config.NewFeaturesMenu.NoSlideFatigue = config["NewFeatures"]["NoSlideFatigue"].get<bool>();
+        Config.NewFeaturesMenu.NoSprintToFireDelay = config["NewFeatures"]["NoSprintToFireDelay"].get<bool>();
+        Config.NewFeaturesMenu.NoHipfireDelay = config["NewFeatures"]["NoHipfireDelay"].get<bool>();
+        // DevBypass removed (login bypass).
     }
         }
 

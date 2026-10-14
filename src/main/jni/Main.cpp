@@ -30,8 +30,12 @@
 #include "oxorany/source/oxorany_include.h"
 
 #include "FeedbackService.h"
-#include "MainFeatureIncludes.h"
+// NewFeatures must be visible before MainFeatureIncludes.h: the existing
+// Feats.h firing-timing hooks (Firerate / No Sprint Fire Delay / No Fire
+// Delay) call into NewFeatures::NoFireDelayActive() /
+// NoSprintFireDelayActive() so that each dump address is hooked exactly once.
 #include "Hacks/Feature/NewFeatures.h"
+#include "MainFeatureIncludes.h"
 
 #include <jni.h>
 #include <android/log.h>
@@ -211,9 +215,24 @@ namespace android::anwcreator::detail::framework
                 if (m) builder = env->CallObjectMethod(builder, m, (jint)f, (jint)mask);
                 return *this;
             }
-            Builder &SetSkipScreenshot(bool skip) {
-                if (skip) { constexpr uint32_t F = 0x40; SetFlags(F, F); }
-                return *this;
+            // SurfaceControl.SKIP_SCREENSHOT (0x40, AOSP API 31+) makes the
+            // layer and its children invisible to screenshots, mirroring and
+            // screen recording. It is only reachable through the builder's
+            // private setFlags(int, int) helper (see AOSP SurfaceControl.java),
+            // which JNI can call. Returns true only when the call really
+            // reached the framework, so a caller can refuse to build a
+            // "hidden" overlay that is not hidden at all.
+            bool SetSkipScreenshot(bool skip) {
+                if (!skip || !builder || !builderClass) return false;
+                constexpr int32_t FLAG_SKIP_SCREENSHOT = 0x40;
+                jmethodID m = env->GetMethodID(builderClass, "setFlags",
+                    "(II)Landroid/view/SurfaceControl$Builder;");
+                if (!m) { if (env->ExceptionCheck()) env->ExceptionClear(); return false; }
+                jobject r = env->CallObjectMethod(builder, m,
+                    (jint)FLAG_SKIP_SCREENSHOT, (jint)FLAG_SKIP_SCREENSHOT);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+                if (r) builder = r;
+                return true;
             }
             jobject Build() {
                 if (!builder) return nullptr;
@@ -279,6 +298,20 @@ namespace android::anwcreator::detail::framework
                 if (m) transaction = env->CallObjectMethod(transaction, m, c, p);
                 return *this;
             }
+            // Public @hide SurfaceControl.Transaction#setSkipScreenshot
+            // (API 31+): the framework's own way of flagging an existing layer
+            // as screenshot / screen-recording invisible. Returns true when the
+            // method exists on this Android version.
+            bool SetSkipScreenshot(jobject sc, bool skip) {
+                if (!transaction || !sc) return false;
+                jmethodID m = env->GetMethodID(transactionClass, "setSkipScreenshot",
+                    "(Landroid/view/SurfaceControl;Z)Landroid/view/SurfaceControl$Transaction;");
+                if (!m) { if (env->ExceptionCheck()) env->ExceptionClear(); return false; }
+                jobject r = env->CallObjectMethod(transaction, m, sc, (jboolean)skip);
+                if (env->ExceptionCheck()) { env->ExceptionClear(); return false; }
+                if (r) transaction = r;
+                return true;
+            }
             Transaction &Remove(jobject sc) {
                 if (!transaction || !sc) return *this;
                 jmethodID m = env->GetMethodID(transactionClass, "remove", "(Landroid/view/SurfaceControl;)Landroid/view/SurfaceControl$Transaction;");
@@ -334,9 +367,11 @@ namespace android::anwcreator::detail
 {
     struct WindowContext {
         std::unique_ptr<jni::GlobalRef> surfaceControl, surface, parentSurfaceControl;
-        ANativeWindow *nativeWindow; int32_t width, height; bool skipScreenshot;
+        ANativeWindow *nativeWindow; int32_t width, height;
+        bool skipScreenshot, skipScreenshotApplied;
         WindowContext() : surfaceControl(nullptr), surface(nullptr), parentSurfaceControl(nullptr),
-                          nativeWindow(nullptr), width(0), height(0), skipScreenshot(false) {}
+                          nativeWindow(nullptr), width(0), height(0), skipScreenshot(false),
+                          skipScreenshotApplied(false) {}
         ~WindowContext() { Release(); }
         void Release() {
             if (nativeWindow) { ANativeWindow_release(nativeWindow); nativeWindow = nullptr; }
@@ -379,16 +414,22 @@ namespace android
             if (!parentSC && je.CheckException()) return nullptr;
             anwcreator::detail::framework::SurfaceControl::Builder b(je);
             if (!b.IsValid()) return nullptr;
-            b.SetName(o.name).SetBufferSize(w, h).SetFormat(1).SetOpaque(false).SetSkipScreenshot(o.skipScreenshot);
+            // Format 1 == WINDOW_FORMAT_RGBA_8888 == it can carry per-pixel
+            // alpha, which the overlay needs to stay see-through.
+            b.SetName(o.name).SetBufferSize(w, h).SetFormat(1).SetOpaque(false);
+            const bool skipViaBuilder = b.SetSkipScreenshot(o.skipScreenshot);
             if (parentSC) b.SetParent(parentSC);
             jobject lsc = b.Build();
             if (!lsc || je.CheckException()) { if (parentSC) je->DeleteLocalRef(parentSC); return nullptr; }
             auto ctx = std::make_unique<anwcreator::detail::WindowContext>();
             ctx->width = w; ctx->height = h; ctx->skipScreenshot = o.skipScreenshot;
+            bool skipViaTransaction = false;
             ctx->surfaceControl = std::make_unique<anwcreator::detail::jni::GlobalRef>(je, lsc);
             if (parentSC) ctx->parentSurfaceControl = std::make_unique<anwcreator::detail::jni::GlobalRef>(je, parentSC);
             {
                 anwcreator::detail::framework::SurfaceControl::Transaction t(je);
+                if (t.IsValid() && o.skipScreenshot)
+                    skipViaTransaction = t.SetSkipScreenshot(ctx->surfaceControl->get(), true);
                 if (t.IsValid())
                     t.SetAlpha(ctx->surfaceControl->get(), 1.0f)
                      .SetLayer(ctx->surfaceControl->get(), 0x7FFFFFFE)
@@ -407,6 +448,7 @@ namespace android
                 je->DeleteLocalRef(ls); je->DeleteLocalRef(lsc); if (parentSC) je->DeleteLocalRef(parentSC);
                 return nullptr;
             }
+            ctx->skipScreenshotApplied = o.skipScreenshot && (skipViaBuilder || skipViaTransaction);
             ANativeWindow *result = ctx->nativeWindow;
             m_windowContexts.emplace(result, std::move(ctx));
             je->DeleteLocalRef(ls); je->DeleteLocalRef(lsc); if (parentSC) je->DeleteLocalRef(parentSC);
@@ -437,6 +479,12 @@ namespace android
             if (w) *w = it->second->width;
             if (h) *h = it->second->height;
             return true;
+        }
+
+        // True only when the layer really carries SurfaceControl.SKIP_SCREENSHOT.
+        static bool SkipScreenshotApplied(ANativeWindow *nw) {
+            auto it = m_windowContexts.find(nw);
+            return it != m_windowContexts.end() && it->second->skipScreenshotApplied;
         }
 
         static void EnsureVisible(ANativeActivity *a, ANativeWindow *nw) {
@@ -520,24 +568,25 @@ namespace android {
 HideRecAImGui::HideRecAImGui(const Options& o):m_options(o){}
 HideRecAImGui::~HideRecAImGui(){UnInitEnvironment();}
 
+// WINDOW_FORMAT_RGBA_8888 == AHARDWAREBUFFER_FORMAT_R8G8B8A8_UNORM == 1;
+// no other Android window format carries an alpha channel.
+static bool HideRecConfigIsTranslucent(EGLDisplay d, EGLConfig cfg) {
+    if (d == EGL_NO_DISPLAY || !cfg) return false;
+    EGLint alpha = 0, visual = 0;
+    if (eglGetConfigAttrib(d, cfg, EGL_ALPHA_SIZE, &alpha) != EGL_TRUE || alpha < 8) return false;
+    if (eglGetConfigAttrib(d, cfg, EGL_NATIVE_VISUAL_ID, &visual) != EGL_TRUE) return false;
+    return visual == 1;
+}
+
 EGLConfig HideRecAImGui::FindConfig(EGLDisplay d, EGLContext gc) {
+    (void)gc;
+    // The overlay is composited ON TOP of the game, so every pixel ImGui does
+    // not draw stays (0,0,0,0) and has to blend through to the game. A config
+    // without an alpha channel turns those pixels into opaque black and the
+    // overlay blacks the whole display out - that is the "Hide Stream black
+    // screen". Do NOT inherit the game's EGLConfig here: the game draws to an
+    // opaque window, so its config usually has EGL_ALPHA_SIZE == 0.
     if (d == EGL_NO_DISPLAY) return nullptr;
-    EGLint gid = 0;
-    if (gc != EGL_NO_CONTEXT && eglQueryContext(d, gc, EGL_CONFIG_ID, &gid) == EGL_TRUE && gid != 0) {
-        EGLint total = 0;
-        if (eglGetConfigs(d, nullptr, 0, &total) == EGL_TRUE && total > 0) {
-            std::vector<EGLConfig> cfgs((size_t)total);
-            if (eglGetConfigs(d, cfgs.data(), total, &total) == EGL_TRUE) {
-                for (int i = 0; i < total; i++) {
-                    EGLint id = 0, st = 0, rt = 0;
-                    eglGetConfigAttrib(d, cfgs[i], EGL_CONFIG_ID, &id);
-                    eglGetConfigAttrib(d, cfgs[i], EGL_SURFACE_TYPE, &st);
-                    eglGetConfigAttrib(d, cfgs[i], EGL_RENDERABLE_TYPE, &rt);
-                    if (id == gid && (st & EGL_WINDOW_BIT) && (rt & 0x40)) return cfgs[i];
-                }
-            }
-        }
-    }
     const EGLint attrs[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
         EGL_RENDERABLE_TYPE, 0x00000040,
@@ -545,7 +594,8 @@ EGLConfig HideRecAImGui::FindConfig(EGLDisplay d, EGLContext gc) {
         EGL_NONE
     };
     EGLConfig cfg = nullptr; EGLint count = 0;
-    if (eglChooseConfig(d, attrs, &cfg, 1, &count) == EGL_TRUE && count > 0 && cfg) return cfg;
+    if (eglChooseConfig(d, attrs, &cfg, 1, &count) == EGL_TRUE && count > 0 && cfg &&
+        HideRecConfigIsTranslucent(d, cfg)) return cfg;
     EGLint total = 0;
     if (eglGetConfigs(d, nullptr, 0, &total) != EGL_TRUE || total <= 0) return nullptr;
     std::vector<EGLConfig> cfgs((size_t)total);
@@ -553,8 +603,10 @@ EGLConfig HideRecAImGui::FindConfig(EGLDisplay d, EGLContext gc) {
     for (int i = 0; i < total; i++) {
         EGLint st = 0, rt = 0;
         eglGetConfigAttrib(d, cfgs[i], EGL_SURFACE_TYPE, &st);
+        if (!(st & EGL_WINDOW_BIT)) continue;
         eglGetConfigAttrib(d, cfgs[i], EGL_RENDERABLE_TYPE, &rt);
-        if ((st & EGL_WINDOW_BIT) && (rt & 0x40)) return cfgs[i];
+        if (!(rt & 0x00000040)) continue;
+        if (HideRecConfigIsTranslucent(d, cfgs[i])) return cfgs[i];
     }
     return nullptr;
 }
@@ -565,17 +617,46 @@ bool HideRecAImGui::InitEnvironment(EGLDisplay d, EGLContext gc, int32_t w, int3
     o.name = "HideRecSecure"; o.width = w; o.height = h; o.skipScreenshot = m_options.skipScreenshot;
     m_nativeWindow = ANwCreator::Create(m_options.activity, o);
     if (!m_nativeWindow) return false;
+    // SKIP_SCREENSHOT needs Android 12 (API 31) or newer. Without it the
+    // overlay hides nothing and would only sit above the game, so bail out and
+    // let the caller draw the menu normally instead.
+    if (m_options.skipScreenshot && !ANwCreator::SkipScreenshotApplied(m_nativeWindow)) {
+        LOGW("Hide Stream: SKIP_SCREENSHOT unavailable (needs Android 12+); drawing the menu normally");
+        UnInitEnvironment();
+        return false;
+    }
     m_display = d; m_gameContext = gc;
     EGLConfig cfg = FindConfig(m_display, gc);
-    if (!cfg) { UnInitEnvironment(); return false; }
+    if (!cfg) {
+        LOGW("Hide Stream: no translucent GLES3 EGL config; drawing the menu normally");
+        UnInitEnvironment();
+        return false;
+    }
     EGLint fmt = 0;
     if (eglGetConfigAttrib(m_display, cfg, EGL_NATIVE_VISUAL_ID, &fmt) != EGL_TRUE) { UnInitEnvironment(); return false; }
     ANativeWindow_setBuffersGeometry(m_nativeWindow, w, h, fmt);
+    // Last line of defence against the black screen: never present a window
+    // that cannot carry alpha, whatever the driver claims about the config.
+    if (fmt != 1 || ANativeWindow_getFormat(m_nativeWindow) != 1) {
+        LOGW("Hide Stream: overlay window format %d/%d is not RGBA_8888; drawing the menu normally",
+             (int)fmt, (int)ANativeWindow_getFormat(m_nativeWindow));
+        UnInitEnvironment();
+        return false;
+    }
     m_surface = eglCreateWindowSurface(m_display, cfg, m_nativeWindow, nullptr);
     if (m_surface == EGL_NO_SURFACE) { UnInitEnvironment(); return false; }
+    // The overlay context MUST live in the game context's share group: ImGui's
+    // shader program, font texture and vertex/index buffers were created on the
+    // game context, and GL object handles are not portable between unshared
+    // contexts. Rendering there without sharing draws nothing at all (the
+    // silently empty overlay), so a failed share is a hard failure.
     const EGLint ctxAttrs[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
-    m_overlayContext = eglCreateContext(m_display, cfg, EGL_NO_CONTEXT, ctxAttrs);
-    if (m_overlayContext == EGL_NO_CONTEXT) { UnInitEnvironment(); return false; }
+    m_overlayContext = eglCreateContext(m_display, cfg, gc, ctxAttrs);
+    if (m_overlayContext == EGL_NO_CONTEXT) {
+        LOGW("Hide Stream: could not share the EGL context with the game; drawing the menu normally");
+        UnInitEnvironment();
+        return false;
+    }
     EGLint rw = 0, rh = 0;
     if (eglQuerySurface(m_display, m_surface, EGL_WIDTH, &rw) == EGL_TRUE && rw > 0) m_screenWidth = rw; else m_screenWidth = w;
     if (eglQuerySurface(m_display, m_surface, EGL_HEIGHT, &rh) == EGL_TRUE && rh > 0) m_screenHeight = rh; else m_screenHeight = h;
@@ -614,6 +695,14 @@ bool HideRecAImGui::RenderDrawData(ImDrawData* dd, EGLDisplay gd, EGLSurface gs,
     glClearColor(0.f, 0.f, 0.f, 0.f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(dd);
+    // Diagnostic: an error here means the overlay context cannot use ImGui's
+    // GL objects (share group refused by the driver, ...). Report it once
+    // instead of silently presenting an empty overlay.
+    GLenum glErr = glGetError();
+    if (glErr != GL_NO_ERROR) {
+        static bool loggedOnce = false;
+        if (!loggedOnce) { loggedOnce = true; LOGW("Hide Stream: overlay draw error 0x%X", (unsigned)glErr); }
+    }
     EGLBoolean ok = sb(m_display, m_surface);
     if (od != EGL_NO_DISPLAY && oc != EGL_NO_CONTEXT) eglMakeCurrent(od, odr, ore, oc);
     else eglMakeCurrent(m_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -798,6 +887,15 @@ static EGLSurface g_imguiSurface = EGL_NO_SURFACE;
 static bool g_imguiBackendReady = false;    struct My_Patches {
     MemoryPatch A1, grap, NoCrouch, SpeedhackX, SpeedhackX1, NoWingsuit, fpss, frame;
     MemoryPatch NoHitFlinch, NoDrift;
+    // 8-byte leaf getters - they can never be inline-hooked, see Feats.h /
+    // NewFeatures.h: A64 hooking writes a 16-byte stub in place and would take
+    // the *next* function in libunity.so with it.
+    MemoryPatch Em3Eye, KineticArmor;
+    MemoryPatch NoHipfireUseGetReadyTime, NoHipfireSpringFireGetReady;
+    // No Slide Fatigue: get_UseSlideTackleLimit is an 8-byte leaf getter whose
+    // next function is LimitSlideTackle(), so it must be a byte patch, never an
+    // inline hook (see the NewFeatures.h note). Pve = the arcade/PVE override.
+    MemoryPatch NoSlideFatigue, NoSlideFatiguePve;
 } Patches;
 
 float AVIWA = 119.167f;
@@ -833,11 +931,6 @@ static int page = 1;
 static int activeTab = 1;
 bool g_LogoPreviewMode = false;
 static bool isLogin = false;
-static void InitDevBypass() {
-    if (Config.NewFeaturesMenu.DevBypass) {
-        isLogin = true;
-    }
-}
 static std::string err;
 static std::string storedKey = "";
 static char s[256];
@@ -1691,16 +1784,27 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 custom::Checkbox("Fast Scope", &Config.ExtraMenu.Scope);
                                 custom::Checkbox("Quick Switch", &Config.ExtraMenu.Switch);
                                 custom::Checkbox("Weapon Kinetic", &Config.ExtraMenu.Kinetic);
+                                // === NEW FEATURES: Home ===
+                                // No Slide Fatigue: remove the slide limit/fatigue system
+                                // (SlideTackleComponent::get_UseSlideTackleLimit -> false,
+                                // local pawn only). Unlimited slides, no idle-time decay.
+                                custom::Checkbox("No Slide Fatigue", &Config.NewFeaturesMenu.NoSlideFatigue);
                                 custom::Separator();
                                 custom::Separator();
                                 // === NEW FEATURES: Misc ===
                                 custom::Checkbox("No Crouch", &Config.NewFeaturesMenu.NoCrouch);
                                 custom::Checkbox("No Hit Flinch", &Config.NewFeaturesMenu.NoHitFlinch);
                                 // === NEW FEATURES: Sniper ===
+                                // No Drift = breathing sway only (m_AimmingBreatheCountDown @0x774)
+                                // NOTE: the old broken disable came from Stable Scope's
+                                // always-zero breathe hook (removed with that feature).
                                 custom::Checkbox("No Drift (Hardscope)", &Config.NewFeaturesMenu.NoDrift);
+                                // === NEW FEATURES: Firing timing ===
+                                // (No Fire Delay and Stable Scope removed per request.)
+                                custom::Checkbox("No Sprint Fire Delay", &Config.NewFeaturesMenu.NoSprintToFireDelay);
+                                custom::Checkbox("No Hipfire Delay", &Config.NewFeaturesMenu.NoHipfireDelay);
                                 custom::Separator();
                                 // Dev / Debug options
-                                custom::Checkbox("Dev Bypass (skip login)", &Config.NewFeaturesMenu.DevBypass);
                                 custom::Separator();
                                 custom::Separator();
 
@@ -1806,8 +1910,69 @@ if (runtimeState.activeTab == 4) {
                                 custom::Separator();
                                 custom::Checkbox("Triggerbot", &Config.NewFeaturesMenu.Triggerbot);
                                 if (Config.NewFeaturesMenu.Triggerbot) {
-                                    custom::SliderInt("Trigger Delay Min", &Config.NewFeaturesMenu.TriggerbotDelayMin, 0, 30, "%d ms");
-                                    custom::SliderInt("Trigger Delay Max", &Config.NewFeaturesMenu.TriggerbotDelayMax, 20, 100, "%d ms");
+                                    static const char* triggerModes[] = { "Always", "ADS Only", "Firing Only" };
+                                    custom::Combo("Mode", &Config.NewFeaturesMenu.TriggerbotMode, triggerModes, IM_ARRAYSIZE(triggerModes));
+                                    custom::SliderInt("Delay", &Config.NewFeaturesMenu.TriggerbotDelay, 0, 500, "%d ms");
+                                    // Zone width in FULL pixels around the crosshair. Default
+                                    // 40 = whatever the device rendered before; V3's own zone is
+                                    // 2.5% of screen width, so this is deliberately user-tunable.
+                                    custom::SliderInt("Radius", &Config.NewFeaturesMenu.TriggerbotRadius, 4, 240, "%d px");
+                                }
+                                // Debug status (shows in-game). The counters below are
+                                // written by the GAME-THREAD scan in A_FireTick, so they
+                                // stay live while the trigger is armed. A_FireRenderTick()
+                                // is scan-free now: it only resolves a Test Fire the game
+                                // thread never picked up. The render thread therefore never
+                                // runs A_FireFindTarget / Physics.Raycast - the physics
+                                // world has one caller only, A_FireTick on the game thread.
+                                ImGui::Spacing();
+                                NewFeatures::A_FireRenderTick();
+                                NewFeatures::TriggerbotDiag& td = NewFeatures::GetTriggerbotDiag();
+                                int dbgState = NewFeatures::GetTriggerbotDebugState();
+                                const bool hbAlive = NewFeatures::A_FireHeartbeatAlive();
+                                if (!hbAlive) {
+                                    ImGui::TextColored(ImVec4(1, 0.25f, 0.25f, 1), "NO GAME-THREAD TICK");
+                                } else if (dbgState == 2) {
+                                    ImGui::TextColored(ImVec4(0, 1, 0, 1), ">> FIRING <<");
+                                } else if (dbgState == 1) {
+                                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "TARGET LOCKED");
+                                } else {
+                                    // Per-scan verdict only: a candidate denied
+                                    // geometry this exact scan. The lifetime
+                                    // counter must not decide this headline -
+                                    // it made "WALL BETWEEN" stick forever.
+                                    ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
+                                                       td.losBlockedScan > 0 ? "WALL BETWEEN" : "NO TARGET");
+                                }
+                                // Test Fire: this menu runs on the render thread and the game
+                                // only reacts to StartFire on the game thread, so the click just
+                                // queues the request - the heartbeat runs it and reports back.
+                                if (custom::Button("Test Fire", ImVec2(0, 0))) {
+                                    NewFeatures::g_testFireRequest = true;
+                                    NewFeatures::g_testFireRequestTime = NewFeatures::A_FireNow();
+                                    td.testFireStatus = 0;
+                                }
+                                {
+                                    const char* testTxt = "TestFire: idle";
+                                    if (td.testFireStatus == 1) testTxt = "TestFire: fired";
+                                    else if (td.testFireStatus == 2) testTxt = "TestFire: no local pawn";
+                                    else if (td.testFireStatus == 3) testTxt = "TestFire: no weapon";
+                                    else if (td.testFireStatus == 4) testTxt = "TestFire: no StartFire ptr";
+                                    else if (td.testFireStatus == 5) testTxt = "TestFire: queued, no tick";
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "%s", testTxt);
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "HB %s  wTick=%d held=%d pawn=%d",
+                                        hbAlive ? "OK" : "DEAD",
+                                        td.weaponTicks, td.weaponHeldTicks, td.pawnLocalTicks);
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "Scan=%d Enemy=%d Tgt=%d Fire=%d LOSblk=%d",
+                                        td.scans, td.enemyCount,
+                                        td.targets, td.fires, td.losBlocked);
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "R=%.0f Near=%.0f px", td.radiusPx,
+                                        td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx));
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                        "Pawn=%p Wpn=%p Match=%p", td.localPawn, td.heldWeapon, td.matchGame);
                                 }
                                 EndContentChild(left);
                             }
@@ -1933,15 +2098,57 @@ if (runtimeState.activeTab == 4) {
                 // delayed crash). Idle = zero memory writes.
                 static bool s_appliedNoHitFlinch = false;
                 static bool s_appliedNoDrift = false;
+                // The applied-flags only flip when the memory write actually
+                // succeeded - otherwise a failed Restore() left the patch live
+                // forever with the UI claiming it was off (the old "No Drift
+                // won't stop" bug, together with the removed Stable Scope
+                // always-zero breathe hook). Running every frame is safe:
+                // KittyMemory skips the write while patched state matches.
                 if (Config.NewFeaturesMenu.NoHitFlinch && !s_appliedNoHitFlinch) {
-                    Patches.NoHitFlinch.Modify(); s_appliedNoHitFlinch = true;
+                    if (Patches.NoHitFlinch.Modify()) s_appliedNoHitFlinch = true;
                 } else if (!Config.NewFeaturesMenu.NoHitFlinch && s_appliedNoHitFlinch) {
-                    Patches.NoHitFlinch.Restore(); s_appliedNoHitFlinch = false;
+                    if (Patches.NoHitFlinch.Restore()) s_appliedNoHitFlinch = false;
                 }
                 if (Config.NewFeaturesMenu.NoDrift && !s_appliedNoDrift) {
-                    Patches.NoDrift.Modify(); s_appliedNoDrift = true;
+                    if (Patches.NoDrift.Modify()) s_appliedNoDrift = true;
                 } else if (!Config.NewFeaturesMenu.NoDrift && s_appliedNoDrift) {
-                    Patches.NoDrift.Restore(); s_appliedNoDrift = false;
+                    if (Patches.NoDrift.Restore()) s_appliedNoDrift = false;
+                }
+                static bool s_appliedNoSlideFatigue = false;
+                if (Config.NewFeaturesMenu.NoSlideFatigue && !s_appliedNoSlideFatigue) {
+                    const bool ok = Patches.NoSlideFatigue.Modify()
+                                 && Patches.NoSlideFatiguePve.Modify();
+                    if (ok) s_appliedNoSlideFatigue = true;
+                } else if (!Config.NewFeaturesMenu.NoSlideFatigue && s_appliedNoSlideFatigue) {
+                    const bool ok = Patches.NoSlideFatigue.Restore()
+                                 && Patches.NoSlideFatiguePve.Restore();
+                    if (ok) s_appliedNoSlideFatigue = false;
+                }
+
+                // Same edge-triggered pattern for the four 8-byte getters that
+                // used to be inline hooks (they are patches now, see the
+                // Patches.* creation in Init_Thread / the Feats.h comments).
+                static bool s_appliedEm3Eye = false;
+                if (Config.ExtraMenu.RedWallhack && !s_appliedEm3Eye) {
+                    if (Patches.Em3Eye.Modify()) s_appliedEm3Eye = true;
+                } else if (!Config.ExtraMenu.RedWallhack && s_appliedEm3Eye) {
+                    if (Patches.Em3Eye.Restore()) s_appliedEm3Eye = false;
+                }
+                static bool s_appliedKineticArmor = false;
+                if (Config.ExtraMenu.Kinetic && !s_appliedKineticArmor) {
+                    if (Patches.KineticArmor.Modify()) s_appliedKineticArmor = true;
+                } else if (!Config.ExtraMenu.Kinetic && s_appliedKineticArmor) {
+                    if (Patches.KineticArmor.Restore()) s_appliedKineticArmor = false;
+                }
+                static bool s_appliedNoHipfireDelay = false;
+                if (Config.NewFeaturesMenu.NoHipfireDelay && !s_appliedNoHipfireDelay) {
+                    const bool ok = Patches.NoHipfireUseGetReadyTime.Modify()
+                                 && Patches.NoHipfireSpringFireGetReady.Modify();
+                    if (ok) s_appliedNoHipfireDelay = true;
+                } else if (!Config.NewFeaturesMenu.NoHipfireDelay && s_appliedNoHipfireDelay) {
+                    const bool ok = Patches.NoHipfireUseGetReadyTime.Restore()
+                                 && Patches.NoHipfireSpringFireGetReady.Restore();
+                    if (ok) s_appliedNoHipfireDelay = false;
                 }
             }
             ImGui::End();
@@ -2180,7 +2387,6 @@ if (runtimeState.activeTab == 4) {
 
     UpdateCamoOverride();
     ApplyWorldVisualsRuntime();
-    InstallBRClassEspConfigHook();
 
     auto currentTime = std::chrono::steady_clock::now();
     if (currentTime - lastScreenshotTime >= screenshotInterval) {
@@ -2202,8 +2408,12 @@ if (runtimeState.activeTab == 4) {
             rendered = ZEL_Render(ImGui::GetDrawData(), dpy, surface, gameCtx,
                                   (android::HideRecAImGui::SwapBuffersFn)old_eglSwapBuffers);
         }
-        // ZEL_Render handles swapping its own overlay surface.
-        // If it fails, we fall through to normal rendering below.
+        // ZEL_Render swaps its own overlay surface. When it cannot present the
+        // menu there (Android < 12, no translucent EGL config, layer/context
+        // creation failed, ...) the layer has to go BEFORE the visible fallback
+        // below: a half initialised overlay is exactly what blacks the whole
+        // screen out, and it would also cover the menu the fallback draws.
+        if (!rendered) ZEL_Shutdown();
     }
     if (!rendered) {
         // Match variant-3 behavior: tear down any stale overlay environment
@@ -2265,13 +2475,85 @@ void Init_Thread() {
     Patches.NoDrift = MemoryPatch::createWithHex("libunity.so", 0xC9BE4C0,
         "00 00 80 D2 C0 03 5F D6");
 
+    // No Slide Fatigue: force SlideTackleComponent::get_UseSlideTackleLimit()
+    // (0x8BF722C, Slot 39) and the PVEArcadeSlideTackleComponent override
+    // (0x651274C) to return false. Both are 8-byte leaf getters - the next
+    // function in .text starts immediately after them, so they are byte patches
+    // ("mov w0,#0 ; ret"), exactly like the set above, and never inline hooks.
+    // false = the component ignores the slide-tackle limit, which is the whole
+    // fatigue system (LimitSlideTackle reduces slide speed/distance as slides
+    // are chained), so slides keep their full length instead of decaying.
+    Patches.NoSlideFatigue = MemoryPatch::createWithHex("libunity.so", 0x8BF722C,
+        "00 00 80 D2 C0 03 5F D6");
+    Patches.NoSlideFatiguePve = MemoryPatch::createWithHex("libunity.so", 0x651274C,
+        "00 00 80 D2 C0 03 5F D6");
+
+    // ------------------------------------------------------------------
+    //  8-byte leaf getters: PATCHED, never hooked.
+    //
+    //  GR .57 dump sizes (jeudhehs/dump, "dump (GR .57).cs"); every one of
+    //  these functions is exactly 8 bytes (ldrb/ldr w0,[x0,#..] ; ret) and the
+    //  function that follows it in .text starts 8 bytes later:
+    //    get_IsInEM3Eye          @0x9677554 -> set_IsInEM3Eye @0x967755C
+    //    get_IsKineticArmor      @0x51B3D64 -> Pawn::get_CurrentSeatMode
+    //                                          @0x51B3D6C (virtual, 0xAC bytes)
+    //    get_UseGetReadyTime     @0x50E9F60 -> set_UseGetReadyTime @0x50E9F68
+    //    get_SpringFireGetReady  @0x50E9F28 -> set_SpringFireGetReady @0x50E9F30
+    //
+    //  A64HookFunction (hook()/HOOK_LIB) replaces the target with a 16-byte
+    //  "ldr x17,#8 ; br x17 ; .quad <hook>" stub whenever the replacement is
+    //  further than +/-128MB away, i.e. it overwrites the following 8 bytes -
+    //  the neighbouring setter / virtual seat query. Those neighbours are
+    //  called by the game while it initialises weapon + pawn state, which is
+    //  what made the client crash as soon as a match was joined. Patching
+    //  exactly 8 bytes cannot reach the neighbour. "00 00 80 D2 C0 03 5F D6"
+    //  = mov x0,#0 ; ret (false), "20 00 80 D2 C0 03 5F D6" = mov x0,#1 ; ret.
+    Patches.Em3Eye = MemoryPatch::createWithHex("libunity.so", 0x9677554,
+        "20 00 80 D2 C0 03 5F D6");
+    Patches.KineticArmor = MemoryPatch::createWithHex("libunity.so", 0x51B3D64,
+        "20 00 80 D2 C0 03 5F D6");
+    Patches.NoHipfireUseGetReadyTime = MemoryPatch::createWithHex("libunity.so", 0x50E9F60,
+        "00 00 80 D2 C0 03 5F D6");
+    Patches.NoHipfireSpringFireGetReady = MemoryPatch::createWithHex("libunity.so", 0x50E9F28,
+        "00 00 80 D2 C0 03 5F D6");
+
     // Dump-verified (both dump.cs and dump (GR .57).cs from the jeudhehs/dump
     // dataset): CreateBulletLine @ 0xC9B6F90, CreateBulletProjectile @ 0xC9C33A4.
     // Too small to hook safely: Tick @ 0xC9C0B64, ChangePunchAngleByGetHit @
     // 0xC9C0EDC, UpdateBreatheTrembling @ 0xC9BE4C0 - those use memory patches.
-    DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9B6F90), (void *)&WeaponFireComponent_Instant_CreateBulletLine, (void **)&oWeaponFireComponent_Instant_CreateBulletLine);
-    DobbyHook((void *)getAbsoluteAddress("libunity.so", 0xC9C33A4), (void *)&WeaponFireComponent_Instant_CreateBulletProjectile, (void **)&oWeaponFireComponent_Instant_CreateBulletProjectile);
-    
+    // Installed through Tools::Hook (mprotect PROT_READ|WRITE|EXEC, THEN
+    // DobbyHook) like every other game hook in this file. These two used to be
+    // the only bare DobbyHook calls in Main.cpp, and on a libunity.so whose
+    // .text is mapped read-only they silently did not land - Bullet Track then
+    // had no hook at all and nothing about the shot changed.
+    void *bulletLineAddr = (void *)getAbsoluteAddress("libunity.so", 0xC9B6F90);
+    if (Tools::IsPtrValid(bulletLineAddr)) {
+        Tools::Hook(bulletLineAddr, (void *)&WeaponFireComponent_Instant_CreateBulletLine,
+                    (void **)&oWeaponFireComponent_Instant_CreateBulletLine);
+        LOGI("BulletTrack: CreateBulletLine hooked @%p -> orig %p",
+             bulletLineAddr, (void *)oWeaponFireComponent_Instant_CreateBulletLine);
+    } else {
+        LOGE("BulletTrack: CreateBulletLine RVA 0xC9B6F90 did not resolve");
+    }
+    void *bulletProjAddr = (void *)getAbsoluteAddress("libunity.so", 0xC9C33A4);
+    if (Tools::IsPtrValid(bulletProjAddr)) {
+        Tools::Hook(bulletProjAddr, (void *)&WeaponFireComponent_Instant_CreateBulletProjectile,
+                    (void **)&oWeaponFireComponent_Instant_CreateBulletProjectile);
+        LOGI("BulletTrack: CreateBulletProjectile hooked @%p -> orig %p",
+             bulletProjAddr, (void *)oWeaponFireComponent_Instant_CreateBulletProjectile);
+    } else {
+        LOGE("BulletTrack: CreateBulletProjectile RVA 0xC9C33A4 did not resolve");
+    }
+
+    // NewFeatures (dump-verified, see NewFeatures.h header block):
+    //   Triggerbot   -> WeaponFireComponent_Instant::CheckTarget   @0xC9C1B50
+    //                   WeaponFireComponent_Instant::HasEnemyInPort@0xC9C13F8
+    //   Stable Scope -> GetBreatheTremblingPos                      @0xC9BD880
+    //                   WeaponShakeController::CollectWeaponShakeOffsets @0x9B774C0
+    //                   Pawn::UpdateFirstPersonCameraOffset         @0x51C489C
+    //                   HitGroundComponent::OnJumpHitGround         @0x8599460
+    NewFeatures::InstallHooks();
+
     InstallBRClassEspConfigHook();
     InitializeAllHooks();
 
@@ -2325,7 +2607,7 @@ Tools::Hook((void*)KittyMemory::getAbsoluteAddress(OBFUSCATE("libanogs.so"), 0x4
 
 __attribute__((constructor))
 	void native_Init(JNIEnv *env, jclass clazz, jobject mContext) {
-	    InitDevBypass();
+	    // DevBypass removed: login bypass was an undocumented backdoor. Auth via the panel only.
 	}
 
 JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
