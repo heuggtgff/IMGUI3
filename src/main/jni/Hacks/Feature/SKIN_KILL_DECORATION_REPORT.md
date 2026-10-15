@@ -43,8 +43,8 @@ tail was stale (see below).
 ## The bug chain
 
 **Blank skin card.** `LoadWeaponSkins` built `itemResByID` with
-`itemFields = res + 0x18`, so `itemFields->ID` read `res + 0x34`
-(`ModelAssetIDRaw`) instead of `res + 0x2C`, and `getitem.ItemRes` /
+`itemFields = res + 0x18`, so `itemFields->ID` read `res + 0x24`
+(`ModelAssetIDRaw`) instead of `res + 0x1C` (`ID`), and `getitem.ItemRes` /
 `getitem.ItemResInt` were read from the wrong fields. `itemResByID.find(confID)`
 therefore missed, `itemData` carried `ItemRes = {0,0,0,0}` for every skin, and
 `applyWeaponSkin` copied those zeros into the *real* `ItemResourceConfig` fields
@@ -63,8 +63,8 @@ index ⇒ blank thumbnail, while the in-game model kept coming from
 ## Changes
 
 `Skin/Thread.h`
-- Loader bases corrected to `+0x10` for the six classes above; `RealAssetIDs`
-  read at `kill + 0x10`.
+- Loader bases corrected to `+0x10` for the seven classes above; `RealAssetIDs`
+  read at `kill + 0x10` and the item id at `kill + 0x2C`.
 - `killEffectItemByAssetId` maps the kill-effect asset id to the
   `KillEffectItemConfConfig` item id (`ID @0x2C`); `killEffectByWeapon` is now a
   file-scope map so the diagnostics can report its size.
@@ -105,9 +105,32 @@ index ⇒ blank thumbnail, while the in-game model kept coming from
 - Host `g++ 13.3 -std=c++17 -fsyntax-only` over a TU including the real
   `System/UI/SkinTab.h` (which pulls `Skin/Fields.h`, `Skin/Thread.h`,
   `Skin/Camo.h`) with stubbed `jni.h`/`android/log.h`/`sys/system_properties.h`
-  and `-D__fastcall=`: **0 errors**; with `-Wall -Wextra -Wformat=2` the only
-  warnings are pre-existing (unused locals, narrowing in `charData`), none in the
-  new code, and the new `ImGui::TextColored` format rows are clean.
+  and `-D__fastcall=`: **0 errors**.
+- The same command run twice with `-Wall -Wextra -Wformat=2` — once on this
+  revision, once on the pre-fix tree (`10050e5`, same TU, same stubs) — gives
+  **45 warnings on both**, and the normalised warning sets (file + message,
+  line/column numbers stripped) are **byte-identical**, so the fix introduced no
+  new warnings. `-Wall` alone: 37 on both, also identical. Everything reported is
+  pre-existing: `-Wunused-*` locals, `-Wnarrowing` in `charData`,
+  `-Wsign-compare` in the camo-checkbox loops, one `m_ANOGSLIB` redefinition.
+- Runtime offset test (host, x86-64 LP64 — same 8-byte pointers and natural
+  alignment as arm64), committed as
+  `src/main/jni/Skin/tests/offset_check.cpp` with its host stubs: a byte buffer
+  is filled with sentinels at the dump offsets, then read back through the exact
+  casts the loaders use. All pass:
+  `ItemResourceFields.ID 0x1C`, `WeaponConfExtraFields.ID 0x24`,
+  `KillEffectItemFields.ID 0x2C`, `MythicSightFields.ID 0x20`,
+  `BRDeadboxSkinFields.ID 0x20`, `BRDropPlaneSkinFields.ID 0x14`,
+  `CharacterModelFields.ItemID 0x78`, `WeaponConfFields.LOCID_Name 0x68`,
+  `WeaponAssetGroupFields.Id 0x44`, plus the raw reads
+  (`fireConf +0x80/+0x84`, `kill + 0x2C`, `inv +0x20/0x24/0x28`).
+- The same test driven with the **pre-fix** `+0x18` bases reproduces every bug:
+  `ID` returns `ModelAssetIDRaw` (0x24), `WeaponConfExtraFields.ID` returns
+  0x24 where `DefaultKillEffectId` (0x1C) was wanted, and the kill-effect id
+  reads 0 — the map that stayed empty.
+- Config layouts: ~30 classes re-read out of `dump.cs` (the masked classes
+  decoded with `real = dumped ^ 0x46464646`), first fields, key ids and pointer
+  fields all agreeing with the casts above.
 - Brace/paren/bracket balance with comments and string literals stripped:
   `Skin/Thread.h` 0/0/0, `System/UI/SkinTab.h` 0/0/0, `Skin/Fields.h` 0/0/0.
 - Every class offset and RVA used above re-read out of `dump.cs`.
@@ -149,6 +172,12 @@ break, and they were not part of the request:
   `NewVehicleResId 0x28`, `VehicleId 0x48`), and the declaration is missing
   `DisableInCollection`, so every field after `ColorID` is one byte high on top
   of the eight.
+
+- `ctorHook/ctorOffset.h` is an older duplicate of `Skin/Thread.h`'s loaders —
+  it declares its own `sBool`/`activeKillEffects` and copies of the `+0x18`-based
+  loops. Nothing includes it (verified by searching every file in the repo,
+  build files included), so it is dead code, but it is the file where the old
+  bases still live; a loader fix belongs in `Skin/Thread.h`.
 
 Left otherwise correct and unchanged: `RoleSkinFields +0x18`
 (`RoleSkinConfig.ClothType 0x18`), `MythicArmorFields +0x14`,
