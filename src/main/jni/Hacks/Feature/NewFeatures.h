@@ -394,6 +394,16 @@ namespace NewFeatures
         return Tools::IsPtrValid(cached);
     }
 
+    // The managed pawn lists hand out raw 8-byte object references. An il2cpp
+    // reference is always 8-byte aligned, so an unaligned slot is a torn or
+    // mid-rewrite list entry - reject it before any native call, the way V3's
+    // A_FireIsReadablePawn (@c2c1e12) does.
+    inline bool A_FireListObjectAlive(void *obj)
+    {
+        if (((uintptr_t)obj & (uintptr_t)0x7) != (uintptr_t)0) return false;
+        return A_FireObjectAlive(obj);
+    }
+
     // Pawn::IsAiming() @0x519BB10 - "the local player is scoping / ADS"
     inline bool IsLocalPlayerScoping()
     {
@@ -505,6 +515,19 @@ namespace NewFeatures
     inline Vector3 (*fn_TransformGetForward)(void *) = nullptr;
     inline void   *(*fn_TransformGetParent)(void *) = nullptr;
     inline void *(*fn_CameraGetMain)() = nullptr;
+
+    // Camera::WorldToScreenPoint(0x5023B54) behind a null-checked wrapper. The
+    // scan called fn_WorldToScreen directly in four places; if 0x5023B54 did not
+    // resolve at install time, the FIRST target projection - "aimed at a
+    // player" - jumped through the null pointer and took the client down.
+    // Missing symbol now degrades: the shot keeps its centre-ray visibility
+    // verdict, only the pixel diagnostics are lost.
+    inline bool A_FireWorldToScreenSafe(void *cam, const Vector3 &world, Vector3 &out)
+    {
+        if (fn_WorldToScreen == nullptr || !A_FireObjectAlive(cam)) return false;
+        out = fn_WorldToScreen(cam, world);
+        return true;
+    }
     inline void *(*fn_GameGetMatchGame)() = nullptr;
     inline bool (*fn_PawnRecentlyRendered)(void *) = nullptr;
     inline bool (*fn_PawnLastOccVisible)(void *) = nullptr;
@@ -678,11 +701,11 @@ namespace NewFeatures
     // game), so it is called by value.
     inline void *GetCurrentFireComponent(void *weapon)
     {
-        if (!Tools::IsPtrValid(weapon)) return nullptr;
+        if (!A_FireObjectAlive(weapon)) return nullptr;
         static auto fn = (void *(*)(void *))UnityRva(RVA::Weapon_get_CurrentFireComponent);
         if (fn == nullptr) return nullptr;
         void *comp = fn(weapon);
-        return Tools::IsPtrValid(comp) ? comp : nullptr;
+        return A_FireObjectAlive(comp) ? comp : nullptr;
     }
 
     // Bullet speed in m/s, from the live fire component. `known` reports whether
@@ -724,7 +747,7 @@ namespace NewFeatures
     // Target velocity for leading (Pawn.get_Velocity @0x51B38CC, dump 713743).
     inline Vector3 GetPawnVelocity(void *pawn)
     {
-        if (!Tools::IsPtrValid(pawn)) return Vector3::zero();
+        if (!A_FireObjectAlive(pawn)) return Vector3::zero();
         static auto getVelocity = (Vector3 (*)(void *))UnityRva(RVA::Pawn_get_Velocity);
         if (getVelocity != nullptr) return getVelocity(pawn);
         return Vector3::zero();
@@ -949,7 +972,7 @@ namespace NewFeatures
     inline float A_FireSpreadPx(void *weapon, float focalPx, bool checkSpread)
     {
         if (!checkSpread) return 0.0f;
-        if (!Tools::IsPtrValid(weapon) || !(focalPx > 0.0f)) return 0.0f;
+        if (!A_FireObjectAlive(weapon) || !(focalPx > 0.0f)) return 0.0f;
         static auto getSpread = (float (*)(void *))UnityRva(RVA::Weapon_get_ShotSpreadSize);
         if (getSpread == nullptr) return 0.0f;
         const float spread = getSpread(weapon);
@@ -980,13 +1003,13 @@ namespace NewFeatures
 
         for (int i = 0; i < count; i++) {
             Pawn *mate = items[i];
-            if (!A_FireObjectAlive((void *)mate)) continue;
+            if (!A_FireListObjectAlive((void *)mate)) continue;
             if (mate == localPawn) continue;
             if (!A_FirePawnAlive(mate)) continue;
             if (friendsSeen != nullptr) (*friendsSeen)++;
 
             Transform *t = mate->get_transform();
-            if (!Tools::IsPtrValid((void *)t)) continue;
+            if (!A_FireObjectAlive((void *)t)) continue;
             const Vector3 pos = t->get_position();
 
             // Two probes per teammate, because m_Mesh/parent transform sits at the
@@ -1273,7 +1296,10 @@ namespace NewFeatures
     // ages), so naming a hit needs no new il2cpp method lookup.
     inline void *A_FireColliderTransform(void *collider)
     {
-        if (!Tools::IsPtrValid(collider)) return nullptr;
+        // get_transform() is a native call: a ray can hit a collider whose
+        // managed wrapper the scene is already tearing down, and that wrapper
+        // still passes a plain readability check with a null m_CachedPtr.
+        if (!A_FireObjectAlive(collider)) return nullptr;
         return (void *)((Component *)collider)->get_transform();
     }
 
@@ -1393,7 +1419,7 @@ namespace NewFeatures
                 Pawn *p = items[i];
                 // get_transform() is a native call: a pawn that despawned while
                 // it is still listed would crash here.
-                if (!A_FireObjectAlive((void *)p)) continue;
+                if (!A_FireListObjectAlive((void *)p)) continue;
                 if ((void *)p->get_transform() == t) {
                     if (depthOut != nullptr) *depthOut = depth;
                     return p;
@@ -1479,9 +1505,9 @@ namespace NewFeatures
         if (!Tools::IsPtrValid((void *)game)) return FireBlock::NoMatch;
 
         Camera *cam = Camera::get_main();
-        if (!Tools::IsPtrValid((void *)cam)) return FireBlock::NoMatch;
+        if (!A_FireObjectAlive((void *)cam)) return FireBlock::NoMatch;
         Transform *camTransform = cam->get_transform();
-        if (!Tools::IsPtrValid((void *)camTransform)) return FireBlock::NoMatch;
+        if (!A_FireObjectAlive((void *)camTransform)) return FireBlock::NoMatch;
         const Vector3 camPos = camTransform->get_position();
 
         // The game's OWN aim answers (Weapon.get_AimingTarget 0x510EAAC,
@@ -1543,8 +1569,9 @@ namespace NewFeatures
                 for (int k = 0; k < 3; k++) {
                     const A_FireAimPoint cand = A_FireAimPointFor(centred, order[k]);
                     if (!cand.valid) continue;
-                    const Vector3 sc = fn_WorldToScreen(cam, cand.pos);
-                    if (!(sc.z > 0.0f)) continue;
+                    Vector3 sc = Vector3::zero();
+                    if (!A_FireWorldToScreenSafe(cam, cand.pos, sc) || !(sc.z > 0.0f))
+                        continue;                 // no projection / behind the camera
                     const float dx = sc.x - cx;
                     const float dy = sc.y - cy;
                     const float d2 = dx * dx + dy * dy;
@@ -1553,7 +1580,8 @@ namespace NewFeatures
                 out.pawn      = centred;
                 out.aim       = ap;
                 out.aimPoint  = ap.valid ? ap.pos : camPos;
-                out.screenPos = ap.valid ? fn_WorldToScreen(cam, ap.pos) : Vector3::zero();
+                out.screenPos = Vector3::zero();
+                if (ap.valid) A_FireWorldToScreenSafe(cam, ap.pos, out.screenPos);
                 out.pxOffset  = bestSq >= 0.0f ? sqrtf(bestSq) : -1.0f;
                 out.worldDist = ap.valid ? Vector3::Distance(camPos, ap.pos) : centreHitDist;
                 out.hitbox    = ap.hitbox;
@@ -1579,8 +1607,9 @@ namespace NewFeatures
             Pawn *p = items[i];
             // Dead objects stay listed for a few frames and still pass a plain
             // readability check (the managed wrapper is alive); every native
-            // call below would walk their cleared m_CachedPtr.
-            if (!A_FireObjectAlive((void *)p)) continue;
+            // call below would walk their cleared m_CachedPtr. A pawn the list
+            // is being rewritten this frame hands out an unaligned reference.
+            if (!A_FireListObjectAlive((void *)p)) continue;
             if (p == localPawn) continue;                        // never shoot yourself
             if (IsSameTeamAcceptBots(localPawn, p)) continue;     // team id is the gate
             if (!A_FirePawnAlive(p)) continue;                    // dead / downed / still ragdolling
@@ -1596,8 +1625,9 @@ namespace NewFeatures
             for (int k = 0; k < 3 && !ap.valid; k++) {
                 const A_FireAimPoint cand = A_FireAimPointFor(p, order[k]);
                 if (!cand.valid) continue;
-                const Vector3 sc = fn_WorldToScreen(cam, cand.pos);
-                if (!(sc.z > 0.0f)) continue;                     // behind the camera
+                Vector3 sc = Vector3::zero();                     // behind the camera / no symbol
+                if (!A_FireWorldToScreenSafe(cam, cand.pos, sc) || !(sc.z > 0.0f))
+                    continue;
                 const float dx = sc.x - cx;
                 const float dy = sc.y - cy;
                 const float d2 = dx * dx + dy * dy;
@@ -1708,8 +1738,8 @@ namespace NewFeatures
             //     hitbox where the target will be when the bullet arrives?
             float predPx = c.pxOffset;
             if (lead) {
-                const Vector3 scPred = fn_WorldToScreen(cam, predicted);
-                if (scPred.z > 0.0f) {
+                Vector3 scPred = Vector3::zero();
+                if (A_FireWorldToScreenSafe(cam, predicted, scPred) && scPred.z > 0.0f) {
                     const float pdx = scPred.x - cx;
                     const float pdy = scPred.y - cy;
                     predPx = sqrtf(pdx * pdx + pdy * pdy);
@@ -1745,7 +1775,8 @@ namespace NewFeatures
             out.pawn       = c.pawn;
             out.aim        = c.aim;
             out.aimPoint   = c.aim.pos;
-            out.screenPos  = fn_WorldToScreen(cam, c.aim.pos);
+            out.screenPos = Vector3::zero();
+            A_FireWorldToScreenSafe(cam, c.aim.pos, out.screenPos);
             out.pxOffset   = c.pxOffset;
             out.worldDist  = c.worldDist;
             out.hitbox     = c.aim.hitbox;
