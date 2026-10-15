@@ -320,6 +320,12 @@ namespace NewFeatures
         //   Transform.get_parent  0x507BDEC (dump.cs 172105)
         constexpr uintptr_t Transform_get_forward            = 0x509C650;
         constexpr uintptr_t Transform_get_parent             = 0x507BDEC;
+        // The rest of the camera basis, used by the crosshair ray below
+        // (dump.cs 172046 / 172050, the same Transform block as get_forward):
+        //   Transform.get_right 0x509C368
+        //   Transform.get_up    0x509C4E4
+        constexpr uintptr_t Transform_get_right              = 0x509C368;
+        constexpr uintptr_t Transform_get_up                 = 0x509C4E4;
         // The game's OWN visibility answers - no raycast needed:
         //   RecentlyRendered: was this pawn actually rendered on screen recently
         //     (frustum + occlusion culling + render distance) - Slot 234
@@ -560,6 +566,11 @@ namespace NewFeatures
     // Transform.get_parent (see the RVA block).
     inline Vector3 (*fn_TransformGetForward)(void *) = nullptr;
     inline void   *(*fn_TransformGetParent)(void *) = nullptr;
+    // Camera basis for the crosshair ray (see CrosshairRayDir). Both stay null
+    // when the symbol did not resolve, and the ray then falls back to the plain
+    // camera forward it has always used.
+    inline Vector3 (*fn_TransformGetRight)(void *) = nullptr;
+    inline Vector3 (*fn_TransformGetUp)(void *) = nullptr;
     inline void *(*fn_CameraGetMain)() = nullptr;
 
     // Camera::WorldToScreenPoint(0x5023B54) behind a null-checked wrapper. The
@@ -1209,6 +1220,13 @@ namespace NewFeatures
         int    aimPath;         // 0 = centre-of-screen ray accepted, 1 = zone scan
         unsigned crosshairPawn; // pawn the centre ray landed on (0 = nothing named)
         float  crosshairHitDist;// m, centre ray first-hit distance (-1 = no hit)
+        // The crosshair this scan aimed from and whether the dot moved it: what
+        // the menu prints so "my dot is off-centre, is the trigger on it?" is
+        // answered by the feature, not guessed at.
+        float  crosshairCx;        // px, left edge -> crosshair
+        float  crosshairCy;        // px, top edge  -> crosshair
+        int    crosshairOffsetUsed;    // 1 = the dot's offset bent the centre ray
+        int    crosshairOffsetDropped; // 1 = offset asked, camera basis missing
         int    raysIdentified;  // last scan: rays whose nearest hit WAS the target
         int    raysBlocked;     // last scan: rays stopped by something else
         bool   rayUnknown;      // last scan: a ray symbol did not resolve (fail closed)
@@ -1264,6 +1282,75 @@ namespace NewFeatures
         g_afireLocalPawnCache = p;
         g_afireLocalPawnCacheTime = now;
         return p;
+    }
+
+    // ---- Crosshair geometry (ONE source of truth) ---------------------------
+    // The dot the menu draws and the point the triggerbot aims through are the
+    // same screen position: the render centre plus the user's offsets. The
+    // defaults are 0 px, i.e. exactly the centre, so nothing moves - and nothing
+    // about the triggerbot changes - unless the sliders are touched.
+    inline void CrosshairDotCentrePx(float &cx, float &cy)
+    {
+        cx = (float)get_width()  * 0.5f + Config.Crosshair.OffsetX;
+        cy = (float)get_height() * 0.5f + Config.Crosshair.OffsetY;
+    }
+
+    // The offsets the TRIGGERBOT uses: the dot's own when the dot is wired to it
+    // (the menu's default), otherwise zero, i.e. the screen centre.
+    inline void CrosshairAimOffsetPx(float &dx, float &dy)
+    {
+        if (!Config.Crosshair.TriggerbotUsesIt) { dx = 0.0f; dy = 0.0f; return; }
+        dx = Config.Crosshair.OffsetX;
+        dy = Config.Crosshair.OffsetY;
+    }
+
+    // Where the triggerbot measures from.
+    inline void CrosshairAimCentrePx(float &cx, float &cy)
+    {
+        float dx = 0.0f, dy = 0.0f;
+        CrosshairAimOffsetPx(dx, dy);
+        cx = (float)get_width()  * 0.5f + dx;
+        cy = (float)get_height() * 0.5f + dy;
+    }
+
+    // The direction from the camera THROUGH the crosshair pixel - the ray the
+    // shot follows when the crosshair the user sees is the one firing.
+    //   f = camera forward (on its own this IS the centre ray), r/u = the rest of
+    //   the camera basis (Transform.get_right/get_up), F = A_FireFocalPx(), the
+    //   vertical focal length in px, so a pixel offset (dx right, dy down) is
+    //       normalize(f + r*dx/F - u*dy/F)
+    // For the default 0,0 this returns f UNCHANGED - no rebuild, no normalize -
+    // so the default case is bit-for-bit the ray this path always cast.
+    // `used` says the offset was really applied. `dropped` says an offset was
+    // asked for but the basis (or a sane focal length) did not resolve: the
+    // centre ray then stays the camera forward while the ZONE path still follows
+    // the dot, and the menu prints that it happened instead of hiding it.
+    inline void CrosshairRayDir(void *camTransform, float dxPx, float dyPx,
+                                Vector3 &out, bool &used, bool &dropped)
+    {
+        used = false;
+        dropped = false;
+        out = fn_TransformGetForward(camTransform);
+        if (dxPx == 0.0f && dyPx == 0.0f)
+            return;
+        if (fn_TransformGetRight == nullptr || fn_TransformGetUp == nullptr) {
+            dropped = true;
+            return;
+        }
+        const float focalPx = A_FireFocalPx();
+        if (!(focalPx > 1.0f)) {
+            dropped = true;
+            return;
+        }
+        const Vector3 right = fn_TransformGetRight(camTransform);
+        const Vector3 up    = fn_TransformGetUp(camTransform);
+        const Vector3 dir = out + right * (dxPx / focalPx) - up * (dyPx / focalPx);
+        if (!(Vector3::Magnitude(dir) > 1.0e-6f)) {
+            dropped = true;
+            return;
+        }
+        out = Vector3::Normalized(dir);
+        used = true;
     }
 
     // Crosshair radius in pixels. Default is V3's zone: 2.5 % of the screen
@@ -1935,8 +2022,12 @@ namespace NewFeatures
         if (!Tools::IsPtrValid((void *)items) || count <= 0 || count > 1024)
             return FireBlock::NoEnemyInZone;
 
-        const float cx = (float)get_width()  * 0.5f;
-        const float cy = (float)get_height() * 0.5f;
+        // The zone is measured from the crosshair the user sees, not from a
+        // hard-coded screen centre.
+        float cx = 0.0f, cy = 0.0f;
+        CrosshairAimCentrePx(cx, cy);
+        d.crosshairCx = cx;
+        d.crosshairCy = cy;
         const float radius = A_FireCrosshairRadiusPx();
         const float radiusSq = radius * radius;
         d.radiusPx = radius;
@@ -1951,7 +2042,17 @@ namespace NewFeatures
         // enemy is exactly in the middle" requirement directly, without relying on
         // m_HeadBone/m_Mesh offsets or on a projection radius.
         if (fn_TransformGetForward != nullptr) {
-            const Vector3 camForward = fn_TransformGetForward(camTransform);
+            // Path A follows the crosshair. With the dot at the default centre -
+            // or with the triggerbot unwired from the dot - this is the camera
+            // forward, i.e. exactly the ray this path always cast.
+            float crossDx = 0.0f, crossDy = 0.0f;
+            CrosshairAimOffsetPx(crossDx, crossDy);
+            bool crossOffsetUsed = false, crossOffsetDropped = false;
+            Vector3 camForward;
+            CrosshairRayDir(camTransform, crossDx, crossDy, camForward,
+                            crossOffsetUsed, crossOffsetDropped);
+            d.crosshairOffsetUsed = crossOffsetUsed ? 1 : 0;
+            d.crosshairOffsetDropped = crossOffsetDropped ? 1 : 0;
             bool symbolMissing = false;
             float centreHitDist = -1.0f;
             Pawn *centred = A_FireCrosshairRayPawn(camPos, camForward, items, count, localPawn,
@@ -2739,6 +2840,18 @@ namespace NewFeatures
         if (Tools::IsPtrValid(parentAddr))
             fn_TransformGetParent = (void *(*)(void *))parentAddr;
 
+        // The rest of the camera basis: only the crosshair ray needs it, and it
+        // only needs it once the dot is moved off the centre (see
+        // CrosshairRayDir), so a missing symbol costs the offset and nothing
+        // else.
+        auto rightAddr = UnityRva(RVA::Transform_get_right);
+        if (Tools::IsPtrValid(rightAddr))
+            fn_TransformGetRight = (Vector3 (*)(void *))rightAddr;
+
+        auto upAddr = UnityRva(RVA::Transform_get_up);
+        if (Tools::IsPtrValid(upAddr))
+            fn_TransformGetUp = (Vector3 (*)(void *))upAddr;
+
         // Visibility cache getters (the game's own occlusion/frustum verdicts).
         auto rrAddr = UnityRva(RVA::Pawn_get_RecentlyRendered);
         if (Tools::IsPtrValid(rrAddr))
@@ -2874,12 +2987,13 @@ namespace NewFeatures
             }
         }
 
-        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p RayAll=%p RayHitOut=%p RaySeg=%p IsTrigger=%p Fwd=%p Parent=%p Raycast=%p",
+        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p RayAll=%p RayHitOut=%p RaySeg=%p IsTrigger=%p Fwd=%p Parent=%p Raycast=%p CamRight=%p CamUp=%p",
              (void *)fn_Weapon_StartFire, (void *)fn_Weapon_StopFire,
              (void *)fn_WorldToScreen, (void *)fn_PhysicsRaycastAll,
              (void *)fn_PhysicsRaycastHitOut, (void *)fn_PhysicsRaycastSegment,
              (void *)fn_ColliderIsTrigger, (void *)fn_TransformGetForward,
-             (void *)fn_TransformGetParent, (void *)fn_PhysicsRaycastLOS);
+             (void *)fn_TransformGetParent, (void *)fn_PhysicsRaycastLOS,
+             (void *)fn_TransformGetRight, (void *)fn_TransformGetUp);
     }
 
     // True while the game-thread heartbeat has run recently.

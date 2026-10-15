@@ -76,6 +76,17 @@ void LoadConfig() {
         else if (key == "NewFeatures.NoSlideFatigue") Config.NewFeaturesMenu.NoSlideFatigue = (valueStr == "1");
         else if (key == "NewFeatures.NoSprintToFireDelay") Config.NewFeaturesMenu.NoSprintToFireDelay = (valueStr == "1");
         else if (key == "NewFeatures.NoHipfireDelay") Config.NewFeaturesMenu.NoHipfireDelay = (valueStr == "1");
+        // Own dot crosshair. Opacity is the colour's own alpha, so it is stored
+        // once (Crosshair.Opacity -> Color[3]) and cannot disagree with the dot.
+        else if (key == "Crosshair.Enabled") Config.Crosshair.Enabled = (valueStr == "1");
+        else if (key == "Crosshair.TriggerbotUsesIt") Config.Crosshair.TriggerbotUsesIt = (valueStr == "1");
+        else if (key == "Crosshair.Size") Config.Crosshair.Size = std::stof(valueStr);
+        else if (key == "Crosshair.OffsetX") Config.Crosshair.OffsetX = std::stof(valueStr);
+        else if (key == "Crosshair.OffsetY") Config.Crosshair.OffsetY = std::stof(valueStr);
+        else if (key == "Crosshair.Opacity") Config.Crosshair.Color[3] = std::stof(valueStr);
+        else if (key == "Crosshair.ColorR") Config.Crosshair.Color[0] = std::stof(valueStr);
+        else if (key == "Crosshair.ColorG") Config.Crosshair.Color[1] = std::stof(valueStr);
+        else if (key == "Crosshair.ColorB") Config.Crosshair.Color[2] = std::stof(valueStr);
         // DevBypass removed (login bypass).
         else if (key == "ExtraMenu.WallHack") Config.ExtraMenu.WallHack = (valueStr == "1");
     }
@@ -134,6 +145,15 @@ void SaveConfig() {
     file << "NewFeatures.NoSlideFatigue " << Config.NewFeaturesMenu.NoSlideFatigue << "\n";
     file << "NewFeatures.NoSprintToFireDelay " << Config.NewFeaturesMenu.NoSprintToFireDelay << "\n";
     file << "NewFeatures.NoHipfireDelay " << Config.NewFeaturesMenu.NoHipfireDelay << "\n";
+    file << "Crosshair.Enabled " << Config.Crosshair.Enabled << "\n";
+    file << "Crosshair.TriggerbotUsesIt " << Config.Crosshair.TriggerbotUsesIt << "\n";
+    file << "Crosshair.Size " << Config.Crosshair.Size << "\n";
+    file << "Crosshair.OffsetX " << Config.Crosshair.OffsetX << "\n";
+    file << "Crosshair.OffsetY " << Config.Crosshair.OffsetY << "\n";
+    file << "Crosshair.Opacity " << Config.Crosshair.Color[3] << "\n";
+    file << "Crosshair.ColorR " << Config.Crosshair.Color[0] << "\n";
+    file << "Crosshair.ColorG " << Config.Crosshair.Color[1] << "\n";
+    file << "Crosshair.ColorB " << Config.Crosshair.Color[2] << "\n";
     // DevBypass removed (login bypass).
     file << "ExtraMenu.WallHack " << Config.ExtraMenu.WallHack << "\n";
     

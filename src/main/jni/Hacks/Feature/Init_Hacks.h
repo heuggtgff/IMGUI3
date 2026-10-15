@@ -246,6 +246,22 @@ sColorsESPBOT sColorsESPBOT{0};
         bool NoHipfireDelay = false;       // hipfire get-ready / wind-up gate
     };
     sNewFeaturesMenu NewFeaturesMenu{0};
+
+    // Own dot crosshair, drawn over the game. The dot sits at the render centre
+    // plus OffsetX/OffsetY in pixels, so the default (0,0) IS the centre - the
+    // triggerbot measures its crosshair zone from the same point, and with the
+    // defaults its centre ray is byte-for-byte the camera forward it used
+    // before this existed.
+    struct sCrosshair
+    {
+        bool Enabled = false;           // draw the dot
+        bool TriggerbotUsesIt = true;   // the triggerbot aims where the dot is
+        float Color[4] = {1.0f, 1.0f, 1.0f, 0.95f};  // RGB + opacity (alpha)
+        float Size = 6.0f;              // dot diameter in px
+        float OffsetX = 0.0f;           // px right of centre (0 = centre)
+        float OffsetY = 0.0f;           // px below centre (0 = centre)
+    };
+    sCrosshair Crosshair{};
 };
 
 sConfig Config{0};

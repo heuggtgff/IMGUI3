@@ -35,6 +35,7 @@
 // Delay) call into NewFeatures::NoFireDelayActive() /
 // NoSprintFireDelayActive() so that each dump address is hooked exactly once.
 #include "Hacks/Feature/NewFeatures.h"
+#include "Hacks/Feature/Crosshair.h"
 #include "MainFeatureIncludes.h"
 
 #include <jni.h>
@@ -1395,6 +1396,9 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 
     ImDrawList *draw = ImGui::GetBackgroundDrawList();
     DrawESP(ImGui::GetBackgroundDrawList(), screenWidth, screenHeight, get_dpi());
+    // Own dot crosshair, on the same draw list as the ESP (over the game, under
+    // the menu). It is drawn at the exact point the triggerbot aims through.
+    DrawDotCrosshair(ImGui::GetBackgroundDrawList(), screenWidth, screenHeight);
     // Mythic kill icon for the LOCAL player's held weapon. The in-match HUD
     // reads it from the weapon's InventoryInfo record (Weapon : Inventory,
     // m_InventoryInfo @0x98), so filling that in is what makes an applied mythic
@@ -1950,6 +1954,31 @@ if (runtimeState.activeTab == 4) {
                                     // button. Everything the trigger actually obeys is above
                                     // (Mode, Radius, Filter) plus StartFire itself.
                                 }
+                                // ---- Own dot crosshair ------------------------------------
+                                // Drawn over the game and, by default, the point the
+                                // triggerbot aims through: with both offsets at 0 the
+                                // dot and the trigger sit on the exact render centre,
+                                // which is what the trigger used before this existed.
+                                custom::Separator();
+                                custom::Checkbox("Dot Crosshair", &Config.Crosshair.Enabled);
+                                if (Config.Crosshair.Enabled) {
+                                    // Opacity is the colour's own alpha: one value, so a
+                                    // fade can never disagree with what is drawn.
+                                    custom::SliderFloat("Opacity", &Config.Crosshair.Color[3], 0.0f, 1.0f, "%.2f");
+                                    custom::SliderFloat("Size", &Config.Crosshair.Size, 1.0f, 40.0f, "%.0f px");
+                                    custom::SliderFloat("Offset X", &Config.Crosshair.OffsetX, -400.0f, 400.0f, "%.0f px");
+                                    custom::SliderFloat("Offset Y", &Config.Crosshair.OffsetY, -400.0f, 400.0f, "%.0f px");
+                                    custom::Checkbox("Triggerbot Uses It", &Config.Crosshair.TriggerbotUsesIt);
+                                    ImGui::TextUnformatted("Crosshair Color");
+                                    custom::ColorEdit4("##crosshair_color", Config.Crosshair.Color,
+                                                       ImGuiColorEditFlags_NoInputs |
+                                                       ImGuiColorEditFlags_PickerHueWheel);
+                                    if (custom::Button("Reset To Centre",
+                                                       ImVec2(ImMax(1.0f, ImGui::GetContentRegionAvail().x), 50.0f))) {
+                                        Config.Crosshair.OffsetX = 0.0f;
+                                        Config.Crosshair.OffsetY = 0.0f;
+                                    }
+                                }
                                 // Debug status (shows in-game). Every number below is
                                 // written by the GAME-THREAD decision tree
                                 // (NewFeatures::A_FireShouldFire) inside A_FireTick, so
@@ -1985,6 +2014,11 @@ if (runtimeState.activeTab == 4) {
                                     ImGui::TextColored(dim, "HB %s  wTick=%d held=%d pawn=%d",
                                         hbAlive ? "OK" : "DEAD",
                                         td.weaponTicks, td.weaponHeldTicks, td.pawnLocalTicks);
+                                    ImGui::TextColored(dim, "Crosshair=%.0f,%.0f dot=%s offset=%s",
+                                        td.crosshairCx, td.crosshairCy,
+                                        Config.Crosshair.Enabled ? "on" : "off",
+                                        td.crosshairOffsetDropped ? "DROPPED (no camera basis)"
+                                                                  : td.crosshairOffsetUsed ? "applied" : "centre");
                                     ImGui::TextColored(dim, "Scan=%d Enemy=%d Cand=%d Ray=%d Tgt=%d Fire=%d",
                                         td.scans, td.enemyCount, td.candidates,
                                         td.losChecked, td.targets, td.fires);

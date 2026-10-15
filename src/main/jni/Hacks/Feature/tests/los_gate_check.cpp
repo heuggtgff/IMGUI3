@@ -145,6 +145,11 @@ static void *fake_get_parent(void *t)
     return p;
 }
 static Vector3 fake_get_forward(void *) { return Vector3{0.0f, 0.0f, 1.0f}; }
+// The rest of the camera basis. Together with the forward above this is an
+// orthonormal basis, which is what the crosshair ray math assumes and what a
+// Unity camera transform actually gives.
+static Vector3 fake_get_right(void *)   { return Vector3{1.0f, 0.0f, 0.0f}; }
+static Vector3 fake_get_up(void *)      { return Vector3{0.0f, 1.0f, 0.0f}; }
 
 // Pawn.get_HeadPosition() (m_unity + api18 = 0x51B86EC, Slot 215). This is the
 // game's OWN head getter - the accessor the triggerbot uses instead of the
@@ -298,6 +303,8 @@ static void installFns()
     fn_ColliderIsTrigger      = fake_isTrigger;
     fn_TransformGetParent     = fake_get_parent;
     fn_TransformGetForward    = fake_get_forward;
+    fn_TransformGetRight      = fake_get_right;
+    fn_TransformGetUp         = fake_get_up;
     fn_PawnLastOccVisible     = fake_lastOccVisible;
     fn_PawnRecentlyRendered   = fake_recentlyRendered;
     fn_WorldToScreen          = fake_w2s;
@@ -792,6 +799,110 @@ static Pawn *fake_localPawnCounted()
     return (Pawn *)g_localPawn.b;
 }
 
+// ---------------------------------------------------------------------------
+// 7. The dot crosshair drives the triggerbot
+//
+// The crosshair_check test proves the geometry; this proves the SCAN obeys it -
+// that moving the dot really moves where the trigger fires, and that the
+// defaults leave the trigger exactly where it always was.
+// ---------------------------------------------------------------------------
+static void setCrosshair(float offX, float offY, bool wired)
+{
+    Config.Crosshair.Enabled = true;
+    Config.Crosshair.TriggerbotUsesIt = wired;
+    Config.Crosshair.OffsetX = offX;
+    Config.Crosshair.OffsetY = offY;
+}
+
+static FireBlock runScanOnCrosshairSetup(TriggerTarget &out)
+{
+    // Same world as S1: one enemy in the zone, the centre ray landing on our own
+    // body (so path A names nothing and the zone decides).
+    Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sOnCrosshair;            // the enemy projects 20 px right of centre
+    g_centreHits = { {0.02f, &g_selfCol} };
+    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
+    return A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+}
+
+static void testCrosshairAim()
+{
+    // --- X1: the defaults are the old behaviour, exactly -------------------
+    resetWorld();
+    setCrosshair(0.0f, 0.0f, true);
+    {
+        TriggerTarget out{};
+        FireBlock b = runScanOnCrosshairSetup(out);
+        CHECK(b == FireBlock::Fired && out.path == 1,
+              "X1 with the default 0 px offsets the trigger still fires from the centre");
+        CHECK(g_triggerDiag.crosshairCx == 800.0f && g_triggerDiag.crosshairCy == 450.0f,
+              "X1 the scan reports the screen centre as its crosshair (800,450)");
+        CHECK(g_triggerDiag.crosshairOffsetUsed == 0 && g_triggerDiag.crosshairOffsetDropped == 0,
+              "X1 no offset was applied and none was dropped");
+    }
+
+    // --- X2: moving the dot moves the point the scan measures from ---------
+    resetWorld();
+    setCrosshair(40.0f, -25.0f, true);
+    {
+        TriggerTarget out{};
+        FireBlock b = runScanOnCrosshairSetup(out);
+        CHECK(g_triggerDiag.crosshairCx == 840.0f && g_triggerDiag.crosshairCy == 425.0f,
+              "X2 the scan now aims through the dot (800+40, 450-25)");
+        CHECK(g_triggerDiag.crosshairOffsetUsed == 1,
+              "X2 the offset really reached the centre ray (used=1)");
+        CHECK(b == FireBlock::Fired, "X2 the enemy 20 px right of centre is still in the zone");
+    }
+
+    // --- X3: the zone follows the dot, so a far-away dot stops firing ------
+    resetWorld();
+    setCrosshair(200.0f, 0.0f, true);
+    {
+        TriggerTarget out{};
+        FireBlock b = runScanOnCrosshairSetup(out);
+        CHECK(b == FireBlock::NoEnemyInZone,
+              "X3 with the dot 200 px right the enemy at +20 px is outside the 40 px zone");
+        CHECK(b != FireBlock::Fired, "X3 ... so the trigger does NOT fire him");
+    }
+
+    // --- X4: unwired, the dot no longer influences the trigger -------------
+    resetWorld();
+    setCrosshair(200.0f, 0.0f, false);
+    {
+        TriggerTarget out{};
+        FireBlock b = runScanOnCrosshairSetup(out);
+        CHECK(g_triggerDiag.crosshairCx == 800.0f && g_triggerDiag.crosshairCy == 450.0f,
+              "X4 unwired: the scan is back on the exact screen centre");
+        CHECK(g_triggerDiag.crosshairOffsetUsed == 0, "X4 unwired: no offset reached the ray");
+        CHECK(b == FireBlock::Fired, "X4 unwired: the same shot as before the dot existed");
+    }
+
+    // --- X5: a missing camera basis degrades to the centre ray, reported ---
+    resetWorld();
+    setCrosshair(40.0f, -25.0f, true);
+    fn_TransformGetRight = nullptr;
+    fn_TransformGetUp    = nullptr;
+    {
+        TriggerTarget out{};
+        FireBlock b = runScanOnCrosshairSetup(out);
+        CHECK(g_triggerDiag.crosshairOffsetDropped == 1,
+              "X5 offset asked with no camera basis -> reported as dropped, not silently ignored");
+        CHECK(g_triggerDiag.crosshairOffsetUsed == 0,
+              "X5 ... and the centre ray stays the plain camera forward");
+        CHECK(b == FireBlock::Fired,
+              "X5 the zone path still covers the dot, so the trigger keeps working");
+    }
+    fn_TransformGetRight = fake_get_right;
+    fn_TransformGetUp    = fake_get_up;
+
+    // Leave the config as the rest of the suite expects it (defaults).
+    resetWorld();
+    setCrosshair(0.0f, 0.0f, true);
+    Config.Crosshair.Enabled = false;
+}
+
 static void resetLocalPawnCache()
 {
     g_afireLocalPawnCache = nullptr;
@@ -858,6 +969,7 @@ int main()
     testCentreRay();
     testScan();
     testFilter();
+    testCrosshairAim();
     testTickHookCost();
 
     if (g_failures == 0) {

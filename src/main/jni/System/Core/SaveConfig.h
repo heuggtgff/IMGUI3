@@ -70,6 +70,18 @@ void SaveConfiguration(const std::string& filename) {
     config["NewFeatures"]["TriggerbotFilter"] = Config.NewFeaturesMenu.TriggerbotFilter;
     config["NewFeatures"]["NoCrouch"] = Config.NewFeaturesMenu.NoCrouch;
 
+    // Own dot crosshair. Color[3] is the opacity, stored under its own name so
+    // the JSON reads like the menu (R/G/B + Opacity).
+    config["Crosshair"]["Enabled"] = Config.Crosshair.Enabled;
+    config["Crosshair"]["TriggerbotUsesIt"] = Config.Crosshair.TriggerbotUsesIt;
+    config["Crosshair"]["Size"] = Config.Crosshair.Size;
+    config["Crosshair"]["OffsetX"] = Config.Crosshair.OffsetX;
+    config["Crosshair"]["OffsetY"] = Config.Crosshair.OffsetY;
+    config["Crosshair"]["Opacity"] = Config.Crosshair.Color[3];
+    config["Crosshair"]["ColorR"] = Config.Crosshair.Color[0];
+    config["Crosshair"]["ColorG"] = Config.Crosshair.Color[1];
+    config["Crosshair"]["ColorB"] = Config.Crosshair.Color[2];
+
     config["menu"][0] = menu[0];
     config["menu"][1] = menu[1];
     config["menu"][2] = menu[2];
@@ -150,6 +162,18 @@ bool LoadConfiguration(const std::string& filename) {
         Config.NewFeaturesMenu.NoHipfireDelay = config["NewFeatures"]["NoHipfireDelay"].get<bool>();
         // DevBypass removed (login bypass).
     }
+
+        if (config.contains("Crosshair")) {
+            Config.Crosshair.Enabled = config["Crosshair"]["Enabled"].get<bool>();
+            Config.Crosshair.TriggerbotUsesIt = config["Crosshair"]["TriggerbotUsesIt"].get<bool>();
+            Config.Crosshair.Size = config["Crosshair"]["Size"].get<float>();
+            Config.Crosshair.OffsetX = config["Crosshair"]["OffsetX"].get<float>();
+            Config.Crosshair.OffsetY = config["Crosshair"]["OffsetY"].get<float>();
+            Config.Crosshair.Color[3] = config["Crosshair"]["Opacity"].get<float>();
+            Config.Crosshair.Color[0] = config["Crosshair"]["ColorR"].get<float>();
+            Config.Crosshair.Color[1] = config["Crosshair"]["ColorG"].get<float>();
+            Config.Crosshair.Color[2] = config["Crosshair"]["ColorB"].get<float>();
+        }
         }
 
         if (config.contains("isJumpAdjustmentEnabled"))
