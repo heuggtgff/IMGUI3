@@ -1929,7 +1929,14 @@ if (runtimeState.activeTab == 4) {
                                     // RealFireInterval), not a configured ms value. The
                                     // TriggerbotDelay field is kept only so old config
                                     // files keep loading.
-                                    custom::SliderInt("Radius", &Config.NewFeaturesMenu.TriggerbotRadius, 4, 240, "%d px");
+                                    // The crosshair zone is not a number of its own any
+                                    // more: it IS the dot crosshair's own size (see the
+                                    // Dot Crosshair section below), so what the user sees
+                                    // drawn is exactly what the trigger covers. The
+                                    // TriggerbotRadius field is kept only so old config
+                                    // files keep loading.
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                                       "Zone = the dot crosshair below");
                                     
                                     // No Hitbox pick: Head/Chest/Limbs/Any needed a
                                     // raw bone FIELD offset (m_HeadBone 0x308 /
@@ -1952,23 +1959,27 @@ if (runtimeState.activeTab == 4) {
                                     // Check Spread, Require Ready) could not change a
                                     // shot, so they are gone; so is the debug Test Fire
                                     // button. Everything the trigger actually obeys is above
-                                    // (Mode, Radius, Filter) plus StartFire itself.
+                                    // (Mode, Filter) plus StartFire itself - and its
+                                    // crosshair zone, which is the dot below.
                                 }
-                                // ---- Own dot crosshair ------------------------------------
-                                // Drawn over the game and, by default, the point the
-                                // triggerbot aims through: with both offsets at 0 the
-                                // dot and the trigger sit on the exact render centre,
-                                // which is what the trigger used before this existed.
+                                // ---- The dot crosshair (the trigger's crosshair) --------
+                                // There is ONE crosshair now: this dot. The triggerbot
+                                // aims through its pixel and its zone IS the dot's own
+                                // radius, always - there is no separate trigger crosshair
+                                // and no switch to connect the two. The checkbox decides
+                                // whether the dot is DRAWN; the trigger uses its position
+                                // either way.
                                 custom::Separator();
                                 custom::Checkbox("Dot Crosshair", &Config.Crosshair.Enabled);
-                                if (Config.Crosshair.Enabled) {
+                                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                                   "The triggerbot aims through this dot");
+                                {
                                     // Opacity is the colour's own alpha: one value, so a
                                     // fade can never disagree with what is drawn.
                                     custom::SliderFloat("Opacity", &Config.Crosshair.Color[3], 0.0f, 1.0f, "%.2f");
-                                    custom::SliderFloat("Size", &Config.Crosshair.Size, 1.0f, 40.0f, "%.0f px");
+                                    custom::SliderFloat("Size (trigger zone)", &Config.Crosshair.Size, 1.0f, 40.0f, "%.0f px");
                                     custom::SliderFloat("Offset X", &Config.Crosshair.OffsetX, -400.0f, 400.0f, "%.0f px");
                                     custom::SliderFloat("Offset Y", &Config.Crosshair.OffsetY, -400.0f, 400.0f, "%.0f px");
-                                    custom::Checkbox("Triggerbot Uses It", &Config.Crosshair.TriggerbotUsesIt);
                                     ImGui::TextUnformatted("Crosshair Color");
                                     custom::ColorEdit4("##crosshair_color", Config.Crosshair.Color,
                                                        ImGuiColorEditFlags_NoInputs |
@@ -1977,6 +1988,15 @@ if (runtimeState.activeTab == 4) {
                                                        ImVec2(ImMax(1.0f, ImGui::GetContentRegionAvail().x), 50.0f))) {
                                         Config.Crosshair.OffsetX = 0.0f;
                                         Config.Crosshair.OffsetY = 0.0f;
+                                    }
+                                    // These settings stay visible while the dot is hidden:
+                                    // the trigger aims at these offsets regardless, so
+                                    // hiding the dot must never hide the only way to see
+                                    // and fix them.
+                                    if (!Config.Crosshair.Enabled &&
+                                        (Config.Crosshair.OffsetX != 0.0f || Config.Crosshair.OffsetY != 0.0f)) {
+                                        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
+                                                           "Dot hidden - the trigger still aims at these offsets");
                                     }
                                 }
                                 // Debug status (shows in-game). Every number below is
@@ -2014,11 +2034,13 @@ if (runtimeState.activeTab == 4) {
                                     ImGui::TextColored(dim, "HB %s  wTick=%d held=%d pawn=%d",
                                         hbAlive ? "OK" : "DEAD",
                                         td.weaponTicks, td.weaponHeldTicks, td.pawnLocalTicks);
-                                    ImGui::TextColored(dim, "Crosshair=%.0f,%.0f dot=%s offset=%s",
+                                    ImGui::TextColored(dim, "Dot=%.0f,%.0f %s zone=%.1fpx ray=%s",
                                         td.crosshairCx, td.crosshairCy,
-                                        Config.Crosshair.Enabled ? "on" : "off",
-                                        td.crosshairOffsetDropped ? "DROPPED (no camera basis)"
-                                                                  : td.crosshairOffsetUsed ? "applied" : "centre");
+                                        Config.Crosshair.Enabled ? "shown" : "hidden",
+                                        td.radiusPx,
+                                        td.crosshairRayViaGame ? "game-projection"
+                                            : td.crosshairRayFellBack ? "basis-rebuilt"
+                                            : "centre-ray");
                                     ImGui::TextColored(dim, "Scan=%d Enemy=%d Cand=%d Ray=%d Tgt=%d Fire=%d",
                                         td.scans, td.enemyCount, td.candidates,
                                         td.losChecked, td.targets, td.fires);
@@ -2032,7 +2054,7 @@ if (runtimeState.activeTab == 4) {
                                     // shot line WAS the enemy, blk = something else (a wall,
                                     // however thin) stopped it.
                                     ImGui::TextColored(dim, "Path=%s Centre=%s@%.1fm Rays=%d/%d%s",
-                                        td.aimPath == 0 ? "centre-ray" : "zone",
+                                        td.aimPath == 0 ? "dot-ray" : "dot-zone",
                                         td.crosshairPawn ? "pawn" : "none",
                                         td.crosshairHitDist,
                                         td.raysIdentified, td.raysBlocked,

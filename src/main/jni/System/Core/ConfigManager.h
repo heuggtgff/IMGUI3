@@ -79,7 +79,6 @@ void LoadConfig() {
         // Own dot crosshair. Opacity is the colour's own alpha, so it is stored
         // once (Crosshair.Opacity -> Color[3]) and cannot disagree with the dot.
         else if (key == "Crosshair.Enabled") Config.Crosshair.Enabled = (valueStr == "1");
-        else if (key == "Crosshair.TriggerbotUsesIt") Config.Crosshair.TriggerbotUsesIt = (valueStr == "1");
         else if (key == "Crosshair.Size") Config.Crosshair.Size = std::stof(valueStr);
         else if (key == "Crosshair.OffsetX") Config.Crosshair.OffsetX = std::stof(valueStr);
         else if (key == "Crosshair.OffsetY") Config.Crosshair.OffsetY = std::stof(valueStr);
@@ -146,7 +145,6 @@ void SaveConfig() {
     file << "NewFeatures.NoSprintToFireDelay " << Config.NewFeaturesMenu.NoSprintToFireDelay << "\n";
     file << "NewFeatures.NoHipfireDelay " << Config.NewFeaturesMenu.NoHipfireDelay << "\n";
     file << "Crosshair.Enabled " << Config.Crosshair.Enabled << "\n";
-    file << "Crosshair.TriggerbotUsesIt " << Config.Crosshair.TriggerbotUsesIt << "\n";
     file << "Crosshair.Size " << Config.Crosshair.Size << "\n";
     file << "Crosshair.OffsetX " << Config.Crosshair.OffsetX << "\n";
     file << "Crosshair.OffsetY " << Config.Crosshair.OffsetY << "\n";

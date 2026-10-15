@@ -73,7 +73,6 @@ void SaveConfiguration(const std::string& filename) {
     // Own dot crosshair. Color[3] is the opacity, stored under its own name so
     // the JSON reads like the menu (R/G/B + Opacity).
     config["Crosshair"]["Enabled"] = Config.Crosshair.Enabled;
-    config["Crosshair"]["TriggerbotUsesIt"] = Config.Crosshair.TriggerbotUsesIt;
     config["Crosshair"]["Size"] = Config.Crosshair.Size;
     config["Crosshair"]["OffsetX"] = Config.Crosshair.OffsetX;
     config["Crosshair"]["OffsetY"] = Config.Crosshair.OffsetY;
@@ -165,7 +164,6 @@ bool LoadConfiguration(const std::string& filename) {
 
         if (config.contains("Crosshair")) {
             Config.Crosshair.Enabled = config["Crosshair"]["Enabled"].get<bool>();
-            Config.Crosshair.TriggerbotUsesIt = config["Crosshair"]["TriggerbotUsesIt"].get<bool>();
             Config.Crosshair.Size = config["Crosshair"]["Size"].get<float>();
             Config.Crosshair.OffsetX = config["Crosshair"]["OffsetX"].get<float>();
             Config.Crosshair.OffsetY = config["Crosshair"]["OffsetY"].get<float>();

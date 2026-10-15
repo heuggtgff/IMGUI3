@@ -173,6 +173,25 @@ static Vector3 fake_w2s(void *, Vector3 w)
     return g_w2sImpl ? g_w2sImpl(w) : Vector3{0.0f, 0.0f, 0.0f};
 }
 
+// Camera.ScreenToWorldPoint(0x5023D34) - the inverse of the projection above.
+// The camera basis is (+Z forward, +X right, +Y up) with the camera at
+// (0, 1.6, 0), and the focal length is the fallback the code itself would use
+// for a 1600x900 screen, so this is a REAL inverse projection: the ray the scan
+// builds from the dot's pixel can be projected back onto that pixel.
+static Vector3 fake_screen_to_world(void *, Vector3 v)
+{
+    const float f = (900.0f * 0.5f) /
+                    tanf(NewFeatures::A_FireTune::kFallbackFov * 0.5f *
+                         NewFeatures::A_FireTune::kDegToRad);
+    const float dx = v.x - 800.0f;
+    const float dy = v.y - 450.0f;
+    Vector3 dir = Vector3{0.0f, 0.0f, 1.0f}
+                + Vector3{1.0f, 0.0f, 0.0f} * (dx / f)
+                - Vector3{0.0f, 1.0f, 0.0f} * (dy / f);
+    dir = Vector3::Normalized(dir);
+    return Vector3{0.0f + dir.x * v.z, 1.6f + dir.y * v.z, 0.0f + dir.z * v.z};
+}
+
 // ---- physics fakes --------------------------------------------------------
 // One world per ray class: the centre ray uses kCrosshairRayMax (400 m), the
 // LOS / lead rays use a bounded segment - the fake picks the list by maxDist.
@@ -308,12 +327,22 @@ static void installFns()
     fn_PawnLastOccVisible     = fake_lastOccVisible;
     fn_PawnRecentlyRendered   = fake_recentlyRendered;
     fn_WorldToScreen          = fake_w2s;
+    fn_ScreenToWorldPoint     = fake_screen_to_world;
     fn_PawnIsAlive            = nullptr;      // field read already answers
     fn_CameraGetFov           = nullptr;      // -> kFallbackFov, focal still sane
     fn_CameraGetMain          = nullptr;
     fn_WeaponGetAimingTarget  = nullptr;
     fn_WeaponGetAimingTargetDis = nullptr;
     fn_BaseGameGetTeamPawns   = nullptr;      // no teammates in this world
+
+    // The dot crosshair IS the trigger's crosshair now: its pixel is what the
+    // scan measures from and its radius is the zone it accepts. Put it on the
+    // centre with an 80 px dot (a 40 px radius), which is the zone the worlds
+    // below were built around.
+    Config.Crosshair.Enabled = true;
+    Config.Crosshair.OffsetX = 0.0f;
+    Config.Crosshair.OffsetY = 0.0f;
+    Config.Crosshair.Size    = 80.0f;
 }
 
 // ---------------------------------------------------------------------------
@@ -611,8 +640,8 @@ static Vector3 w2sAwayFromCrosshair(const Vector3 &) { return Vector3{1400.0f, 4
 
 static void testScan()
 {
-    // Screen centre is (800, 450) for the 1600x900 fake screen; the zone
-    // defaults to 40 px (2.5 % of width) because Config is zero-initialised.
+    // The dot is on the centre of the 1600x900 fake screen, so the scan measures
+    // from (800, 450) and accepts a 40 px radius (installFns' 80 px dot).
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
 
     // --- S1: enemy in the zone, ray hits OUR body at 0 m first -> FIRES ----
@@ -800,28 +829,30 @@ static Pawn *fake_localPawnCounted()
 }
 
 // ---------------------------------------------------------------------------
-// 7. The dot crosshair drives the triggerbot
+// 8. The dot crosshair IS the trigger's crosshair
 //
 // The crosshair_check test proves the geometry; this proves the SCAN obeys it -
-// that moving the dot really moves where the trigger fires, and that the
-// defaults leave the trigger exactly where it always was.
+// that the pixel the trigger measures from and the radius it accepts are both
+// the dot, always, with no switch to disconnect them. This is the behaviour the
+// "even with use-dot-for-triggerbot on, and the dot small, it still shot from
+// the game's centre" report asked for.
 // ---------------------------------------------------------------------------
-static void setCrosshair(float offX, float offY, bool wired)
+static void setCrosshair(float offX, float offY, float sizePx, bool drawn = true)
 {
-    Config.Crosshair.Enabled = true;
-    Config.Crosshair.TriggerbotUsesIt = wired;
+    Config.Crosshair.Enabled = drawn;
     Config.Crosshair.OffsetX = offX;
     Config.Crosshair.OffsetY = offY;
+    Config.Crosshair.Size    = sizePx;
 }
 
 static FireBlock runScanOnCrosshairSetup(TriggerTarget &out)
 {
-    // Same world as S1: one enemy in the zone, the centre ray landing on our own
-    // body (so path A names nothing and the zone decides).
+    // One enemy 20 px right of the 1600x900 centre (820,450), and the centre ray
+    // landing on our own body - so path A names nothing and the ZONE decides.
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
-    g_w2sImpl = w2sOnCrosshair;            // the enemy projects 20 px right of centre
+    g_w2sImpl = w2sOnCrosshair;
     g_centreHits = { {0.02f, &g_selfCol} };
     g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
     return A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
@@ -829,78 +860,112 @@ static FireBlock runScanOnCrosshairSetup(TriggerTarget &out)
 
 static void testCrosshairAim()
 {
-    // --- X1: the defaults are the old behaviour, exactly -------------------
+    // --- X1: the dot's pixel is what the scan measures from ----------------
     resetWorld();
-    setCrosshair(0.0f, 0.0f, true);
+    setCrosshair(0.0f, 0.0f, 80.0f);
     {
         TriggerTarget out{};
         FireBlock b = runScanOnCrosshairSetup(out);
         CHECK(b == FireBlock::Fired && out.path == 1,
-              "X1 with the default 0 px offsets the trigger still fires from the centre");
+              "X1 the enemy inside the dot's own radius is fired");
         CHECK(g_triggerDiag.crosshairCx == 800.0f && g_triggerDiag.crosshairCy == 450.0f,
-              "X1 the scan reports the screen centre as its crosshair (800,450)");
-        CHECK(g_triggerDiag.crosshairOffsetUsed == 0 && g_triggerDiag.crosshairOffsetDropped == 0,
-              "X1 no offset was applied and none was dropped");
+              "X1 the scan reports the dot's pixel as its crosshair (800,450)");
+        CHECK(g_triggerDiag.crosshairRayViaGame == 1,
+              "X1 the shot ray came from the game's own projection of that pixel");
+        CHECK(g_triggerDiag.radiusPx == 40.0f,
+              "X1 the zone is the dot: an 80 px dot is a 40 px radius");
     }
 
-    // --- X2: moving the dot moves the point the scan measures from ---------
+    // --- X2: the zone IS the dot - shrink the dot, tighten the trigger -----
     resetWorld();
-    setCrosshair(40.0f, -25.0f, true);
+    setCrosshair(0.0f, 0.0f, 10.0f);              // 10 px dot -> 5 px zone
+    {
+        TriggerTarget out{};
+        FireBlock b = runScanOnCrosshairSetup(out);
+        CHECK(g_triggerDiag.radiusPx == 5.0f, "X2 a 10 px dot is a 5 px zone");
+        CHECK(b == FireBlock::NoEnemyInZone,
+              "X2 the same enemy 20 px off the dot is now OUTSIDE it");
+        CHECK(b != FireBlock::Fired,
+              "X2 ... so shrinking the dot really does tighten the trigger (the old build fired anyway)");
+    }
+
+    // --- X3: moving the dot moves the whole scan ---------------------------
+    resetWorld();
+    setCrosshair(40.0f, -25.0f, 100.0f);          // dot at (840,425), 50 px radius
     {
         TriggerTarget out{};
         FireBlock b = runScanOnCrosshairSetup(out);
         CHECK(g_triggerDiag.crosshairCx == 840.0f && g_triggerDiag.crosshairCy == 425.0f,
-              "X2 the scan now aims through the dot (800+40, 450-25)");
-        CHECK(g_triggerDiag.crosshairOffsetUsed == 1,
-              "X2 the offset really reached the centre ray (used=1)");
-        CHECK(b == FireBlock::Fired, "X2 the enemy 20 px right of centre is still in the zone");
+              "X3 the scan aims through the dot (800+40, 450-25)");
+        CHECK(g_triggerDiag.crosshairRayViaGame == 1,
+              "X3 ... and the ray is the ray through that pixel");
+        CHECK(b == FireBlock::Fired, "X3 the enemy is still inside the moved dot");
     }
 
-    // --- X3: the zone follows the dot, so a far-away dot stops firing ------
+    // --- X4: a far-away dot stops firing what is under the old centre ------
     resetWorld();
-    setCrosshair(200.0f, 0.0f, true);
+    setCrosshair(200.0f, 0.0f, 80.0f);
     {
         TriggerTarget out{};
         FireBlock b = runScanOnCrosshairSetup(out);
         CHECK(b == FireBlock::NoEnemyInZone,
-              "X3 with the dot 200 px right the enemy at +20 px is outside the 40 px zone");
-        CHECK(b != FireBlock::Fired, "X3 ... so the trigger does NOT fire him");
+              "X4 with the dot 200 px right the enemy at +20 px is outside it");
+        CHECK(b != FireBlock::Fired, "X4 ... so the trigger does NOT fire him");
     }
 
-    // --- X4: unwired, the dot no longer influences the trigger -------------
+    // --- X5: there is no way to detach the trigger from the dot ------------
+    // The menu option that used to do it is gone: hiding the DRAWING cannot move
+    // the trigger back to the screen centre.
     resetWorld();
-    setCrosshair(200.0f, 0.0f, false);
+    setCrosshair(200.0f, 0.0f, 80.0f, /*drawn=*/false);
     {
         TriggerTarget out{};
         FireBlock b = runScanOnCrosshairSetup(out);
-        CHECK(g_triggerDiag.crosshairCx == 800.0f && g_triggerDiag.crosshairCy == 450.0f,
-              "X4 unwired: the scan is back on the exact screen centre");
-        CHECK(g_triggerDiag.crosshairOffsetUsed == 0, "X4 unwired: no offset reached the ray");
-        CHECK(b == FireBlock::Fired, "X4 unwired: the same shot as before the dot existed");
+        CHECK(g_triggerDiag.crosshairCx == 1000.0f && g_triggerDiag.crosshairCy == 450.0f,
+              "X5 a hidden dot still aims the scan (1000,450) - there is no switch to undo it");
+        CHECK(b == FireBlock::NoEnemyInZone,
+              "X5 ... and the enemy at +20 px stays unfired");
     }
 
-    // --- X5: a missing camera basis degrades to the centre ray, reported ---
+    // --- X6: nothing can honour the offset -> the centre ray, REPORTED -----
     resetWorld();
-    setCrosshair(40.0f, -25.0f, true);
-    fn_TransformGetRight = nullptr;
-    fn_TransformGetUp    = nullptr;
+    setCrosshair(40.0f, -25.0f, 80.0f);
+    fn_TransformGetRight  = nullptr;
+    fn_TransformGetUp     = nullptr;
+    fn_ScreenToWorldPoint = nullptr;
     {
         TriggerTarget out{};
         FireBlock b = runScanOnCrosshairSetup(out);
-        CHECK(g_triggerDiag.crosshairOffsetDropped == 1,
-              "X5 offset asked with no camera basis -> reported as dropped, not silently ignored");
-        CHECK(g_triggerDiag.crosshairOffsetUsed == 0,
-              "X5 ... and the centre ray stays the plain camera forward");
+        CHECK(g_triggerDiag.crosshairRayPlain == 1,
+              "X6 nothing can apply the offset -> reported as plain, not silently ignored");
+        CHECK(g_triggerDiag.crosshairRayViaGame == 0 &&
+              g_triggerDiag.crosshairRayFellBack == 0,
+              "X6 ... neither the projection nor the camera basis answered");
         CHECK(b == FireBlock::Fired,
-              "X5 the zone path still covers the dot, so the trigger keeps working");
+              "X6 the dot's zone still covers the enemy, so the trigger keeps working");
     }
-    fn_TransformGetRight = fake_get_right;
-    fn_TransformGetUp    = fake_get_up;
 
-    // Leave the config as the rest of the suite expects it (defaults).
+    // --- X7: the game's projection alone is enough (no basis needed) -------
     resetWorld();
-    setCrosshair(0.0f, 0.0f, true);
-    Config.Crosshair.Enabled = false;
+    setCrosshair(40.0f, -25.0f, 80.0f);
+    fn_TransformGetRight  = nullptr;
+    fn_TransformGetUp     = nullptr;
+    fn_ScreenToWorldPoint = fake_screen_to_world;
+    {
+        TriggerTarget out{};
+        FireBlock b = runScanOnCrosshairSetup(out);
+        CHECK(g_triggerDiag.crosshairRayViaGame == 1 && g_triggerDiag.crosshairRayPlain == 0,
+              "X7 the game's projection alone carries the dot's offset");
+        CHECK(b == FireBlock::Fired, "X7 ... and the scan still fires");
+    }
+    fn_TransformGetRight  = fake_get_right;
+    fn_TransformGetUp     = fake_get_up;
+    fn_ScreenToWorldPoint = fake_screen_to_world;
+
+    // Leave the config as the rest of the suite expects it.
+    resetWorld();
+    setCrosshair(0.0f, 0.0f, 80.0f);
+    Config.Crosshair.Enabled = true;
 }
 
 static void resetLocalPawnCache()
