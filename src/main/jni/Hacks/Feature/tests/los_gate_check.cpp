@@ -1,0 +1,683 @@
+// Host test for the triggerbot anti-wall (LOS) gate - the fix for
+// "BLOCKED: wall in the way even though I can see the player".
+//
+// It builds a FAKE physics world (il2cpp RaycastHit[] arrays laid out per
+// dump.cs 175618 + this repo's Il2CppArray, fake colliders with a readable
+// m_CachedPtr at +0x10, fake transforms wired through the very
+// (m_unity + apiN) accessors Defines.h uses) and drives the real gate code
+// from NewFeatures.h:
+//
+//   * A_FireRayToTarget      - RaycastAll walk: self hits skipped, trigger
+//                              volumes skipped, target named, wall blocked,
+//                              near-origin escape via the game's own
+//                              LastOccVisible verdict, single-ray fallback.
+//   * A_FireRaycastAllNearest - unit checks of the array guards (a bad header
+//                              must be REFUSED, never read as "no hits").
+//   * A_FireCrosshairRayPawn - path A names the enemy past our own body.
+//   * A_FireScan             - end-to-end: zone candidate + self@0 ray ->
+//                              FireBlock::Fired; self + wall -> NoLineOfSight.
+//
+// Host test, not an on-device run (no NDK needed - the Android/JNI headers
+// are the stubs in Skin/tests, __fastcall is elided like the real build, and
+// Tools::IsPtrValid is stubbed because Tools.cpp is not linked):
+//   g++ -std=c++17 -DIMGUI_DEFINE_MATH_OPERATORS -D'__fastcall=' \
+//       -I src/main/jni/Skin/tests/stubs -I src/main/jni -I src/main/jni/ImGui \
+//       -I src/main/jni/Includes src/main/jni/Hacks/Feature/tests/los_gate_check.cpp \
+//       -o /tmp/los_gate_check && /tmp/los_gate_check
+// Exits 0 and prints "OK: all LOS gate checks passed" on success.
+// Android.mk does not wildcard Hacks/Feature/tests, so it never reaches the APK.
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <cmath>
+#include <vector>
+
+#include "Includes/Logger.h"
+#include "Includes/Macros.h"
+#include "Includes/obfuscate.h"
+#include "Includes/Utils.h"
+#include "IL2CppSDKGenerator/BasicStructs/Vector3.hpp"
+#include "IL2CppSDKGenerator/BasicStructs/Vector2.h"
+#include "IL2CppSDKGenerator/IL2Cpp/Il2Cpp.h"
+#include "IL2CppSDKGenerator/IL2Cpp/Tools.h"
+#include "IL2CppSDKGenerator/KittyMemory/MemoryPatch.h"
+#include "foxcheats/include/ScanEngine.hpp"
+#include "Hacks/StructGame/StructGame.h"
+#include "Hacks/Feature/Init_Hacks.h"   // sConfig Config - referenced by NewFeatures.h
+#include "Hacks/Feature/NewFeatures.h"
+
+// ---------------------------------------------------------------------------
+// Tools::IsPtrValid - Tools.cpp is intentionally not linked; on the host every
+// pointer handed to the gate is either null or inside our fake arena, so a
+// null check is the honest "is this a live object" answer for the fakes.
+// ---------------------------------------------------------------------------
+bool Tools::IsPtrValid(void *addr) { return addr != nullptr; }
+
+// Substrate's hook entry (pulled in by Includes/Macros.h's non-inline hook()
+// helper) - the test installs no hooks, but the symbol has to exist to link.
+void MSHookFunction(void *symbol, void *replace, void **result)
+{
+    (void)symbol; (void)replace;
+    if (result) *result = nullptr;
+}
+
+using namespace NewFeatures;
+
+static int g_failures = 0;
+#define CHECK(cond, msg)                                                  \
+    do {                                                                  \
+        if (!(cond)) { printf("FAIL: %s  (line %d)\n", msg, __LINE__);    \
+                       g_failures++; }                                    \
+        else        { printf("ok  : %s\n", msg); }                        \
+    } while (0)
+
+// ---------------------------------------------------------------------------
+// Fake il2cpp objects.
+//
+// Layout actually read by the gate:
+//   +0x10  UnityEngine.Object.m_CachedPtr   (A_FireObjectAlive)
+//   +0x38  test-only: identity returned by the fake Component::get_transform
+//   +0x48  test-only: parent returned by the fake Transform::get_parent
+//   +0x100 test-only: Vector3 returned by the fake Transform::get_position
+// Pawns additionally carry the dump-verified fields:
+//   Class_Pawn_m_HeadBone (0x308), Class_Pawn_m_IsAlive (0x548),
+//   Class_Pawn_m_Mesh (0x628)  - all #define'd in Defines.h.
+// ---------------------------------------------------------------------------
+static const size_t OBJ_SIZE = 2048;   // must cover 0x628 + 8
+struct FakeObj { alignas(8) unsigned char b[OBJ_SIZE]; };
+
+static FakeObj g_localRoot, g_targetRoot, g_wallRoot, g_trigRoot, g_deadRoot;
+static FakeObj g_localPawn, g_targetPawn, g_otherPawn;
+static FakeObj g_localHead, g_localMesh, g_targetHead, g_targetMesh;
+static FakeObj g_selfCol, g_targetCol, g_wallCol, g_trigCol, g_deadCol;
+static FakeObj g_camObj, g_camTransform, g_gameObj, g_weaponObj;
+
+static void objInit(FakeObj &o, FakeObj *identity = nullptr)
+{
+    std::memset(o.b, 0, sizeof o.b);
+    *(void **)(o.b + 0x10) = o.b;                                     // m_CachedPtr
+    *(void **)(o.b + 0x38) = identity ? identity->b : o.b;            // get_transform()
+}
+static void objParent(FakeObj &t, FakeObj *p)  { *(void **)(t.b + 0x48) = p ? p->b : nullptr; }
+static void objPos(FakeObj &o, float x, float y, float z)
+{
+    Vector3 v{x, y, z};
+    std::memcpy(o.b + 0x100, &v, sizeof v);
+}
+static Vector3 objGetPos(const FakeObj &o)
+{
+    Vector3 v;
+    std::memcpy(&v, o.b + 0x100, sizeof v);
+    return v;
+}
+static void objSetAlive(FakeObj &pawn, bool alive)
+{
+    pawn.b[Class_Pawn_m_IsAlive] = alive ? 1 : 0;
+}
+static void objSetBone(FakeObj &pawn, size_t offset, FakeObj *bone)
+{
+    *(void **)(pawn.b + offset) = bone ? bone->b : nullptr;
+}
+
+// ---- scene-graph fakes, installed through the (m_unity + apiN) macros -----
+static Transform *fake_get_transform(Component *c)
+{
+    return (Transform *)(*(void **)((char *)c + 0x38));
+}
+static Vector3 fake_get_position(Transform *t)
+{
+    Vector3 v;
+    std::memcpy(&v, (char *)t + 0x100, sizeof v);
+    return v;
+}
+static void *fake_get_parent(void *t)
+{
+    void *p = *(void **)((char *)t + 0x48);
+    return p;
+}
+static Vector3 fake_get_forward(void *) { return Vector3{0.0f, 0.0f, 1.0f}; }
+
+// ---- camera / screen fakes ------------------------------------------------
+static Camera *fake_camera_main() { return (Camera *)g_camObj.b; }
+static int fake_screen_w() { return 1600; }
+static int fake_screen_h() { return 900; }
+
+static Vector3 (*g_w2sImpl)(const Vector3 &) = nullptr;
+static Vector3 fake_w2s(void *, Vector3 w)
+{
+    return g_w2sImpl ? g_w2sImpl(w) : Vector3{0.0f, 0.0f, 0.0f};
+}
+
+// ---- physics fakes --------------------------------------------------------
+// One world per ray class: the centre ray uses kCrosshairRayMax (400 m), the
+// LOS / lead rays use a bounded segment - the fake picks the list by maxDist.
+static std::vector<std::pair<float, FakeObj *>> g_centreHits;
+static std::vector<std::pair<float, FakeObj *>> g_losHits;
+static int   g_segmentHit = 0;      // stem-test fallback answer
+static int   g_rayAllCalls = 0, g_singleRayCalls = 0, g_segmentCalls = 0;
+static float g_lastRayAllMax = -1.0f;
+
+static unsigned char g_hitArrayBuf[0x20 + 64 * 0x30 + 64];
+
+static const std::vector<std::pair<float, FakeObj *>> &hitsForMaxDist(float maxDist)
+{
+    return (maxDist > 100.0f) ? g_centreHits : g_losHits;
+}
+
+static void *fake_raycastAll(Vector3, Vector3, float maxDist)
+{
+    g_rayAllCalls++;
+    g_lastRayAllMax = maxDist;
+    const std::vector<std::pair<float, FakeObj *>> &hits = hitsForMaxDist(maxDist);
+    std::memset(g_hitArrayBuf, 0, sizeof g_hitArrayBuf);
+    *(size_t *)(g_hitArrayBuf + AF_ARRAY_LEN_OFF) = hits.size();
+    for (size_t i = 0; i < hits.size(); i++) {
+        unsigned char *e = g_hitArrayBuf + AF_ARRAY_DATA_OFF + i * AF_RAYHIT_SIZE;
+        *(float *)(e + AF_RAYHIT_DISTOFF) = hits[i].first;
+        *(void **)(e + AF_RAYHIT_COLLOFF) = hits[i].second->b;
+    }
+    return g_hitArrayBuf;
+}
+
+static bool fake_raycastHitOut(Vector3, Vector3, void *hitBuf, float maxDist)
+{
+    g_singleRayCalls++;
+    const std::vector<std::pair<float, FakeObj *>> &hits = hitsForMaxDist(maxDist);
+    if (hits.empty()) return false;
+    std::memset(hitBuf, 0, AF_RAYHIT_SIZE);
+    *(float *)((unsigned char *)hitBuf + AF_RAYHIT_DISTOFF) = hits[0].first;
+    *(void **)((unsigned char *)hitBuf + AF_RAYHIT_COLLOFF) = hits[0].second->b;
+    return true;
+}
+
+static bool fake_raySegment(Vector3, Vector3, float)
+{
+    g_segmentCalls++;
+    return g_segmentHit != 0;
+}
+
+static int g_isTriggerFlag = 0;
+static bool fake_isTrigger(void *) { return g_isTriggerFlag != 0; }
+
+static int g_lastOccVisible = 1;
+static bool fake_lastOccVisible(void *) { return g_lastOccVisible != 0; }
+static int g_recentlyRendered = 1;
+static bool fake_recentlyRendered(void *) { return g_recentlyRendered != 0; }
+
+// ---------------------------------------------------------------------------
+// World setup
+// ---------------------------------------------------------------------------
+static void resetWorld()
+{
+    objInit(g_localRoot);   objInit(g_targetRoot);
+    objInit(g_wallRoot);    objInit(g_trigRoot);   objInit(g_deadRoot);
+
+    objInit(g_localPawn,  &g_localRoot);
+    objInit(g_targetPawn, &g_targetRoot);
+    objInit(g_otherPawn);
+    objInit(g_localHead);  objInit(g_localMesh);
+    objInit(g_targetHead); objInit(g_targetMesh);
+
+    objInit(g_selfCol,  &g_localRoot);     // OUR body/weapon collider
+    objInit(g_targetCol, &g_targetRoot);   // the enemy's own collider
+    objInit(g_wallCol,  &g_wallRoot);      // geometry
+    objInit(g_trigCol,  &g_trigRoot);      // invisible trigger volume
+    objInit(g_deadCol,  &g_deadRoot);      // readable collider, dead wrapper
+    *(void **)(g_deadCol.b + 0x10) = nullptr;
+
+    objInit(g_camObj, &g_camTransform);
+    objInit(g_camTransform);
+    objPos(g_camTransform, 0.0f, 1.6f, 0.0f);
+    objInit(g_gameObj);
+    objInit(g_weaponObj);
+
+    objSetBone(g_localPawn,  Class_Pawn_m_HeadBone, &g_localHead);
+    objSetBone(g_localPawn,  Class_Pawn_m_Mesh,     &g_localMesh);
+    objSetBone(g_targetPawn, Class_Pawn_m_HeadBone, &g_targetHead);
+    objSetBone(g_targetPawn, Class_Pawn_m_Mesh,     &g_targetMesh);
+    objSetAlive(g_localPawn, true);
+    objSetAlive(g_targetPawn, true);
+    objSetAlive(g_otherPawn, true);
+
+    objPos(g_targetHead, 0.5f, 1.7f, 3.3f);
+    objPos(g_targetMesh, 0.5f, 0.0f, 3.3f);
+    objParent(g_wallRoot, nullptr);
+    objParent(g_trigRoot, nullptr);
+
+    g_centreHits.clear();
+    g_losHits.clear();
+    g_segmentHit = 0;
+    g_isTriggerFlag = 0;
+    g_lastOccVisible = 1;
+    g_recentlyRendered = 1;
+    g_rayAllCalls = g_singleRayCalls = g_segmentCalls = 0;
+    g_lastRayAllMax = -1.0f;
+    g_triggerDiag = TriggerbotDiag{};
+}
+
+static void installFns()
+{
+    // The two scene-graph entry points and the camera live behind
+    // (m_unity + apiN) macros in Defines.h -> install the fakes there.
+    m_unity = 0;
+    api7  = (uintptr_t)&fake_camera_main;
+    api9  = (uintptr_t)&fake_get_transform;
+    api10 = (uintptr_t)&fake_get_position;
+    api4  = (uintptr_t)&fake_screen_w;
+    api5  = (uintptr_t)&fake_screen_h;
+
+    fn_PhysicsRaycastAll      = fake_raycastAll;
+    fn_PhysicsRaycastHitOut   = fake_raycastHitOut;
+    fn_PhysicsRaycastSegment  = fake_raySegment;
+    fn_ColliderIsTrigger      = fake_isTrigger;
+    fn_TransformGetParent     = fake_get_parent;
+    fn_TransformGetForward    = fake_get_forward;
+    fn_PawnLastOccVisible     = fake_lastOccVisible;
+    fn_PawnRecentlyRendered   = fake_recentlyRendered;
+    fn_WorldToScreen          = fake_w2s;
+    fn_PawnIsAlive            = nullptr;      // field read already answers
+    fn_CameraGetFov           = nullptr;      // -> kFallbackFov, focal still sane
+    fn_CameraGetMain          = nullptr;
+    fn_WeaponGetAimingTarget  = nullptr;
+    fn_WeaponGetAimingTargetDis = nullptr;
+    fn_BaseGameGetTeamPawns   = nullptr;      // no teammates in this world
+}
+
+// ---------------------------------------------------------------------------
+// 1. A_FireRayToTarget - the gate itself
+// ---------------------------------------------------------------------------
+static void testGate()
+{
+    const Vector3 from(0.0f, 1.6f, 0.0f);
+    const Vector3 to(0.5f, 1.7f, 3.3f);
+    const float bodyRadius = A_FireTune::kBodyRadius;
+
+    // --- T1: empty line -> clear ------------------------------------------
+    resetWorld();
+    {
+        bool ident = true; float hd = 5.0f;
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, &ident, &hd);
+        CHECK(r == AF_Ray::Clear && !ident && hd < 0.0f,
+              "T1 empty line is clear, nothing identified");
+        CHECK(g_rayAllCalls == 1, "T1 used RaycastAll (the walk, not the single ray)");
+    }
+
+    // --- T2: only the enemy on the line -> clear + identified -------------
+    resetWorld();
+    g_losHits = { {3.3f, &g_targetCol} };
+    {
+        bool ident = false; float hd = -1.0f;
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, &ident, &hd);
+        CHECK(r == AF_Ray::Clear && ident, "T2 nearest hit IS the target -> clear + identified");
+        CHECK(std::fabs(hd - 3.3f) < 0.001f, "T2 hit distance reported for the panel");
+    }
+
+    // --- T3: OUR OWN BODY at 0 m, nothing else -> clear (THE BUG) ---------
+    resetWorld();
+    g_losHits = { {0.0f, &g_selfCol} };
+    {
+        bool ident = true; float hd = 99.0f;
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, &ident, &hd);
+        CHECK(r == AF_Ray::Clear, "T3 own body at the camera no longer blocks the shot");
+        CHECK(!ident, "T3 not 'identified' - the ray never reached the enemy");
+        CHECK(g_triggerDiag.selfHitsSkipped == 1, "T3 self hit skipped + counted");
+        CHECK(g_triggerDiag.occOverrides == 0, "T3 no occlusion override needed (line is simply empty)");
+        CHECK(g_singleRayCalls == 0, "T3 answered from RaycastAll alone");
+    }
+
+    // --- T4: self at 0 m THEN the enemy -> clear + identified -------------
+    resetWorld();
+    g_losHits = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
+    {
+        bool ident = false;
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, &ident, nullptr);
+        CHECK(r == AF_Ray::Clear && ident,
+              "T4 walk steps over our body and names the enemy behind it");
+        CHECK(g_triggerDiag.selfHitsSkipped == 1, "T4 exactly one self hit skipped");
+    }
+
+    // --- T5: self at 0 m + REAL wall at 2 m -> blocked ---------------------
+    resetWorld();
+    g_losHits = { {0.0f, &g_selfCol}, {2.0f, &g_wallCol} };
+    {
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, nullptr, nullptr);
+        CHECK(r == AF_Ray::Blocked, "T5 wall at range still blocks even with the self hit skipped");
+        CHECK(g_triggerDiag.occOverrides == 0, "T5 occlusion does NOT rescue a blocker at range");
+    }
+
+    // --- T6: invisible trigger volume at the camera, alone -> clear --------
+    resetWorld();
+    g_losHits = { {0.05f, &g_trigCol} };
+    g_isTriggerFlag = 1;
+    {
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, nullptr, nullptr);
+        CHECK(r == AF_Ray::Clear, "T6 trigger volume cannot be 'the wall'");
+        CHECK(g_triggerDiag.triggerHitsSkipped == 1, "T6 trigger hit skipped + counted");
+    }
+
+    // --- T7: trigger at the camera, enemy behind -> clear + identified -----
+    resetWorld();
+    g_losHits = { {0.05f, &g_trigCol}, {3.3f, &g_targetCol} };
+    g_isTriggerFlag = 1;
+    {
+        bool ident = false;
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, &ident, nullptr);
+        CHECK(r == AF_Ray::Clear && ident, "T7 trigger skipped, enemy behind it still named");
+    }
+
+    // --- T8: solid geometry 10 cm from the camera + game says visible ------
+    resetWorld();
+    g_losHits = { {0.10f, &g_wallCol} };
+    g_lastOccVisible = 1;
+    {
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, nullptr, nullptr);
+        CHECK(r == AF_Ray::Clear, "T8 near-origin blocker + LastOccVisible -> clear");
+        CHECK(g_triggerDiag.occOverrides == 1, "T8 override counted for the panel");
+    }
+
+    // --- T8b: same blocker, game says occluded -> blocked ------------------
+    resetWorld();
+    g_losHits = { {0.10f, &g_wallCol} };
+    g_lastOccVisible = 0;
+    g_recentlyRendered = 0;
+    {
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, nullptr, nullptr);
+        CHECK(r == AF_Ray::Blocked, "T8b near-origin blocker + occluded -> blocked");
+        CHECK(g_triggerDiag.occOverrides == 0, "T8b no override when the game agrees he is hidden");
+    }
+
+    // --- T9: wall at range + game says visible -> STILL blocked ------------
+    resetWorld();
+    g_losHits = { {2.0f, &g_wallCol} };
+    g_lastOccVisible = 1;
+    {
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, nullptr, nullptr);
+        CHECK(r == AF_Ray::Blocked, "T9 occlusion never overrides a normal-range wall");
+    }
+
+    // --- T10: unnameable collider -> conservative stem test ----------------
+    resetWorld();
+    g_losHits = { {3.0f, &g_deadCol} };
+    g_segmentHit = 1;
+    {
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, nullptr, nullptr);
+        CHECK(r == AF_Ray::Blocked, "T10 unnamed hit + something inside the stem range -> blocked");
+    }
+    resetWorld();
+    g_losHits = { {3.0f, &g_deadCol} };
+    g_segmentHit = 0;
+    {
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, nullptr, nullptr);
+        CHECK(r == AF_Ray::Clear, "T10b unnamed hit but the stem range is empty -> clear");
+    }
+
+    // --- T11: RaycastAll symbol missing -> single-ray fallback -------------
+    resetWorld();
+    fn_PhysicsRaycastAll = nullptr;
+    g_losHits = { {0.0f, &g_selfCol} };
+    g_lastOccVisible = 1;
+    {
+        bool ident = true;
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, &ident, nullptr);
+        CHECK(r == AF_Ray::Clear && !ident,
+              "T11 fallback: single ray self-hit + visible -> clear (occlusion escape)");
+        CHECK(g_singleRayCalls == 1, "T11 fallback really used the single-ray symbol");
+        CHECK(g_triggerDiag.selfHitsSkipped == 1, "T11 self hit counted on the fallback too");
+    }
+    resetWorld();
+    fn_PhysicsRaycastAll = nullptr;
+    g_losHits = { {2.0f, &g_wallCol} };
+    {
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, nullptr, nullptr);
+        CHECK(r == AF_Ray::Blocked, "T11b fallback: a wall at range still blocks");
+    }
+    resetWorld();
+    fn_PhysicsRaycastAll = nullptr;
+    g_losHits = { {3.3f, &g_targetCol} };
+    {
+        bool ident = false;
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, &ident, nullptr);
+        CHECK(r == AF_Ray::Clear && ident, "T11c fallback: the enemy himself is still identified");
+    }
+    fn_PhysicsRaycastAll = fake_raycastAll;
+
+    // --- T12: no ray symbols at all -> Unknown (fail closed) ---------------
+    resetWorld();
+    fn_PhysicsRaycastAll = nullptr;
+    fn_PhysicsRaycastHitOut = nullptr;
+    fn_PhysicsRaycastSegment = nullptr;
+    {
+        AF_Ray r = A_FireRayToTarget(from, to, (Pawn *)g_targetPawn.b, bodyRadius,
+                                     (Pawn *)g_localPawn.b, nullptr, nullptr);
+        CHECK(r == AF_Ray::Unknown, "T12 no symbols at all -> Unknown, caller fails closed");
+    }
+    fn_PhysicsRaycastAll = fake_raycastAll;
+    fn_PhysicsRaycastHitOut = fake_raycastHitOut;
+    fn_PhysicsRaycastSegment = fake_raySegment;
+}
+
+// ---------------------------------------------------------------------------
+// 2. A_FireRaycastAllNearest - the array guards
+// ---------------------------------------------------------------------------
+static void testArrayGuards()
+{
+    AF_NamedHit h{};
+
+    // --- G1: null array -> refused (caller falls back) --------------------
+    resetWorld();
+    CHECK(!A_FireRaycastAllNearest(nullptr, 10.0f, (Pawn *)g_targetPawn.b, (Pawn *)g_localPawn.b, h),
+          "G1 null RaycastAll result is refused, not read as 'no hits'");
+
+    // --- G2: absurd length (bad header/layout) -> refused ------------------
+    resetWorld();
+    std::memset(g_hitArrayBuf, 0, sizeof g_hitArrayBuf);
+    *(size_t *)(g_hitArrayBuf + AF_ARRAY_LEN_OFF) = 100000;
+    CHECK(!A_FireRaycastAllNearest(g_hitArrayBuf, 10.0f, (Pawn *)g_targetPawn.b, (Pawn *)g_localPawn.b, h),
+          "G2 out-of-range length -> refused (degrades to the single-ray path)");
+
+    // --- G3: distance PhysX could not have produced -> refused -------------
+    resetWorld();
+    std::memset(g_hitArrayBuf, 0, sizeof g_hitArrayBuf);
+    *(size_t *)(g_hitArrayBuf + AF_ARRAY_LEN_OFF) = 1;
+    {
+        unsigned char *e = g_hitArrayBuf + AF_ARRAY_DATA_OFF;
+        *(float *)(e + AF_RAYHIT_DISTOFF) = 999999.0f;   // beyond any maxDistance
+        *(void **)(e + AF_RAYHIT_COLLOFF) = g_wallCol.b;
+    }
+    CHECK(!A_FireRaycastAllNearest(g_hitArrayBuf, 10.0f, (Pawn *)g_targetPawn.b, (Pawn *)g_localPawn.b, h),
+          "G3 impossible hit distance -> refused");
+
+    // --- G4: unsorted hits -> nearest one wins -----------------------------
+    resetWorld();
+    g_losHits = { {4.0f, &g_wallCol}, {1.5f, &g_wallCol}, {3.0f, &g_targetCol} };
+    void *arr = fake_raycastAll(Vector3{}, Vector3{}, 5.0f);
+    CHECK(A_FireRaycastAllNearest(arr, 5.0f, (Pawn *)g_targetPawn.b, (Pawn *)g_localPawn.b, h),
+          "G4 well-formed array accepted");
+    CHECK(!h.isTarget && h.distance > 1.4f && h.distance < 1.6f,
+          "G4 unsorted records are walked nearest-first (1.5 m wall, not 4 m)");
+}
+
+// ---------------------------------------------------------------------------
+// 3. A_FireCrosshairRayPawn - path A names the enemy past our own body
+// ---------------------------------------------------------------------------
+static void testCentreRay()
+{
+    Pawn *items[2] = { (Pawn *)g_targetPawn.b, (Pawn *)g_otherPawn.b };
+    const Vector3 camPos(0.0f, 1.6f, 0.0f);
+    const Vector3 forward(0.0f, 0.0f, 1.0f);
+
+    // --- C1: our own body at 0.02 m, enemy behind --------------------------
+    resetWorld();
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
+    {
+        float hd = -1.0f; bool missing = false;
+        Pawn *p = A_FireCrosshairRayPawn(camPos, forward, items, 2,
+                                         (Pawn *)g_localPawn.b, &hd, &missing);
+        CHECK(p == (Pawn *)g_targetPawn.b, "C1 centre ray steps over our body and names the enemy");
+        CHECK(hd > 4.9f && hd < 5.1f, "C1 centre hit distance is the enemy's");
+        CHECK(g_triggerDiag.selfHitsSkipped == 1, "C1 self hit counted");
+    }
+
+    // --- C2: only our body -> nothing centred ------------------------------
+    resetWorld();
+    g_centreHits = { {0.02f, &g_selfCol} };
+    {
+        float hd = 7.0f; bool missing = false;
+        Pawn *p = A_FireCrosshairRayPawn(camPos, forward, items, 2,
+                                         (Pawn *)g_localPawn.b, &hd, &missing);
+        CHECK(p == nullptr && hd < 0.0f,
+              "C2 centre ray on empty space (self skipped) -> no centred pawn");
+    }
+
+    // --- C3: a wall first -> nothing centred (never a wall-bang) -----------
+    resetWorld();
+    g_centreHits = { {2.0f, &g_wallCol}, {5.0f, &g_targetCol} };
+    {
+        Pawn *p = A_FireCrosshairRayPawn(camPos, forward, items, 2,
+                                         (Pawn *)g_localPawn.b, nullptr, nullptr);
+        CHECK(p == nullptr, "C3 a wall first on the centre line -> no centred pawn");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 4. A_FireScan - end to end (path B fires, wall refuses)
+// ---------------------------------------------------------------------------
+static Il2CppArray<Pawn *> g_enemyArr;
+static Il2CppList<Pawn *>  g_enemyList;
+
+static void setEnemyList(Pawn **pawns, int n)
+{
+    std::memset(&g_enemyArr, 0, 16 + 8 + 4);          // header only (m_Items untouched zeros)
+    g_enemyArr.max_length = n;
+    g_enemyArr.bounds = nullptr;
+    for (int i = 0; i < n; i++) g_enemyArr.m_Items[i] = pawns[i];
+    g_enemyList.klass = nullptr;
+    g_enemyList.unk1   = nullptr;
+    g_enemyList.items  = &g_enemyArr;
+    g_enemyList.size   = n;
+    *(void **)(g_gameObj.b + Class_BaseGame_EnemyPawns) = &g_enemyList;
+}
+
+static Vector3 w2sOnCrosshair(const Vector3 &) { return Vector3{820.0f, 450.0f, 1.0f}; }   // 20 px off centre
+static Vector3 w2sAwayFromCrosshair(const Vector3 &) { return Vector3{1400.0f, 450.0f, 1.0f}; }
+
+static void testScan()
+{
+    // Screen centre is (800, 450) for the 1600x900 fake screen; the zone
+    // defaults to 40 px (2.5 % of width) because Config is zero-initialised.
+    Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+
+    // --- S1: enemy in the zone, ray hits OUR body at 0 m first -> FIRES ----
+    resetWorld();
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sOnCrosshair;
+    g_centreHits = { {0.02f, &g_selfCol} };            // nothing centred
+    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
+    {
+        TriggerTarget out{};
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::Fired, "S1 enemy in the open -> FIRED (the old build said 'wall in the way')");
+        CHECK(out.pawn == (Pawn *)g_targetPawn.b, "S1 the right pawn was chosen");
+        CHECK(out.path == 1, "S1 went through the crosshair-zone path");
+        CHECK(out.visible && out.visibilityIdentified,
+              "S1 visibility came from the ray naming him, not from a guess");
+        CHECK(g_triggerDiag.selfHitsSkipped >= 1, "S1 the self hit was skipped on the way");
+        CHECK(g_triggerDiag.losBlocked == 0, "S1 nothing counted as blocked");
+        CHECK(g_triggerDiag.lastBlock != (int)FireBlock::NoLineOfSight,
+              "S1 'wall in the way' was NOT the verdict");
+    }
+
+    // --- S2: same, but a real wall between camera and enemy -> BLOCKED -----
+    resetWorld();
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sOnCrosshair;
+    g_centreHits = { {0.02f, &g_selfCol} };
+    g_losHits    = { {0.0f, &g_selfCol}, {2.0f, &g_wallCol}, {3.3f, &g_targetCol} };
+    {
+        TriggerTarget out{};
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoLineOfSight, "S2 a genuine wall between us and him still refuses");
+        CHECK(!out.visible && out.pawn == nullptr, "S2 no target escapes with the refusal");
+        CHECK(g_triggerDiag.losBlockedScan == 1, "S2 the block is reported in the panel counters");
+    }
+
+    // --- S3: centre ray names him -> path A fires --------------------------
+    resetWorld();
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sOnCrosshair;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::Fired, "S3 centre ray names the enemy -> fires");
+        CHECK(out.path == 0 && out.pawn == (Pawn *)g_targetPawn.b,
+              "S3 reported as the centre-ray path");
+    }
+
+    // --- S4: nobody near the crosshair -> NoEnemyInZone --------------------
+    resetWorld();
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sAwayFromCrosshair;
+    g_centreHits = { {0.02f, &g_selfCol} };
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone, "S4 nobody in the zone -> no enemy, no rays");
+        CHECK(g_triggerDiag.candidates == 0, "S4 candidate counter agrees");
+    }
+
+    // --- S5: dead enemy in the zone -> refused before any ray --------------
+    resetWorld();
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sOnCrosshair;
+    objSetAlive(g_targetPawn, false);
+    g_losHits = { {3.3f, &g_targetCol} };
+    {
+        TriggerTarget out{};
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone, "S5 a dead pawn is not a candidate");
+        CHECK(g_rayAllCalls == 1, "S5 only the centre ray ran (no LOS ray for a non-candidate)");
+    }
+
+    g_w2sImpl = nullptr;
+}
+
+int main()
+{
+    installFns();
+    resetWorld();
+
+    testGate();
+    testArrayGuards();
+    testCentreRay();
+    testScan();
+
+    if (g_failures == 0) {
+        printf("\nOK: all LOS gate checks passed\n");
+        return 0;
+    }
+    printf("\n%d check(s) FAILED\n", g_failures);
+    return 1;
+}

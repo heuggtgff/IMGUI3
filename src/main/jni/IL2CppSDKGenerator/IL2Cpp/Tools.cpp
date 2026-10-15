@@ -121,7 +121,15 @@ static uint64_t ToolsNowMs() {
     return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
 }
 
-static void ToolsRefreshReadableRanges() {
+// Refreshes at most every 250 ms unless `force`. Parsing /proc/self/maps is
+// not free (thousands of fgets/sscanf on a game process), so it is only done
+// when the snapshot actually has to answer something - never on the fast path.
+static void ToolsRefreshReadableRanges(bool force = false) {
+    const uint64_t now = ToolsNowMs();
+    if (!force && !g_readableRanges.empty() && now >= g_readableCacheMs &&
+        now - g_readableCacheMs <= 250)
+        return;
+    g_readableCacheMs = now;
     g_readableRanges.clear();
     FILE *f = fopen("/proc/self/maps", "r");
     if (!f) return;
@@ -137,32 +145,53 @@ static void ToolsRefreshReadableRanges() {
     fclose(f);
 }
 
-static bool ToolsAddrReadable(void *addr) {
-    const uintptr_t a = (uintptr_t)addr;
-    if (a < 0x10000) return false;
-    uint64_t now = ToolsNowMs();
-    if (g_readableRanges.empty() || now < g_readableCacheMs || now - g_readableCacheMs > 250) {
-        ToolsRefreshReadableRanges();
-        g_readableCacheMs = now;
-    }
+// Binary search of the cached snapshot. Pure userspace - no syscall.
+static bool ToolsRangesContain(uintptr_t a) {
     size_t lo = 0, hi = g_readableRanges.size();
     while (lo < hi) {
         size_t mid = (lo + hi) / 2;
-        if (a < g_readableRanges[mid].first)      hi = mid;
+        if (a < g_readableRanges[mid].first)       hi = mid;
         else if (a >= g_readableRanges[mid].second) lo = mid + 1;
         else return true;
     }
     return false;
 }
 
+static bool ToolsAddrReadable(void *addr) {
+    const uintptr_t a = (uintptr_t)addr;
+    if (a < 0x10000) return false;
+    ToolsRefreshReadableRanges();
+    return ToolsRangesContain(a);
+}
+
 bool Tools::IsPtrValid(void *addr) {
     if (addr == nullptr) return false;
+    const uintptr_t a = (uintptr_t)addr;
+    if (a < 0x10000) return false;
+
+    // FAST PATH: consult the /proc/self/maps snapshot first. A pointer that is
+    // listed readable there IS readable, and the binary search costs zero
+    // syscalls. IsPtrValid() runs several hundred times per frame (every ESP
+    // liveness guard, every object guard inside the trigger scan, every hook
+    // gate) and the process_vm_readv syscall this used to do PER CALL was the
+    // single biggest per-frame cost of the whole mod. The snapshot is only
+    // PARSED when it is empty (first call) - see ToolsRefreshReadableRanges.
+    if (g_readableRanges.empty()) ToolsRefreshReadableRanges(true);
+    if (ToolsRangesContain(a)) return true;
+
+    // NOT in the snapshot: either a dead pointer, or memory mapped after the
+    // snapshot was taken (a pawn spawned a moment ago). process_vm_readv
+    // answers authoritatively; the next snapshot refresh picks the address up
+    // and later calls return through the fast path above.
     if (pvm(addr, tools_isvalid_buf, sizeof tools_isvalid_buf)) return true;
+
     // pvm failed: either the page really is unreadable, or this device blocks
-    // process_vm_readv entirely. Confirm through a fresh /proc/self/maps
-    // instead of blindly rejecting (a blind reject silently disabled every
-    // guarded hook, ESP pass and the triggerbot).
-    return ToolsAddrReadable(addr);
+    // process_vm_readv entirely. Confirm through /proc/self/maps (at most every
+    // 250 ms, so a frame full of dead pointers cannot become a maps-parsing
+    // loop) instead of blindly rejecting - a blind reject silently disabled
+    // every guarded hook, ESP pass and the triggerbot.
+    ToolsRefreshReadableRanges();
+    return ToolsRangesContain(a);
 }
 
 uintptr_t Tools::GetBaseAddress(const char *name) {

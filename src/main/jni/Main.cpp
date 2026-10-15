@@ -1986,6 +1986,13 @@ if (runtimeState.activeTab == 4) {
                                         td.lastLosHitDist,
                                         (int)td.leadPathBlocked, (int)td.spreadWarn,
                                         (int)td.switching, td.lastFireInterval);
+                                    // What the anti-wall gate SKIPPED this scan: hits on our
+                                    // own body/weapon, invisible trigger volumes, and
+                                    // near-origin blockers overruled by the game's occlusion
+                                    // verdict. "self/trigger > 0" is the false-"wall in the
+                                    // way" fix doing its job.
+                                    ImGui::TextColored(dim, "Skipped self=%d trigger=%d occOverride=%d",
+                                        td.selfHitsSkipped, td.triggerHitsSkipped, td.occOverrides);
                                     ImGui::TextColored(dim, "Ammo=%s CanFire=%s FOV=%0.fpx",
                                         td.ammoOk ? "ok" : "NO", td.canFire ? "ok" : "NO",
                                         td.focalPx);

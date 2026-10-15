@@ -708,10 +708,22 @@ void DrawESP(ImDrawList *draw, int sWidth, int sHeight, float density) {
     if (Tools::IsPtrValid(get_LocalPawn)) {
         pLocalPawn_rootPos = get_LocalPawn->get_LastPawnPos();
     }
+
+    // Camera + WorldToScreen resolved ONCE per frame. The old form called
+    // Camera::get_main() twice per enemy and the member wrapper calls it AGAIN
+    // internally, i.e. two extra native calls per enemy just to project two
+    // points - at 10 pawns x 60 fps that was ~1200 pointless native calls/s.
+    Camera *espCam = Camera::get_main();
+    auto espW2s = (Vector3 (*)(Camera *, Vector3))Class_Camera_WorldToScreenPoint;
     
     DrawThrowableAlert(draw, sWidth, sHeight, pLocalPawn_rootPos);
 
     totalBots = 0, totalEnemies = 0;
+    // Pawn-INDEPENDENT overlays used to run once per ENEMY inside the loop
+    // below (DrawAimLine re-walked every pawn per enemy, DrawVehicleESP
+    // re-fetched the whole game state per enemy, the FOV ring emitted 60 lines
+    // per enemy) - draw each at most once per frame.
+    bool fovCircleDrawn = false, aimlineDrawn = false, vehicleEspDrawn = false;
     List<Pawn *> *EnemyPawns = get_MatchGame->EnemyPawns();
     if (!Tools::IsPtrValid(EnemyPawns) || !EnemyPawns->getSize()) return;
 
@@ -732,7 +744,6 @@ void DrawESP(ImDrawList *draw, int sWidth, int sHeight, float density) {
         if (!Tools::IsPtrValid(m_HeadBone) || !m_Mesh || !*(bool *)(pawn + Class_Pawn_m_IsAlive)) continue;
 
         bool isBot = *(bool *)((uintptr_t)pawn + Class_Pawn_m_IsBot);
-        bool isAlive = *(bool *)((uintptr_t)pawn + Class_Pawn_m_IsAlive);
         
         if (isBot) totalBots++; else totalEnemies++;
 
@@ -760,21 +771,16 @@ void DrawESP(ImDrawList *draw, int sWidth, int sHeight, float density) {
         Vector3 pEnemyPawn_headPos = pawn->get_HeadPosition();
         Vector3 pEnemyPawn_rootPos = pawn->get_LastPawnPos();
 
-        Vector3 HeadSc = Camera::get_main()->WorldToScreenPoint(pEnemyPawn_headPos);
-        Vector3 RootSc = Camera::get_main()->WorldToScreenPoint(pEnemyPawn_rootPos);
+        Vector3 HeadSc = (espCam != nullptr && espW2s != nullptr)
+                       ? espW2s(espCam, pEnemyPawn_headPos) : Vector3::zero();
+        Vector3 RootSc = (espCam != nullptr && espW2s != nullptr)
+                       ? espW2s(espCam, pEnemyPawn_rootPos) : Vector3::zero();
 
         float distanceToMe = Vector3::Distance(pLocalPawn_rootPos, pEnemyPawn_rootPos);
         float actualHeight = Vector3::Distance(pEnemyPawn_headPos, pEnemyPawn_rootPos);
         
         if (HeadSc.z > 0 && pawn->m_IsAlive()) {
             
-            AttackableTargetInfo *m_AttackableInfoPtr = pawn->m_AttackableInfo();
-            if (m_AttackableInfoPtr != nullptr && isAlive) {
-                if (Tools::IsPtrValid(pawn) && Tools::IsPtrValid(pawn->get_PlayerName())) {
-                    std::string playerName = pawn->get_PlayerName()->CString();
-                }
-            }
-
             Vector2 screen(sWidth, sHeight);
             Vector2 location(RootSc.x, HeadSc.y);
             float magic_number = distanceToMe;
@@ -829,7 +835,8 @@ void DrawESP(ImDrawList *draw, int sWidth, int sHeight, float density) {
                     draw->AddLine(ImVec2(sWidth / 2, sHeight), ImVec2(HeadSc.x, sHeight - RootSc.y), lineColor, lineThickness);
                 }
 
-                if (Config.ESPMenu.ShowFov) {
+                if (Config.ESPMenu.ShowFov && !fovCircleDrawn) {
+                    fovCircleDrawn = true;   // screen-space ring: once per frame
                     ImVec2 center(get_width() / 2, get_height() / 2);
                     float radius = Config.Aim.Cross;
 
@@ -868,7 +875,8 @@ void DrawESP(ImDrawList *draw, int sWidth, int sHeight, float density) {
                     }
                 }
                 
-                if (Config.ESPMenu.Aimline) {
+                if (Config.ESPMenu.Aimline && !aimlineDrawn) {
+                    aimlineDrawn = true;     // runs its own full pawn walk: once per frame
                     DrawAimLine(draw, sWidth, sHeight);
                 }
                 
@@ -876,7 +884,8 @@ void DrawESP(ImDrawList *draw, int sWidth, int sHeight, float density) {
                     AddSkeletonToDrawESP(draw, pawn, isBot, sHeight);
                 }
                 
-                if (Config.ESPMenu.Vehicle) {
+                if (Config.ESPMenu.Vehicle && !vehicleEspDrawn) {
+                    vehicleEspDrawn = true;  // re-fetches game state: once per frame
                     DrawVehicleESP(draw, sWidth, sHeight);
                 }
 

@@ -1,0 +1,3 @@
+# Downloaded il2cpp dumps (e.g. https://huggingface.co/datasets/jeudhehs/dump).
+# Reference material for verifying RVA/offsets, not a build input - ~80 MB.
+dumps/
