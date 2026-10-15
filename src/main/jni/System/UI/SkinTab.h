@@ -50,20 +50,48 @@ enum class SkinTier {
     Mythic,
     Legendary,
     Epic,
-    Common
+    Common,
+    Uncommon,
+    Rare
 };
 
+// Skin/Thread.h GetRarityPrefix tags: 5=[M], 4=[L], 3=[E], 2=[R], 1=[U], else [C]
+// (the game's quality colors: red/gold/purple/blue/green/white).
 static SkinTier DetectSkinTier(const std::string& rawName) {
     if (rawName.find("[M]") != std::string::npos || rawName.find("[MYTHIC]") != std::string::npos) return SkinTier::Mythic;
     if (rawName.find("[L]") != std::string::npos || rawName.find("[LEGENDARY]") != std::string::npos) return SkinTier::Legendary;
     if (rawName.find("[E]") != std::string::npos || rawName.find("[EPIC]") != std::string::npos) return SkinTier::Epic;
+    if (rawName.find("[R]") != std::string::npos || rawName.find("[RARE]") != std::string::npos) return SkinTier::Rare;
+    if (rawName.find("[U]") != std::string::npos || rawName.find("[UNCOMMON]") != std::string::npos) return SkinTier::Uncommon;
     if (rawName.find("[C]") != std::string::npos || rawName.find("[COMMON]") != std::string::npos) return SkinTier::Common;
     return SkinTier::None;
 }
 
+// 0 = show everything; otherwise only entries tagged with that quality.
+static std::string RarityFilterTag(int filter) {
+    switch (filter) {
+        case 1: return "[M]";
+        case 2: return "[L]";
+        case 3: return "[E]";
+        case 4: return "[R]";
+        case 5: return "[U]";
+        case 6: return "[C]";
+        default: return "";
+    }
+}
+
+static bool RarityFilterPass(const std::string& name, int filter) {
+    const std::string tag = RarityFilterTag(filter);
+    if (tag.empty()) return true;
+    if (name.find(tag) != std::string::npos) return true;
+    // Tagless entries (a tier whose ColorID was unknown at load time) show up
+    // under the Common filter instead of vanishing.
+    return filter == 6 && DetectSkinTier(name) == SkinTier::None;
+}
+
 static std::string StripTierTag(const std::string& rawName) {
     std::string out = rawName;
-    const char* tags[] = {"[MYTHIC]", "[LEGENDARY]", "[EPIC]", "[COMMON]", "[M]", "[L]", "[E]", "[C]"};
+    const char* tags[] = {"[MYTHIC]", "[LEGENDARY]", "[EPIC]", "[COMMON]", "[RARE]", "[UNCOMMON]", "[M]", "[L]", "[E]", "[R]", "[U]", "[C]"};
     for (const char* tag : tags) {
         const std::string t(tag);
         size_t pos = out.find(t);
@@ -242,6 +270,14 @@ static bool DrawTieredSkinCheckbox(const char* label, bool* value, std::function
             badgeText = "COMMON";
             badgeBg = IM_COL32(23, 74, 40, 200);     
             badgeFg = IM_COL32(74, 222, 128, 255);    
+        } else if (tier == SkinTier::Rare) {
+            badgeText = "RARE";
+            badgeBg = IM_COL32(16, 62, 96, 190);
+            badgeFg = IM_COL32(147, 197, 253, 250);
+        } else if (tier == SkinTier::Uncommon) {
+            badgeText = "UNCOMMON";
+            badgeBg = IM_COL32(38, 68, 22, 190);
+            badgeFg = IM_COL32(163, 230, 53, 250);
         }
         
         const ImVec2 badgeTextSize = labelFont->CalcTextSizeA(labelSize, FLT_MAX, 0.0f, badgeText);
@@ -395,6 +431,29 @@ inline void RenderSkinCategoryContent(int categoryIndex, bool drawSubTabs = fals
         }
     }
 
+    // ---- Rarity filter (applies to every skin sub-tab; tag-based) -----------
+    static int rarityFilter = 0;               // 0 = All
+    {
+        static const char* rarityNames[] = {"All", "Mythic", "Legendary", "Epic",
+                                            "Rare", "Uncommon", "Common"};
+        ImGui::TextColored(c::text::text_active, "Filter:");
+        ImGui::SameLine(0.0f, 10.0f);
+        ImGui::PushItemWidth(180.0f);
+        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
+        if (ImGui::BeginCombo("##RarityFilter", rarityNames[rarityFilter])) {
+            for (int ri = 0; ri < IM_ARRAYSIZE(rarityNames); ri++) {
+                const bool sel = (rarityFilter == ri);
+                if (ImGui::Selectable(rarityNames[ri], sel))
+                    rarityFilter = ri;
+                if (sel)
+                    ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::PopStyleVar();
+        ImGui::PopItemWidth();
+    }
+
     custom::Separator_line();
     ImGui::Unindent(30.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 4));
@@ -472,6 +531,8 @@ case 0:
                 if (ToLower(getchar.charName).find(searchLower) == std::string::npos)
                     continue;
             }
+            if (!RarityFilterPass(getchar.charName, rarityFilter))
+                continue;
 
             ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
 
@@ -617,6 +678,8 @@ case 1:
         if (strlen(searchQuery) >= MIN_SEARCH_LENGTH &&
             ToLower(w.watchname).find(searchLower) == std::string::npos)
             continue;
+        if (!RarityFilterPass(w.watchname, rarityFilter))
+            continue;
 
         if (w.watchname.find("Watch") == std::string::npos)
             continue;
@@ -651,6 +714,8 @@ case 2:
         if (strlen(searchQuery) >= MIN_SEARCH_LENGTH &&
             ToLower(d.deadname).find(searchLower) == std::string::npos)
             continue;
+        if (!RarityFilterPass(d.deadname, rarityFilter))
+            continue;
 
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
 
@@ -681,6 +746,8 @@ case 3:
 
         if (strlen(searchQuery) >= MIN_SEARCH_LENGTH &&
             ToLower(p.planename).find(searchLower) == std::string::npos)
+            continue;
+        if (!RarityFilterPass(p.planename, rarityFilter))
             continue;
 
         ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
@@ -932,6 +999,8 @@ case 3:
                     if (nameLower.find(searchLower) == std::string::npos)
                         continue;
                 }
+                if (!RarityFilterPass(getitem.itemName, rarityFilter))
+                    continue;
                 if (sBool[getitem.itemName])
                 {
                     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
@@ -960,6 +1029,8 @@ case 3:
                     if (nameLower.find(searchLower) == std::string::npos)
                         continue;
                 }
+                if (!RarityFilterPass(getitem.itemName, rarityFilter))
+                    continue;
                 if (!sBool[getitem.itemName])
                 {
                     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
@@ -1176,6 +1247,8 @@ case 3:
                 if (strlen(searchQuery) >= MIN_SEARCH_LENGTH &&
                     ToLower(sb.skinName).find(searchLower) == std::string::npos)
                     continue;
+                if (!RarityFilterPass(sb.skinName, rarityFilter))
+                    continue;
                 if (sBool[sb.skinName]) {
                     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
                     bool wasOn = sBool[sb.skinName];
@@ -1198,6 +1271,8 @@ case 3:
             for (const auto& sb : snowboardData) {
                 if (strlen(searchQuery) >= MIN_SEARCH_LENGTH &&
                     ToLower(sb.skinName).find(searchLower) == std::string::npos)
+                    continue;
+                if (!RarityFilterPass(sb.skinName, rarityFilter))
                     continue;
                 if (!sBool[sb.skinName]) {
                     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
