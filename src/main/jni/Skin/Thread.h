@@ -388,6 +388,8 @@ char searchQuery[256] = "";
 
 bool loadskinhack = false;
 bool loadCharacter = false;
+bool loadWatch = false;
+bool loadDeadbox = false;
 bool isLoad = false;
 
 std::string lastKnownName = "";
@@ -702,11 +704,18 @@ int my_WeaponKillEffectGroupOverride(void *weapon) {
 #define ReadByte(base, offset) (*(uint8_t *)((uintptr_t)(base) + (offset)))
 #define READ_PTR(type, base, offset) (*(type **)((uintptr_t)(base) + (offset)))
 
+// Game quality ladder (dump.cs 683883-683888, WEAPON_QUALITY_COLOR_WHITE /
+// GREEN / BULE / PURPLE / GOLD / RED): ColorID 0 = Common (white), 1 = Uncommon
+// (green), 2 = Rare (blue), 3 = Epic (purple), 4 = Legendary (gold),
+// 5 = Mythic (red). The old map folded 0/1/2 into [C], which made a
+// mythic/legendary/epic/rare/uncommon/common search filter impossible.
 inline std::string GetRarityPrefix(int colorID) {
     switch (colorID) {
         case 5: return "[M] ";
         case 4: return "[L] ";
         case 3: return "[E] ";
+        case 2: return "[R] ";
+        case 1: return "[U] ";
         default: return "[C] ";
     }
 }
@@ -734,19 +743,26 @@ void LoadCharacterSkins() {
         deadboxSkins = BRDeadboxSkinConfigInstance;
     }
 
-    if (charModels.empty() ||
-        itemRes.empty() ||
-        roleConfs.empty() ||
-        roleSkins.empty() ||
-        rolePacks.empty() ||
-        deadboxSkins.empty()) {
-        return;
+    // Each skin family is built from its own config tiers and must not wait for
+    // all of them. The CHARACTER join only needs CharacterModelConfig x
+    // ItemResourceConfig x RoleConfConfig (RolePackConfConfig just refines the
+    // pack fields), so one tier the game never constructs in a lobby - a
+    // BRDeadboxSkin or a RoleSkin watch config - used to keep this whole
+    // function early-returning forever: the characters tab stayed empty while
+    // the weapon tab loaded, which is the "character skins not loading" report.
+    if (!loadWatch && !roleSkins.empty()) {
+        watch.clear();
     }
 
-    watch.clear();
-    deadboxF.clear();
-    charData.clear();
-    g_targetCharacters.clear();
+    if (!loadDeadbox && !deadboxSkins.empty() && !roleConfs.empty()) {
+        deadboxF.clear();
+    }
+
+    if (!loadCharacter && !charModels.empty() &&
+        !itemRes.empty() && !roleConfs.empty()) {
+        charData.clear();
+        g_targetCharacters.clear();
+    }
 
     std::string lastKnownName = "";
     void* lastKnownLocId = nullptr;
@@ -759,6 +775,7 @@ void LoadCharacterSkins() {
     int lastKnownHand = 0;
     int lastKnownKillS = 0;
 
+    if (!loadWatch && !roleSkins.empty())
     for (auto &a : roleSkins) {
 
         if (!a || !Tools::IsPtrValid(a))
@@ -783,8 +800,12 @@ void LoadCharacterSkins() {
         }
     }
 
+    if (!roleSkins.empty())
+        loadWatch = true;      // every RoleSkin config was walked once
+
     std::string _g = "";
 
+    if (!loadDeadbox && !deadboxSkins.empty() && !roleConfs.empty())
     for (auto &z : deadboxSkins) {
 
         if (!z || !Tools::IsPtrValid(z))
@@ -874,6 +895,11 @@ void LoadCharacterSkins() {
         }
     }
 
+    if (!deadboxSkins.empty())
+        loadDeadbox = true;    // every BRDeadboxSkin config was walked once
+
+    if (!loadCharacter && !charModels.empty() &&
+        !itemRes.empty() && !roleConfs.empty())
     for (auto X0 : charModels) {
 
         if (!X0 || !Tools::IsPtrValid(X0))
@@ -1019,16 +1045,7 @@ void LoadCharacterSkins() {
                     }
                 }
 
-                std::string Zz;
-
-                if (d == 5)
-                    Zz = "[M] " + n0;
-                else if (d == 4)
-                    Zz = "[L] " + n0;
-                else if (d == 3)
-                    Zz = "[E] " + n0;
-                else
-                    Zz = "[C] " + n0;
+                std::string Zz = GetRarityPrefix(d) + n0;
 
                 charData.push_back({
 
@@ -1104,6 +1121,10 @@ void LoadCharacterSkins() {
             break;
         }
     }
+
+    if (!loadCharacter && !charModels.empty() &&
+        !itemRes.empty() && !roleConfs.empty())
+        loadCharacter = true;   // every CharacterModel config was walked once
 
     if (!g_targetCharacters.empty()) {
 
