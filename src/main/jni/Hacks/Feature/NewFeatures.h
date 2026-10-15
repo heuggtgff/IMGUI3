@@ -367,6 +367,33 @@ namespace NewFeatures
         return p != nullptr && Tools::IsPtrValid(p);
     }
 
+    // ---- Unity object liveness --------------------------------------------
+    // Tools::IsPtrValid only answers "is this memory mapped and readable". A
+    // UnityEngine.Object the game has already Destroyed still has its MANAGED
+    // wrapper sitting in readable heap, so every pointer guard passes, while the
+    // native object behind it is gone: Object.m_CachedPtr (dump.cs 169503,
+    // Object TypeDefIndex 1761) is cleared the moment the native side dies.
+    // Asking such an object for anything - Transform.get_position,
+    // Component.get_transform, Pawn.get_TeamId, Weapon.StartFire - walks that
+    // null native pointer and takes the client down.
+    //
+    // The enemy / team pawn lists keep an entry for a few frames after a pawn
+    // despawns (death, respawn, match end), so this is exactly the entity-
+    // detection path of a real match: the name-walk calls get_transform() on
+    // every pawn in the list, and the hitbox walk calls get_position() on two
+    // bones of every pawn under the crosshair. A readable-but-dead pawn passed
+    // every earlier check and crashed on the first native call.
+    // UnityEngine.Object.m_CachedPtr (dump.cs 169503) - every Pawn / Weapon /
+    // Transform / Collider derives from Object, so one offset covers all of them.
+    constexpr size_t AF_OBJ_CACHEDPTR = 0x10;
+
+    inline bool A_FireObjectAlive(void *obj)
+    {
+        if (!Tools::IsPtrValid(obj)) return false;
+        void *cached = *(void **)((uintptr_t)obj + AF_OBJ_CACHEDPTR);
+        return Tools::IsPtrValid(cached);
+    }
+
     // Pawn::IsAiming() @0x519BB10 - "the local player is scoping / ADS"
     inline bool IsLocalPlayerScoping()
     {
@@ -429,7 +456,8 @@ namespace NewFeatures
     // gate, so it alone decides "same team => skip".
     inline bool IsSameTeamAcceptBots(void *localPawn, void *targetPawn)
     {
-        if (!IsReadable(localPawn) || !IsReadable(targetPawn)) return false;
+        // get_TeamId is a native call - a destroyed pawn must not reach it.
+        if (!A_FireObjectAlive(localPawn) || !A_FireObjectAlive(targetPawn)) return false;
         if (localPawn == targetPawn) return true;
 
         static auto getTeamId = (uint32_t (*)(void *))UnityRva(RVA::Pawn_GetTeamId);       // Slot 216
@@ -751,12 +779,16 @@ namespace NewFeatures
         ap.valid = false;
         ap.hitbox = which;
         ap.radius = A_FireTune::kBodyRadius;
-        if (!Tools::IsPtrValid((void *)pawn)) return ap;
+        if (!A_FireObjectAlive((void *)pawn)) return ap;
 
         Transform *headBone = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
         Transform *mesh     = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
-        const bool hasHead = Tools::IsPtrValid((void *)headBone);
-        const bool hasMesh = Tools::IsPtrValid((void *)mesh);
+        // The bones are Unity objects too. A pawn the game is tearing down keeps
+        // its managed wrapper (readable, so a plain validity check passes) while
+        // the native transforms behind m_HeadBone / m_Mesh are already gone, and
+        // get_position() on one of those dereferences a null native pointer.
+        const bool hasHead = A_FireObjectAlive((void *)headBone);
+        const bool hasMesh = A_FireObjectAlive((void *)mesh);
         if (!hasHead && !hasMesh) return ap;
 
         if (which == HitboxPriority::Head || which == HitboxPriority::Any) {
@@ -875,7 +907,7 @@ namespace NewFeatures
     // says so. Two independent answers, and only "dead" from BOTH blocks a shot.
     inline bool A_FirePawnAlive(Pawn *pawn)
     {
-        if (!Tools::IsPtrValid((void *)pawn)) return false;
+        if (!A_FireObjectAlive((void *)pawn)) return false;
         if (((Pawn *)pawn)->m_IsAlive()) return true;
         if (fn_PawnIsAlive != nullptr && fn_PawnIsAlive(pawn)) return true;
         return false;
@@ -948,7 +980,7 @@ namespace NewFeatures
 
         for (int i = 0; i < count; i++) {
             Pawn *mate = items[i];
-            if (!Tools::IsPtrValid((void *)mate)) continue;
+            if (!A_FireObjectAlive((void *)mate)) continue;
             if (mate == localPawn) continue;
             if (!A_FirePawnAlive(mate)) continue;
             if (friendsSeen != nullptr) (*friendsSeen)++;
@@ -1139,7 +1171,7 @@ namespace NewFeatures
     // True when `localPawn` is the local player's live pawn.
     inline bool A_FireIsLiveLocalPawn(void *localPawn)
     {
-        return Tools::IsPtrValid(localPawn) &&
+        return A_FireObjectAlive(localPawn) &&
                ((Pawn *)localPawn)->m_IsAlive();
     }
 
@@ -1252,14 +1284,14 @@ namespace NewFeatures
     inline bool A_FireHitIsTarget(void *hitTransform, Pawn *pawn, int *depthOut = nullptr)
     {
         if (depthOut != nullptr) *depthOut = -1;
-        if (!Tools::IsPtrValid(hitTransform) || !Tools::IsPtrValid((void *)pawn)) return false;
+        if (!A_FireObjectAlive(hitTransform) || !A_FireObjectAlive((void *)pawn)) return false;
 
         Transform *root = pawn->get_transform();
         Transform *head = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
         Transform *mesh = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
 
         void *t = hitTransform;
-        for (int depth = 0; depth < 12 && Tools::IsPtrValid(t); depth++) {
+        for (int depth = 0; depth < 12 && A_FireObjectAlive(t); depth++) {
             if (t == (void *)root || t == (void *)head || t == (void *)mesh) {
                 if (depthOut != nullptr) *depthOut = depth;
                 return true;
@@ -1353,13 +1385,15 @@ namespace NewFeatures
                                             int *depthOut = nullptr)
     {
         if (depthOut != nullptr) *depthOut = -1;
-        if (!Tools::IsPtrValid(hitTransform) || !Tools::IsPtrValid((void *)items)) return nullptr;
+        if (!A_FireObjectAlive(hitTransform) || !Tools::IsPtrValid((void *)items)) return nullptr;
 
         void *t = hitTransform;
-        for (int depth = 0; depth < 12 && Tools::IsPtrValid(t); depth++) {
+        for (int depth = 0; depth < 12 && A_FireObjectAlive(t); depth++) {
             for (int i = 0; i < count; i++) {
                 Pawn *p = items[i];
-                if (!Tools::IsPtrValid((void *)p)) continue;
+                // get_transform() is a native call: a pawn that despawned while
+                // it is still listed would crash here.
+                if (!A_FireObjectAlive((void *)p)) continue;
                 if ((void *)p->get_transform() == t) {
                     if (depthOut != nullptr) *depthOut = depth;
                     return p;
@@ -1543,7 +1577,10 @@ namespace NewFeatures
 
         for (int i = 0; i < count; i++) {
             Pawn *p = items[i];
-            if (!Tools::IsPtrValid((void *)p)) continue;
+            // Dead objects stay listed for a few frames and still pass a plain
+            // readability check (the managed wrapper is alive); every native
+            // call below would walk their cleared m_CachedPtr.
+            if (!A_FireObjectAlive((void *)p)) continue;
             if (p == localPawn) continue;                        // never shoot yourself
             if (IsSameTeamAcceptBots(localPawn, p)) continue;     // team id is the gate
             if (!A_FirePawnAlive(p)) continue;                    // dead / downed / still ragdolling
@@ -1603,8 +1640,11 @@ namespace NewFeatures
             order[j + 1] = oi;
         }
 
-        const bool checkSpread = Config.NewFeaturesMenu.TriggerbotCheckSpread;
-        const bool wantLead    = Config.NewFeaturesMenu.TriggerbotLeadTarget;
+        // Lead and spread are always MEASURED (they feed the diagnostics panel)
+        // and neither can veto a shot - that decision is fixed; the option that
+        // used to sit here changed nothing.
+        constexpr bool checkSpread = true;
+        constexpr bool wantLead    = true;
         const float spreadPx   = A_FireSpreadPx(weapon, focalPx, checkSpread);
         d.lastSpreadPx = spreadPx;
 
@@ -1753,7 +1793,7 @@ namespace NewFeatures
         // ---- 1. local player --------------------------------------------
         Pawn *localPawn = GamePlay::get_LocalPawn();
         d.localPawn = (void *)localPawn;
-        if (!Tools::IsPtrValid((void *)localPawn)) return FireBlock::NoLocalPawn;
+        if (!A_FireObjectAlive((void *)localPawn)) return FireBlock::NoLocalPawn;
         if (!A_FirePawnAlive(localPawn)) return FireBlock::LocalNotAlive;
 
         // ---- 2. match / round state -------------------------------------
@@ -1767,7 +1807,7 @@ namespace NewFeatures
         // ---- 3. held weapon readiness ------------------------------------
         Weapon *held = localPawn->get_CurrentWeapon();
         d.heldWeapon = (void *)held;
-        if (!Tools::IsPtrValid((void *)held)) return FireBlock::NoWeapon;
+        if (!A_FireObjectAlive((void *)held)) return FireBlock::NoWeapon;
 
         // ADVISORY: a weapon that is mid-switch, mid-reload or between shots does
         // not need to stop the trigger - Weapon.StartFire itself refuses an illegal
@@ -1778,11 +1818,9 @@ namespace NewFeatures
         d.switching = A_FireWeaponSwitching(held);
         d.ammoOk    = A_FireWeaponHasAmmo(held);
         d.canFire   = A_FireWeaponCanFire(held);
-        if (Config.NewFeaturesMenu.TriggerbotRequireReady && !d.canFire)
-            return FireBlock::WeaponNotReady;                // redeploy: only NoWeapon/Paused are hard
-        // (OFF = press anyway. StartFire itself still refuses an illegal shot, so
-        //  the unchecked path can never fire during a reload - it only keeps the
-        //  fire input held through those states.)
+        // Weapon.CanFire() is measured for the panel but never gates: StartFire
+        // itself refuses an illegal shot, and hard-gating on it here is what made
+        // the trigger go quiet mid-fight with no visible reason.
 
         // ---- 4. trigger key gating (the mode combo) ----------------------
         // 0 = Always  : the trigger fires on its own the moment a target is under
@@ -1873,8 +1911,8 @@ namespace NewFeatures
         // used to consume the 10 ms slot below before the instance was even
         // looked at - which threw away the local player's own tick that frame.
         if (tickInstance != nullptr) {
-            Weapon *held = Tools::IsPtrValid((void *)localPawn) ? localPawn->get_CurrentWeapon() : nullptr;
-            if (!Tools::IsPtrValid((void *)held) || tickInstance != (void *)held)
+            Weapon *held = A_FireObjectAlive((void *)localPawn) ? localPawn->get_CurrentWeapon() : nullptr;
+            if (!A_FireObjectAlive((void *)held) || tickInstance != (void *)held)
                 return;
             d.weaponHeldTicks++;
         }
@@ -1926,7 +1964,7 @@ namespace NewFeatures
         s_dbgTriggerState = 1;
 
         Weapon *held = (Weapon *)d.heldWeapon;
-        if (!Tools::IsPtrValid((void *)held)) {
+        if (!A_FireObjectAlive((void *)held)) {
             A_FireReleaseTrigger(nullptr);
             g_afireInTick = false;
             return;

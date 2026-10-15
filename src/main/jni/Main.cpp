@@ -1923,23 +1923,11 @@ if (runtimeState.activeTab == 4) {
                                     // Hitbox priority
                                     static const char* hitboxModes[] = { "Head", "Chest", "Limbs", "Any" };
                                     custom::Combo("Hitbox", &Config.NewFeaturesMenu.TriggerbotHitboxPriority, hitboxModes, IM_ARRAYSIZE(hitboxModes));
-                                    
-                                    // Lead target for projectiles. ADVISORY: it moves the
-                                    // aim point ahead of a moving target and reports it, but
-                                    // it can no longer refuse a shot - if the lead point is
-                                    // covered the shot falls back to the aim point.
-                                    custom::Checkbox("Lead Target", &Config.NewFeaturesMenu.TriggerbotLeadTarget);
-                                    
-                                    // Show the spread/lead containment measurement. Also
-                                    // advisory - it never blocks the trigger.
-                                    custom::Checkbox("Check Spread", &Config.NewFeaturesMenu.TriggerbotCheckSpread);
-
-                                    // Hard-gate on the game's own Weapon.CanFire() (reload /
-                                    // bolt cycle / fire-mode transition / fire interval).
-                                    // OFF by default: StartFire refuses an illegal shot
-                                    // anyway, and gating here is what made the trigger go
-                                    // quiet mid-fight with no visible reason.
-                                    custom::Checkbox("Require Ready", &Config.NewFeaturesMenu.TriggerbotRequireReady);
+                                    // The advisory options that used to sit here (Lead Target,
+                                    // Check Spread, Require Ready) could not change a
+                                    // shot, so they are gone; so is the debug Test Fire
+                                    // button. Everything the trigger actually obeys is above
+                                    // (Mode, Radius, Hitbox) plus StartFire itself.
                                 }
                                 // Debug status (shows in-game). Every number below is
                                 // written by the GAME-THREAD decision tree
@@ -1967,22 +1955,11 @@ if (runtimeState.activeTab == 4) {
                                     ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "BLOCKED: %s",
                                                        NewFeatures::A_FireBlockText(lastBlock));
                                 }
-                                // Test Fire: this menu runs on the render thread and the game
-                                // only reacts to StartFire on the game thread, so the click just
-                                // queues the request - the heartbeat runs it and reports back.
-                                if (custom::Button("Test Fire", ImVec2(0, 0))) {
-                                    NewFeatures::g_testFireRequest = true;
-                                    NewFeatures::g_testFireRequestTime = NewFeatures::A_FireNow();
-                                    td.testFireStatus = 0;
-                                }
+                                    // The debug "Test Fire" button is gone: it only queued a
+                                    // StartFire from the menu, which is a test harness, not a
+                                    // feature. Everything below is the live state written by the
+                                    // game-thread decision tree.
                                 {
-                                    const char* testTxt = "TestFire: idle";
-                                    if (td.testFireStatus == 1) testTxt = "TestFire: fired";
-                                    else if (td.testFireStatus == 2) testTxt = "TestFire: no local pawn";
-                                    else if (td.testFireStatus == 3) testTxt = "TestFire: no weapon";
-                                    else if (td.testFireStatus == 4) testTxt = "TestFire: no StartFire ptr";
-                                    else if (td.testFireStatus == 5) testTxt = "TestFire: queued, no tick";
-                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "%s", testTxt);
                                     const ImVec4 dim(0.65f, 0.65f, 0.72f, 1);
                                     ImGui::TextColored(dim, "HB %s  wTick=%d held=%d pawn=%d",
                                         hbAlive ? "OK" : "DEAD",
