@@ -1205,6 +1205,7 @@ namespace NewFeatures
         int    blockCount[(int)FireBlock::Count];  // lifetime counter per FireBlock reason
         int    lastBlock;       // FireBlock of the most recent scan
         int    candidates;      // enemies inside the crosshair zone, last scan
+        int    filteredOut;     // ... dropped by the user's target filter, last scan
         int    losChecked;      // candidates that got a visibility ray, last scan
         int    friendsInLine;   // teammates that blocked a shot, last scan
         bool   ammoOk;          // Weapon.AmmoCanFire()/get_ClipAmmoCount() verdict
@@ -1248,6 +1249,34 @@ namespace NewFeatures
     {
         return std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    // ---- cached "who is the local player" ----------------------------------
+    // The tick hooks below run for EVERY pawn and EVERY weapon in the world -
+    // hundreds of native calls per frame at 60/120 Hz - and each one used to pay
+    // a full GamePlay::get_LocalPawn() (a real il2cpp call) just to ask "is this
+    // the local player?". That answer cannot change inside 50 ms, so it is
+    // cached: the worst case is noticing a pawn/weapon swap one frame late, while
+    // the per-frame native traffic of the hooks collapses from one call per tick
+    // to roughly twenty calls per second. This is the triggerbot's own share of
+    // the frame cost, and it is the part that scaled with how many pawns the
+    // match has.
+    inline Pawn  *g_afireLocalPawnCache     = nullptr;
+    inline double g_afireLocalPawnCacheTime = -1000.0;
+    inline void  *g_afireHeldWeaponCache    = nullptr;
+    inline double g_afireHeldWeaponStamp    = -1000.0;
+    inline double g_afireOffDiagStamp       = -1000.0;
+
+    inline Pawn *A_FireLocalPawnFast()
+    {
+        const double now = A_FireNow();
+        if (g_afireLocalPawnCache != nullptr &&
+            (now - g_afireLocalPawnCacheTime) < 0.05)
+            return g_afireLocalPawnCache;
+        Pawn *p = GamePlay::get_LocalPawn();
+        g_afireLocalPawnCache = p;
+        g_afireLocalPawnCacheTime = now;
+        return p;
     }
 
     // Crosshair radius in pixels. Default is V3's zone: 2.5 % of the screen
@@ -1792,6 +1821,46 @@ namespace NewFeatures
     //  refused. Candidates are checked nearest-to-crosshair first, so the pawn
     //  under the crosshair is the one that gets the ray budget.
     // =====================================================================
+    // ---- the user's target filter ------------------------------------------
+    // Checked only AFTER a pawn has survived every hard gate (alive, not us, not
+    // a teammate, under the crosshair), so it can only ever NARROW the candidate
+    // list: it can never turn a blocked shot into a fired one. Every rule is a
+    // local read or a symbol the gate already uses - no new game method is
+    // involved, which is what makes the filter safe to add to a working feature.
+    //
+    //   All         - every valid enemy (the behaviour before the filter existed)
+    //   VisibleOnly - only pawns the GAME says it drew / did not occlude last
+    //                 frame (Pawn.get_LastOccVisible / get_RecentlyRendered, the
+    //                 same verdicts the near-origin escape uses)
+    //   Within*     - only pawns whose aim point is inside that range
+    enum class TriggerFilter : int
+    {
+        All         = 0,
+        VisibleOnly = 1,
+        Within25m   = 2,
+        Within50m   = 3,
+        Within100m  = 4
+    };
+
+    // worldDist < 0 means "not known yet" - a rule that needs the distance lets
+    // the pawn through and is re-asked once the aim point exists.
+    inline bool A_FireFilterPass(int filter, void *pawn, float worldDist)
+    {
+        switch ((TriggerFilter)filter) {
+            case TriggerFilter::VisibleOnly:
+                return A_FireGameSaysVisible((Pawn *)pawn);
+            case TriggerFilter::Within25m:
+                return worldDist < 0.0f || worldDist <= 25.0f;
+            case TriggerFilter::Within50m:
+                return worldDist < 0.0f || worldDist <= 50.0f;
+            case TriggerFilter::Within100m:
+                return worldDist < 0.0f || worldDist <= 100.0f;
+            case TriggerFilter::All:
+            default:
+                return true;
+        }
+    }
+
     inline FireBlock A_FireScan(Pawn *localPawn, Weapon *weapon, TriggerTarget &out)
     {
         TriggerbotDiag &d = g_triggerDiag;
@@ -1803,6 +1872,7 @@ namespace NewFeatures
         d.candidates = 0;
         d.losChecked = 0;
         d.friendsInLine = 0;
+        d.filteredOut = 0;
         d.selfHitsSkipped = 0;
         d.triggerHitsSkipped = 0;
         d.occOverrides = 0;
@@ -1863,6 +1933,8 @@ namespace NewFeatures
         d.radiusPx = radius;
 
         const HitboxPriority want = (HitboxPriority)Config.NewFeaturesMenu.TriggerbotHitboxPriority;
+        // Read once per scan, not per candidate.
+        const int targetFilter = Config.NewFeaturesMenu.TriggerbotFilter;
         const float focalPx = A_FireFocalPx();
         d.focalPx = focalPx;
 
@@ -1881,7 +1953,11 @@ namespace NewFeatures
             if (symbolMissing && fn_PhysicsRaycastSegment == nullptr) {
                 d.rayUnknown = true;                        // no way at all to trace
             } else if (centred != nullptr && centred != localPawn &&
-                       !IsSameTeamAcceptBots(localPawn, centred) && A_FirePawnAlive(centred)) {
+                       !IsSameTeamAcceptBots(localPawn, centred) && A_FirePawnAlive(centred) &&
+                       A_FireFilterPass(targetFilter, centred, centreHitDist)) {
+                // A centre-ray pawn the filter refuses simply falls through to
+                // the zone scan below, which applies the same filter and does the
+                // counting.
                 // Best probe for the report: whichever of the three sits closest to
                 // the centre. The shot itself does not depend on it - the centre ray
                 // already proved visibility and ownership.
@@ -1950,6 +2026,12 @@ namespace NewFeatures
             if (p == localPawn) continue;                        // never shoot yourself
             if (sameTeamGate(p)) continue;                        // team id is the gate
             if (!A_FirePawnAlive(p)) continue;                    // dead / downed / still ragdolling
+            // The user's filter, first pass: a rule that needs no distance
+            // (VisibleOnly) drops this pawn before its three projections.
+            if (!A_FireFilterPass(targetFilter, p, -1.0f)) {
+                d.filteredOut++;
+                continue;
+            }
 
             // Walk the hitboxes in the user's order and stop at the first one that
             // is under the crosshair: that answers "which hitbox would this shot
@@ -1977,10 +2059,18 @@ namespace NewFeatures
             if (!ap.valid) continue;                              // nothing of this pawn is under the crosshair
             if (n >= MAX_CANDIDATES) continue;
 
+            // Second pass: the rules that only apply once the distance to the
+            // aim point is known.
+            const float candDist = Vector3::Distance(camPos, ap.pos);
+            if (!A_FireFilterPass(targetFilter, p, candDist)) {
+                d.filteredOut++;
+                continue;
+            }
+
             cands[n].pawn      = p;
             cands[n].aim       = ap;
             cands[n].pxOffset  = pxOffset;
-            cands[n].worldDist = Vector3::Distance(camPos, ap.pos);
+            cands[n].worldDist = candDist;
             cands[n].velocity  = GetPawnVelocity(p);
             n++;
         }
@@ -2278,24 +2368,42 @@ namespace NewFeatures
     inline void A_FireTick(void *tickInstance)
     {
         TriggerbotDiag &d = g_triggerDiag;
-        d.lastTickTime = A_FireNow();       // hook liveness (the menu's heartbeat row)
+        const double now = A_FireNow();
+        d.lastTickTime = now;               // hook liveness (the menu's heartbeat row)
 
-        Pawn *localPawn = GamePlay::get_LocalPawn();
+        // FAST OUT while the feature is off. A session with the triggerbot
+        // switched off used to pay a full native resolve (local pawn + held
+        // weapon) for every pawn and every weapon tick in the world - hundreds of
+        // calls per frame - only to reach the FeatureOff branch below. Nothing
+        // below can change while it is off, so the hooks return here; the reason
+        // is still refreshed at 10 Hz so the panel keeps showing a live verdict.
+        if (!Config.NewFeaturesMenu.Triggerbot &&
+            !g_afireHoldingFire && !g_testFireRequest) {
+            if (now - g_afireOffDiagStamp < 0.1) return;
+            g_afireOffDiagStamp = now;
+        }
+
+        Pawn *localPawn = A_FireLocalPawnFast();
         d.localPawn = (void *)localPawn;
 
-        // INSTANCE FILTER FIRST. When the hook passes an instance (Weapon::Tick)
-        // only the local player's HELD weapon may spend an evaluation: the game
-        // ticks every weapon in the world through that address, and each AI tick
-        // used to consume the 10 ms slot below before the instance was even
-        // looked at - which threw away the local player's own tick that frame.
+        // INSTANCE FILTER. When the hook passes an instance (Weapon::Tick) only
+        // the local player's HELD weapon may spend an evaluation: the game ticks
+        // every weapon in the world through that address, and each AI tick used
+        // to consume the slot below before the instance was even looked at -
+        // which threw away the local player's own tick that frame. The held
+        // weapon cannot change inside 50 ms, so every other weapon that ticks in
+        // that window is rejected from the cache, without touching the game.
         if (tickInstance != nullptr) {
+            if (now - g_afireHeldWeaponStamp < 0.05 &&
+                tickInstance != g_afireHeldWeaponCache)
+                return;                                     // cached: not our weapon
             Weapon *held = A_FireObjectAlive((void *)localPawn) ? localPawn->get_CurrentWeapon() : nullptr;
             if (!A_FireObjectAlive((void *)held) || tickInstance != (void *)held)
                 return;
+            g_afireHeldWeaponCache = (void *)held;
+            g_afireHeldWeaponStamp = now;
             d.weaponHeldTicks++;
         }
-
-        const double now = d.lastTickTime;
         // ONE scan per frame, not one per heartbeat. Three hooks reach this
         // point for the local player inside the SAME frame - base Pawn::Tick,
         // the concrete pawn override (which usually chains into the base) and
@@ -2421,6 +2529,12 @@ namespace NewFeatures
         g_afireLastEvalTime  = -1000.0;
         g_afireInTick        = false;
         g_afireLosOk         = false;
+        // A new match means new pawn/weapon objects: drop the cached identities
+        // instead of waiting out their 50 ms window.
+        g_afireLocalPawnCache     = nullptr;
+        g_afireLocalPawnCacheTime = -1000.0;
+        g_afireHeldWeaponCache    = nullptr;
+        g_afireHeldWeaponStamp    = -1000.0;
     }
 
     // ---- Heartbeats -------------------------------------------------------
@@ -2433,7 +2547,10 @@ namespace NewFeatures
     {
         TriggerbotDiag &d = g_triggerDiag;
         d.pawnTicks++;
-        if (GamePlay::get_LocalPawn() == (Pawn *)pawnInstance) {
+        // Cached local pawn: this hook runs once per pawn in the world, and each
+        // of those used to cost a native GamePlay::get_LocalPawn() call.
+        if (A_FireLocalPawnFast() == (Pawn *)pawnInstance) {
+            d.localPawn = pawnInstance;
             d.pawnLocalTicks++;
             A_FireTick(nullptr);        // the local player's own pawn ticked
         }

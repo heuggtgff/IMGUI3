@@ -217,6 +217,10 @@ struct KillDecorationDiag {
     int effectGroupHookCalls = 0;
     int effectGroupHookHits = 0;
     int lastAttrKey = 0;        // last m_BlueprintWeaponId asked about
+    // InventoryInfo writes (the copy the HUD actually reads): how many times the
+    // local weapon's record had its kill icon / level filled in.
+    int inventoryKillIconWrites = 0;
+    int inventoryLevelWrites = 0;
 };
 KillDecorationDiag g_killDecorationDiag;
 
@@ -637,6 +641,66 @@ void LoadKillIcons() {
     loadKillIcons = true;
 }
 
+// ── The InventoryInfo the HUD reads (local player only) ─────────────────────
+//
+// `public class Weapon : Inventory` (dump 737390, TypeDefIndex 16255), and
+// Inventory carries the record the in-match pipeline reads its kill decorations
+// from: `protected InventoryInfo m_InventoryInfo; // 0x98` (dump 761114, with
+// get_InventoryInfo 0xC362DCC / SetInventoryInfo 0xC362DD4). InventoryInfo
+// itself (dump 1088476, TypeDefIndex 23000, GameEngine) is where the kill feed
+// and the death effect look for them:
+//     CrossHairID 0x30, SkinID 0x34, BluePrintID 0x38, FireEffectGroupID 0x3C,
+//     KillEffectGroupID 0x40, KillBoard 0x48, KillIcon 0x4C, MythicArmorID 0x50,
+//     MythicSigID 0x54, KillBroadcast 0x58, KillEffectLevel 0x5C
+//
+// The InventoryUtil / WeaponAttrData getter hooks above only change the local
+// weapon's kill icon if the game really calls them for the local player AND
+// accepts the id they return (an inlined getter cannot be hooked at all - see
+// the install-time flag in the Camo tab). Writing the same values into this
+// record covers both cases: it is the very object the HUD already holds, so the
+// icon shows whether or not the getter path ran. Only the local player's own
+// held weapon is ever touched, and only when the applied skin map has a value
+// that differs from what the record already says (no per-frame writes).
+inline void KillDecoration_ApplyLocalInventoryInfo()
+{
+    if (activeKillIcons.empty()) return;   // nothing applied -> nothing to write
+
+    Pawn *localPawn = GamePlay::get_LocalPawn();
+    if (!localPawn || !Tools::IsPtrValid((void *)localPawn)) return;
+
+    Weapon *held = localPawn->get_CurrentWeapon();
+    if (!held || !Tools::IsPtrValid((void *)held)) return;
+
+    // Inventory.m_InventoryInfo - inherited by Weapon, so this is the live
+    // record the game hands to the HUD.
+    void *info = *(void **)((uintptr_t)held + 0x98);
+    if (!info || !Tools::IsPtrValid(info)) return;
+
+    const int weaponID = held->get_WeaponID();
+    if (weaponID <= 0) return;
+
+    auto iconIt = activeKillIcons.find(weaponID);
+    const int killIcon = (iconIt != activeKillIcons.end()) ? iconIt->second : 0;
+    if (killIcon <= 0) return;
+
+    // Only the kill icon and the level are written. KillEffectGroupID (0x40) is
+    // deliberately left alone: kill effects already work through the getter
+    // hooks, and this map holds an effect id / asset id depending on which
+    // source won at load time - writing that into the live record could replace
+    // a working effect with the wrong id, which is a far worse outcome than a
+    // missing icon.
+    auto *p = (uint8_t *)info;
+    if (killIcon > 0 && *(int *)(p + 0x4C) != killIcon) {
+        *(int *)(p + 0x4C) = killIcon;
+        g_killDecorationDiag.inventoryKillIconWrites++;
+    }
+    // Level 5 is what the mythic tier keys on (icon, killcam, death effect).
+    if (*(uint8_t *)(p + 0x5C) != 5) {
+        *(uint8_t *)(p + 0x5C) = 5;
+        g_killDecorationDiag.inventoryLevelWrites++;
+    }
+}
+
 // ── WeaponAttrData / Weapon: the LOCAL player's own weapon ───────────────────
 // The four InventoryUtil overloads above resolve decorations for weapon data the
 // client only knows through SyncWeaponExtraInfo. The local player's own weapon is
@@ -750,6 +814,8 @@ void LoadCharacterSkins() {
     // BRDeadboxSkin or a RoleSkin watch config - used to keep this whole
     // function early-returning forever: the characters tab stayed empty while
     // the weapon tab loaded, which is the "character skins not loading" report.
+    const bool charTiersReady = !charModels.empty() && !itemRes.empty() && !roleConfs.empty();
+
     if (!loadWatch && !roleSkins.empty()) {
         watch.clear();
     }
@@ -758,8 +824,7 @@ void LoadCharacterSkins() {
         deadboxF.clear();
     }
 
-    if (!loadCharacter && !charModels.empty() &&
-        !itemRes.empty() && !roleConfs.empty()) {
+    if (!loadCharacter && charTiersReady) {
         charData.clear();
         g_targetCharacters.clear();
     }
@@ -898,8 +963,7 @@ void LoadCharacterSkins() {
     if (!deadboxSkins.empty())
         loadDeadbox = true;    // every BRDeadboxSkin config was walked once
 
-    if (!loadCharacter && !charModels.empty() &&
-        !itemRes.empty() && !roleConfs.empty())
+    if (!loadCharacter && charTiersReady)
     for (auto X0 : charModels) {
 
         if (!X0 || !Tools::IsPtrValid(X0))
@@ -955,7 +1019,11 @@ void LoadCharacterSkins() {
                 if (!Z0 || !Tools::IsPtrValid(Z0))
                     continue;
 
-                auto *Z1 = (RoleConfFields *)((uintptr_t)Z0 + 0x18);
+                // RoleConfConfig's first field is at 0x10 (dump 818159). Casting
+                // at +0x18 made every read land 8 bytes high, so the ID this
+                // join matches on was KeepInCatalog (0x3C) instead of ID (0x34)
+                // and NO character ever matched - the empty Character tab.
+                auto *Z1 = (RoleConfFields *)((uintptr_t)Z0 + 0x10);
 
                 if (!Tools::IsPtrValid(Z1))
                     continue;
@@ -985,7 +1053,9 @@ void LoadCharacterSkins() {
                     if (!RP || !Tools::IsPtrValid(RP))
                         continue;
 
-                    auto *rpF = (RolePackFields *)((uintptr_t)RP + 0x18);
+                    // RolePackConfConfig's first field is at 0x10 (dump 818902),
+                    // and the struct now follows the live (alphabetical) order.
+                    auto *rpF = (RolePackFields *)((uintptr_t)RP + 0x10);
 
                     if (!Tools::IsPtrValid(rpF))
                         continue;
@@ -1122,8 +1192,12 @@ void LoadCharacterSkins() {
         }
     }
 
-    if (!loadCharacter && !charModels.empty() &&
-        !itemRes.empty() && !roleConfs.empty())
+    // Latch only once the join actually had all three of its inputs. Latching
+    // unconditionally marked the character list "loaded" on the very first poll
+    // (1.5 s after the config tables start filling), after which the early
+    // return at the top of this function kept it empty for the whole session -
+    // the second half of "character skins still isn't loading".
+    if (charTiersReady)
         loadCharacter = true;   // every CharacterModel config was walked once
 
     if (!g_targetCharacters.empty()) {
@@ -1164,8 +1238,6 @@ void LoadCharacterSkins() {
             }
         }
     }
-
-    loadCharacter = true;
 }
 
 void LoadWeaponSkins() {

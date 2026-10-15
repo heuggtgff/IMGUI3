@@ -53,6 +53,15 @@
 // ---------------------------------------------------------------------------
 bool Tools::IsPtrValid(void *addr) { return addr != nullptr; }
 
+// __android_log_print is what LOGI() expands to. The checks below now call
+// A_FireTick(), whose fire path contains a LOGI - the symbol has to exist even
+// though the test never reaches that line.
+extern "C" int __android_log_print(int prio, const char *tag, const char *fmt, ...)
+{
+    (void)prio; (void)tag; (void)fmt;
+    return 0;
+}
+
 // Substrate's hook entry (pulled in by Includes/Macros.h's non-inline hook()
 // helper) - the test installs no hooks, but the symbol has to exist to link.
 void MSHookFunction(void *symbol, void *replace, void **result)
@@ -664,6 +673,164 @@ static void testScan()
     g_w2sImpl = nullptr;
 }
 
+// ---------------------------------------------------------------------------
+// 6. Target filter (the menu's Filter dropdown)
+// ---------------------------------------------------------------------------
+static void testFilter()
+{
+    Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+
+    // --- F1: VisibleOnly, and the GAME says he is occluded -> refused -------
+    resetWorld();
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sOnCrosshair;
+    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::VisibleOnly;
+    g_lastOccVisible = 0; g_recentlyRendered = 0;
+    g_centreHits = { {0.02f, &g_selfCol} };
+    g_losHits    = { {3.3f, &g_targetCol} };
+    {
+        TriggerTarget out{};
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone, "F1 VisibleOnly: game reports him occluded -> refused");
+        CHECK(g_triggerDiag.filteredOut == 1, "F1 the panel counts the filtered pawn");
+        CHECK(g_rayAllCalls == 1, "F1 dropped before any LOS ray (centre ray only)");
+    }
+
+    // --- F2: same, but the game reports him visible -> FIRES ---------------
+    resetWorld();
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sOnCrosshair;
+    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::VisibleOnly;
+    g_lastOccVisible = 1; g_recentlyRendered = 1;
+    g_centreHits = { {0.02f, &g_selfCol} };
+    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
+    {
+        TriggerTarget out{};
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::Fired, "F2 VisibleOnly + visibly drawn pawn -> fires");
+        CHECK(g_triggerDiag.filteredOut == 0, "F2 nothing filtered");
+    }
+
+    // --- F3: a range filter inside its own limit -> fires ------------------
+    resetWorld();
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sOnCrosshair;
+    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::Within25m;
+    g_centreHits = { {0.02f, &g_selfCol} };
+    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
+    {
+        TriggerTarget out{};
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::Fired, "F3 Within 25 m: a 3.3 m pawn is inside it");
+        CHECK(g_triggerDiag.filteredOut == 0, "F3 in range -> not filtered");
+    }
+
+    // --- F4: the same enemy at 40 m -> refused by the range filter ---------
+    resetWorld();
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sOnCrosshair;
+    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::Within25m;
+    objPos(g_targetHead, 0.5f, 1.7f, 40.0f);
+    objPos(g_targetMesh, 0.5f, 0.0f, 40.0f);
+    g_centreHits = { {0.02f, &g_selfCol} };
+    g_losHits    = { {0.0f, &g_selfCol}, {38.0f, &g_targetCol} };
+    {
+        TriggerTarget out{};
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone, "F4 Within 25 m: a 40 m pawn is out of range");
+        CHECK(g_triggerDiag.filteredOut == 1, "F4 counted as filtered, not as a wall");
+        CHECK(g_triggerDiag.losBlocked == 0, "F4 the range filter never reports 'no line of sight'");
+    }
+
+    // --- F5: All (the default) filters nothing -----------------------------
+    resetWorld();
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sOnCrosshair;
+    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::All;
+    g_centreHits = { {0.02f, &g_selfCol} };
+    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
+    {
+        TriggerTarget out{};
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::Fired, "F5 Filter=All is the old behaviour");
+        CHECK(g_triggerDiag.filteredOut == 0, "F5 nothing filtered");
+    }
+
+    Config.NewFeaturesMenu.TriggerbotFilter = 0;
+    g_w2sImpl = nullptr;
+}
+
+// ---------------------------------------------------------------------------
+// 7. Tick-hook cost: the hooks fire for every pawn and weapon in the world
+// ---------------------------------------------------------------------------
+static int g_localPawnLookups = 0;
+static Pawn *fake_localPawnCounted()
+{
+    g_localPawnLookups++;
+    return (Pawn *)g_localPawn.b;
+}
+
+static void resetLocalPawnCache()
+{
+    g_afireLocalPawnCache = nullptr;
+    g_afireLocalPawnCacheTime = -1000.0;
+    g_afireHeldWeaponCache = nullptr;
+    g_afireHeldWeaponStamp = -1000.0;
+    g_afireOffDiagStamp = -1000.0;
+    g_afireLastEvalTime = -1000.0;
+    g_afireHoldingFire = false;
+    g_afireFiringOn = nullptr;
+    g_afireTargetPawn = nullptr;
+}
+
+static void testTickHookCost()
+{
+    // GamePlay::get_LocalPawn() is (m_unity + api12) - count the calls.
+    api12 = (uintptr_t)&fake_localPawnCounted;
+
+    // --- H0: control - the raw getter really is called once per use --------
+    // Without this, "<= 2 lookups for 200 calls" could just be a counter that
+    // never counts.
+    resetLocalPawnCache();
+    g_localPawnLookups = 0;
+    for (int i = 0; i < 200; i++) { Pawn *p = GamePlay::get_LocalPawn(); (void)p; }
+    CHECK(g_localPawnLookups == 200,
+          "H0 control: 200 raw get_LocalPawn() calls are 200 native calls");
+
+    // --- H1: the cached local pawn ----------------------------------------
+    resetLocalPawnCache();
+    g_localPawnLookups = 0;
+    for (int i = 0; i < 200; i++) { Pawn *p = A_FireLocalPawnFast(); (void)p; }
+    CHECK(g_localPawnLookups <= 2,
+          "H1 200 cached local-pawn reads cost <= 2 native GamePlay::get_LocalPawn calls");
+
+    // --- H2: pawn ticks of OTHER pawns ------------------------------------
+    resetLocalPawnCache();
+    g_localPawnLookups = 0;
+    g_triggerDiag = TriggerbotDiag{};
+    for (int i = 0; i < 200; i++) A_FirePawnTicked(&g_otherPawn);
+    CHECK(g_localPawnLookups <= 2,
+          "H2 200 foreign pawn ticks cost <= 2 native lookups (was one each)");
+    CHECK(g_triggerDiag.pawnLocalTicks == 0, "H2 no foreign tick was mistaken for ours");
+
+    // --- H3: the feature is OFF -------------------------------------------
+    Config.NewFeaturesMenu.Triggerbot = false;
+    resetLocalPawnCache();
+    g_localPawnLookups = 0;
+    g_triggerDiag = TriggerbotDiag{};
+    for (int i = 0; i < 200; i++) A_FireTick(nullptr);
+    CHECK(g_localPawnLookups <= 1,
+          "H3 200 hook calls with the triggerbot OFF cost <= 1 native lookup");
+    CHECK(g_triggerDiag.blockCount[(int)FireBlock::FeatureOff] >= 1,
+          "H3 the panel still receives a live 'triggerbot off' verdict");
+    CHECK(g_triggerDiag.lastTickTime > 0.0, "H3 the heartbeat stays alive");
+}
+
 int main()
 {
     installFns();
@@ -673,6 +840,8 @@ int main()
     testArrayGuards();
     testCentreRay();
     testScan();
+    testFilter();
+    testTickHookCost();
 
     if (g_failures == 0) {
         printf("\nOK: all LOS gate checks passed\n");

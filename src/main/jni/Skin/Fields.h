@@ -193,97 +193,123 @@ struct CharacterModelFields
 };
 extern CharacterModelFields *characterfields;
 
+// RolePackConfConfig (dump 818902, TypeDefIndex 17228). The live class is
+// ALPHABETICALLY ordered, and the struct has to follow that order exactly:
+// member offsets are what the compiler produces, so a wrong order (or a missing
+// field) silently shifts every member after it. Cast base is 0x10 (the class'
+// first field), so the comments below are the declared offsets inside the
+// struct while the trailing number is the live offset in the game object.
 struct RolePackFields
 {
-    int mMatchRoomEasterEggType;           // 0x10
-    uint mMatchRoomEasterEggCharacterID;   // 0x14
-    String *mMatchRoomEasterEggActionName; // 0x18
-    bool EntryDefaultAppearance;           // 0x20
-    bool UseVFWFeature;                    // 0x21
-    int AirItem1;                          // 0x24
-    int AnimationWhenSell;                 // 0x28
-    int CabinIndivID;                      // 0x2C
-    int DeadBoxID;                         // 0x30
-    int DynamicRoomAssetID;                // 0x34
-    int EntryAnimID;                       // 0x38
-    int EntryUIEffectAssetID;              // 0x3C
-    int GestureId;                         // 0x40
-    int HandEffectUI;                      // 0x48
-    int KillStreakSkinID;                  // 0x48
-    int LoadingFrame;                      // 0x4C
-    int LobbySceneType;                    // 0x50
-    int MVPIndivID;                        // 0x54
-    int MatchRoomSort;                     // 0x58
-    int OpenSceneIndivID;                  // 0x5C
-    int PendantShowID;                     // 0x60
-    int PetID;                             // 0x64
-    int PetSwitchEffectAssetID;            // 0x68
-    uint RolePackID;                       // 0x6C
-    int SkillSkinID;                       // 0x70
-    int SkillSkinUI;                       // 0x74
-    int SpecialSceneFrameGroupAssetID;     // 0x7C
-    int VTOLShowAssetID;                   // 0x80
-    String *AirPoseBR;                     // 0x80
-    String *EntryAnim;                     // 0x88
-    String *EntryIdleAnim;                 // 0x90
-    void *EntryIdleItems;                  // 0xC8
-    void *EntryItems;                      // 0xC0
-    void *EntryItemsAnim;                  // 0xC8
-    void *EntryItemsIdleAnim;              // 0xC0
-    String *EntryUIAnimationStateName;     // 0xC8
+    int mMatchRoomEasterEggType;           // 0x10 @0x10
+    uint mMatchRoomEasterEggCharacterID;   // 0x14 @0x14
+    String *mMatchRoomEasterEggActionName; // 0x18 @0x18
+    bool DisableCustomize;                 // 0x20 @0x20
+    bool EntryDefaultAppearance;           // 0x21 @0x21
+    bool SkipWinnerCircleAnimation;        // 0x22 @0x22
+    bool UseDynamicLobbyScene;             // 0x23 @0x23
+    bool UseVFWFeature;                    // 0x24 @0x24
+    int AirItem1;                          // 0x28 @0x28
+    int AnimationWhenSell;                 // 0x2C @0x2C
+    int CabinIndivID;                      // 0x30 @0x30
+    int DeadBoxID;                         // 0x34 @0x34
+    int DynamicRoomAssetID;                // 0x38 @0x38
+    int DynamicRoomUnlockItemID;           // 0x3C @0x3C
+    int EntryAnimID;                       // 0x40 @0x40
+    int EntryUIEffectAssetID;              // 0x44 @0x44
+    int EntryVideoAnimID;                  // 0x48 @0x48
+    float EntryVideoPlayTime;              // 0x4C @0x4C
+    int EntryVideoTagAnimID;               // 0x50 @0x50
+    int GestureId;                         // 0x54 @0x54
+    int HandEffectUI;                      // 0x58 @0x58
+    int HomeEasterEggAssetID;              // 0x5C @0x5C
+    float HomeEasterEggCoolingTime;        // 0x60 @0x60
+    int HomeEasterEggType;                 // 0x64 @0x64
+    int KillStreakSkinID;                  // 0x68 @0x68
+    int LoadingFrame;                      // 0x6C @0x6C
+    int LobbySceneType;                    // 0x70 @0x70
+    int MVPIndivID;                        // 0x74 @0x74
+    int MatchRoomSort;                     // 0x78 @0x78
+    int OpenSceneIndivID;                  // 0x7C @0x7C
+    int PendantShowID;                     // 0x80 @0x80
+    int PetID;                             // 0x84 @0x84
+    int PetSwitchEffectAssetID;            // 0x88 @0x88
+    int RoleFeatureType;                   // 0x8C @0x8C
+    uint RolePackID;                       // 0x90 @0x90
+    int SkillSkinID;                       // 0x94 @0x94
+    int SkillSkinUI;                       // 0x98 @0x98
+    int SpecialSceneFrameGroupAssetID;     // 0x9C @0x9C
+    uint TODSceneID;                       // 0xA0 @0xA0
+    int VTOLShowAssetID;                   // 0xA4 @0xA4
+    String *AirPoseBR;                     // 0xA8 @0xA8
+    String *EntryAnim;                     // 0xB0 @0xB0
+    String *EntryIdleAnim;                 // 0xB8 @0xB8
+    void *EntryIdleItems;                  // 0xC0 @0xC0
+    void *EntryItems;                      // 0xC8 @0xC8
+    void *EntryItemsAnim;                  // 0xD0 @0xD0
+    void *EntryItemsIdleAnim;              // 0xD8 @0xD8
+    String *EntryUIAnimationStateName;     // 0xE0 @0xE0
 };
 extern RolePackFields *packfields;
 
+// RoleConfConfig (dump 818159, TypeDefIndex 17215). Its field offsets are NOT
+// masked in the dump and are reproduced here one for one: the byte cluster
+// (ArchiveSwitch..ShowRare) is unbroken, BlockAppearance is a 4-byte int (the
+// old `bool BlockBack` was not in the class at all and pushed ColorID from
+// 0x22 onto 0x23), and every string slot exists, so LOCID_Name really lands on
+// 0xA0 instead of 0x98. The character list's join reads Z1->ID, so a wrong
+// offset here emptied the whole Character tab.
 struct RoleConfFields
 {
-    uint BaseCharacterID;           // 0x10
-    uint roleLeftArmID;             // 0x14
-    uint roleFinalSuitID;           // 0x18
-    uint roleBasicHologramID;       // 0x1C
-    uint8_t ArchiveSwitch;          // 0x20
-    uint8_t ArmorType;              // 0x21
-    bool BlockBack;                 // 0x22
-    uint8_t ColorID;                // 0x23
-    uint8_t ColorSubID;             // 0x24
-    uint8_t DefaultPerk_1;          // 0x25
-    uint8_t DefaultPerk_2;          // 0x26
-    uint8_t DefaultPerk_3;          // 0x21
-    bool DefaultShow;               // 0x28
-    uint8_t DefaultSkill_1;         // 0x29
-    bool ExternalUnVisible;         // 0x2A
-    bool IsVFW;                     // 0x2B
-    uint8_t Loadout_Magnifier_Flag; // 0x2C
-    uint8_t RoleLvGroupID;          // 0x2D
-    bool ShowInBag;                 // 0x1C
-    uint8_t ShowOrder;              // 0x1C
-    bool ShowRare;                  // 0x30
-    uint ID;                        // 0x34
-    int JetPackInfoID;              // 0x38
-    int KeepInCatalog;              // 0x3C
-    float RTPCMaxValue;             // 0x40
-    int RolePackID;                 // 0x48
-    void *AudioSwitch;              // 0x48
-    void *BRBankNameEX;             // 0x50
-    void *BasicAudioBank;           // 0x58
-    void *BasicAudioBank2;          // 0x60
-    void *BasicAudioBank3;          // 0x68
-    void *DefaultAudioBank;         // 0x70
-    void *DefaultAudioBank2;        // 0x7C
-    void *DefaultAudioEventEx;      // 0x80
-    void *FoleyAudioBank;           // 0x88
-    void *FoleyAudioNameEx;         // 0x90
-    void *LOCID_Desc;               // 0xC8
-    void *LOCID_Name;               // 0xC0
-    void *LitePackageKeyName;       // 0xC8
-    void *MPBankNameEx;             // 0xC0
-    void *PVEBankNameEX;            // 0xC8
-    void *RTPCName;                 // 0xC0
-    void *RoleSkinBox;              // 0xC8
-    void *SpecialAudioBank;         // 0xD0
-    void *SpecialAudioBank2;        // 0xD8
-    void *SpecialAudioEventEx;      // 0xE0
-    void *SpecialTips;              // 0xE8
-    uint64_t WinnerCircle;          // 0xF0
+    uint BaseCharacterID;           // 0x10 @0x10
+    uint roleLeftArmID;             // 0x14 @0x14
+    uint roleFinalSuitID;           // 0x18 @0x18
+    uint roleBasicHologramID;       // 0x1C @0x1C
+    uint8_t ArchiveSwitch;          // 0x20 @0x20
+    uint8_t ArmorType;              // 0x21 @0x21
+    uint8_t ColorID;                // 0x22 @0x22
+    uint8_t ColorSubID;             // 0x23 @0x23
+    uint8_t DefaultPerk_1;          // 0x24 @0x24
+    uint8_t DefaultPerk_2;          // 0x25 @0x25
+    uint8_t DefaultPerk_3;          // 0x26 @0x26
+    bool DefaultShow;               // 0x27 @0x27
+    uint8_t DefaultSkill_1;         // 0x28 @0x28
+    bool ExternalUnVisible;         // 0x29 @0x29
+    bool IsVFW;                     // 0x2A @0x2A
+    uint8_t Loadout_Magnifier_Flag; // 0x2B @0x2B
+    uint8_t RoleLvGroupID;          // 0x2C @0x2C
+    bool ShowInBag;                 // 0x2D @0x2D
+    uint8_t ShowOrder;              // 0x2E @0x2E
+    bool ShowRare;                  // 0x2F @0x2F
+    int BlockAppearance;            // 0x30 @0x30
+    uint ID;                        // 0x34 @0x34
+    int JetPackInfoID;              // 0x38 @0x38
+    int KeepInCatalog;              // 0x3C @0x3C
+    float RTPCMaxValue;             // 0x40 @0x40
+    int RolePackID;                 // 0x44 @0x44
+    void *AudioSwitch;              // 0x48 @0x48
+    void *BRBankNameEX;             // 0x50 @0x50
+    void *BasicAudioBank;           // 0x58 @0x58
+    void *BasicAudioBank2;          // 0x60 @0x60
+    void *BasicAudioBank3;          // 0x68 @0x68
+    void *DefaultAudioBank;         // 0x70 @0x70
+    void *DefaultAudioBank2;        // 0x78 @0x78
+    void *DefaultAudioEventEx;      // 0x80 @0x80
+    void *FoleyAudioBank;           // 0x88 @0x88
+    void *FoleyAudioNameEx;         // 0x90 @0x90
+    void *LOCID_Desc;               // 0x98 @0x98
+    void *LOCID_Name;               // 0xA0 @0xA0
+    void *LitePackageKeyName;       // 0xA8 @0xA8
+    void *MPBankNameEx;             // 0xB0 @0xB0
+    void *PVEBankNameEX;            // 0xB8 @0xB8
+    void *RTPCName;                 // 0xC0 @0xC0
+    void *RoleSkinBox;              // 0xC8 @0xC8
+    void *SpecialAudioBank;         // 0xD0 @0xD0
+    void *SpecialAudioBank2;        // 0xD8 @0xD8
+    void *SpecialAudioEventEx;      // 0xE0 @0xE0
+    void *SpecialTips;              // 0xE8 @0xE8
+    void *SupportVoiceTypes;        // 0xF0 @0xF0
+    uint64_t WinnerCircle;          // 0xF8 @0xF8
 };
 extern RoleConfFields *roleFields;
 

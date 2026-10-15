@@ -432,26 +432,18 @@ inline void RenderSkinCategoryContent(int categoryIndex, bool drawSubTabs = fals
     }
 
     // ---- Rarity filter (applies to every skin sub-tab; tag-based) -----------
+    // Drawn with the menu's own combo widget. The stock ImGui::BeginCombo drew
+    // its frame in the default (dark, transparent-over-black) colours this fork
+    // themes away, so on device the row read as a bare "Filter:" label with an
+    // invisible control next to it. custom::Combo is the same control every other
+    // dropdown in this menu uses (Mode / Hitbox / Box Type) and paints its own
+    // label, field, arrow and popup.
     static int rarityFilter = 0;               // 0 = All
     {
         static const char* rarityNames[] = {"All", "Mythic", "Legendary", "Epic",
                                             "Rare", "Uncommon", "Common"};
-        ImGui::TextColored(c::text::text_active, "Filter:");
-        ImGui::SameLine(0.0f, 10.0f);
-        ImGui::PushItemWidth(180.0f);
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 8));
-        if (ImGui::BeginCombo("##RarityFilter", rarityNames[rarityFilter])) {
-            for (int ri = 0; ri < IM_ARRAYSIZE(rarityNames); ri++) {
-                const bool sel = (rarityFilter == ri);
-                if (ImGui::Selectable(rarityNames[ri], sel))
-                    rarityFilter = ri;
-                if (sel)
-                    ImGui::SetItemDefaultFocus();
-            }
-            ImGui::EndCombo();
-        }
-        ImGui::PopStyleVar();
-        ImGui::PopItemWidth();
+        custom::Combo("Filter", &rarityFilter, rarityNames, IM_ARRAYSIZE(rarityNames),
+                      IM_ARRAYSIZE(rarityNames));
     }
 
     custom::Separator_line();
@@ -1088,6 +1080,13 @@ case 3:
                 g_killEffectItemHookInstalled ? "item " : "-item ",
                 g_killEffectGroupHookInstalled ? "grp" : "-grp",
                 g_killDecorationDiag.lastAttrKey, (int)itemData.size());
+            // InventoryInfo writes: the record the kill feed reads, filled from
+            // the local player's held weapon (Weapon : Inventory, info @0x98).
+            // Non-zero here means the mythic kill icon reached the HUD even if
+            // the getter hooks were never called at all (attr=0/0).
+            ImGui::TextColored(dim, "InventoryInfo icon=%d lvl=%d",
+                g_killDecorationDiag.inventoryKillIconWrites,
+                g_killDecorationDiag.inventoryLevelWrites);
         }
         ImGui::Dummy(ImVec2(0, 6));
 

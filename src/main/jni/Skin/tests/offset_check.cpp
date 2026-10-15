@@ -101,6 +101,31 @@ static void check_static()
     static_assert(offsetof(CharacterModelFields, ItemID) + 0x10 == 0x78, "");
     static_assert(offsetof(CharacterModelFields, LitePackDefault) + 0x10 == 0x80, "");
 
+    // RoleConfConfig: first field BaseCharacterID @0x10, loader +0x10 (dump
+    // 818159 - its offsets are NOT masked in the dump, they are copied one for
+    // one). ID is the key the character list matches on; the byte cluster and
+    // the string tail are what the apply path writes.
+    static_assert(offsetof(RoleConfFields, ColorID) + 0x10 == 0x22, "");
+    static_assert(offsetof(RoleConfFields, ColorSubID) + 0x10 == 0x23, "");
+    static_assert(offsetof(RoleConfFields, RoleLvGroupID) + 0x10 == 0x2C, "");
+    static_assert(offsetof(RoleConfFields, ShowRare) + 0x10 == 0x2F, "");
+    static_assert(offsetof(RoleConfFields, BlockAppearance) + 0x10 == 0x30, "");
+    static_assert(offsetof(RoleConfFields, ID) + 0x10 == 0x34, "");
+    static_assert(offsetof(RoleConfFields, RolePackID) + 0x10 == 0x44, "");
+    static_assert(offsetof(RoleConfFields, LOCID_Name) + 0x10 == 0xA0, "");
+    static_assert(offsetof(RoleConfFields, WinnerCircle) + 0x10 == 0xF8, "");
+
+    // RolePackConfConfig: first field @0x10, loader +0x10 (dump 818902). The live
+    // class is alphabetically ordered and this declaration follows it exactly.
+    static_assert(offsetof(RolePackFields, EntryAnimID) + 0x10 == 0x40, "");
+    static_assert(offsetof(RolePackFields, GestureId) + 0x10 == 0x54, "");
+    static_assert(offsetof(RolePackFields, HandEffectUI) + 0x10 == 0x58, "");
+    static_assert(offsetof(RolePackFields, KillStreakSkinID) + 0x10 == 0x68, "");
+    static_assert(offsetof(RolePackFields, LoadingFrame) + 0x10 == 0x6C, "");
+    static_assert(offsetof(RolePackFields, LobbySceneType) + 0x10 == 0x70, "");
+    static_assert(offsetof(RolePackFields, RolePackID) + 0x10 == 0x90, "");
+    static_assert(offsetof(RolePackFields, AirPoseBR) + 0x10 == 0xA8, "");
+
     // MythicSightConfig: first field ShowInBag @0x10, loader +0x10
     static_assert(offsetof(MythicSightFields, ShowInBag) + 0x10 == 0x10, "");
     static_assert(offsetof(MythicSightFields, AssetID) + 0x10 == 0x14, "");
@@ -293,6 +318,62 @@ static void check_runtime()
         auto *c = (CharacterModelFields *)(g_buf + 0x10);
         CHECK_EQ((int)c->ItemID, 0x404001, "CharacterModelFields.ItemID @0x78");
         CHECK_EQ(c->BRBagModel, 0x404002, "CharacterModelFields.BRBagModel @0x18");
+    }
+
+    // --- RoleConfConfig: the CHARACTER join key -----------------------------
+    // The list is built by matching RoleConfConfig.ID against
+    // ItemResourceConfig.ID; with the pre-fix +0x18 base that read was
+    // KeepInCatalog (0x3C), so no character ever matched and the tab stayed
+    // empty however long the loader polled.
+    poke_int(0x22, 7);          // ColorID
+    poke_int(0x23, 8);          // ColorSubID
+    poke_int(0x2C, 9);          // RoleLvGroupID
+    poke_int(0x2F, 1);          // ShowRare
+    poke_int(0x34, 0x505001);   // ID          <- the join key
+    poke_int(0x44, 0x505002);   // RolePackID  <- the RolePackConf join key
+    poke_int(0x3C, 0x505009);   // KeepInCatalog: what the pre-fix base read as ID
+    poke_int(0xA0, 0x50500A);   // LOCID_Name
+    {
+        auto *r = (RoleConfFields *)(g_buf + 0x10);
+        CHECK_EQ((int)r->ColorID, 7, "RoleConfFields.ColorID @0x22");
+        CHECK_EQ((int)r->ColorSubID, 8, "RoleConfFields.ColorSubID @0x23");
+        CHECK_EQ((int)r->RoleLvGroupID, 9, "RoleConfFields.RoleLvGroupID @0x2C");
+        CHECK_EQ(r->ShowRare ? 1 : 0, 1, "RoleConfFields.ShowRare @0x2F");
+        CHECK_EQ((int)r->ID, 0x505001, "RoleConfFields.ID @0x34 (character join key)");
+        CHECK_EQ(r->RolePackID, 0x505002, "RoleConfFields.RolePackID @0x44");
+        CHECK_EQ((int)(uintptr_t)r->LOCID_Name, 0x50500A, "RoleConfFields.LOCID_Name @0xA0");
+
+        auto *old = (RoleConfFields *)(g_buf + 0x18);   // pre-fix base
+        CHECK_EQ((int)old->ID, 0x505009,
+                 "pre-fix +0x18 base read KeepInCatalog as ID -> empty Character tab");
+        // The pre-fix base's byte cluster lands in the middle of the flags, so
+        // it cannot be the real ColorID whatever the neighbour bytes hold.
+        CHECK_EQ(old->ColorID == 7 ? 0 : 1, 1,
+                 "pre-fix +0x18 base never landed on ColorID");
+    }
+
+    // --- RolePackConfConfig: the pack fields the apply path writes ----------
+    poke_int(0x40, 0x601001);   // EntryAnimID
+    poke_int(0x54, 0x601002);   // GestureId
+    poke_int(0x58, 0x601003);   // HandEffectUI
+    poke_int(0x68, 0x601004);   // KillStreakSkinID
+    poke_int(0x6C, 0x601005);   // LoadingFrame
+    poke_int(0x70, 0x601006);   // LobbySceneType
+    poke_int(0x90, 0x601007);   // RolePackID
+    poke_int(0x98, 0x601009);   // the neighbour the pre-fix base read as RolePackID
+    {
+        auto *k = (RolePackFields *)(g_buf + 0x10);
+        CHECK_EQ(k->EntryAnimID, 0x601001, "RolePackFields.EntryAnimID @0x40");
+        CHECK_EQ(k->GestureId, 0x601002, "RolePackFields.GestureId @0x54");
+        CHECK_EQ(k->HandEffectUI, 0x601003, "RolePackFields.HandEffectUI @0x58");
+        CHECK_EQ(k->KillStreakSkinID, 0x601004, "RolePackFields.KillStreakSkinID @0x68");
+        CHECK_EQ(k->LoadingFrame, 0x601005, "RolePackFields.LoadingFrame @0x6C");
+        CHECK_EQ(k->LobbySceneType, 0x601006, "RolePackFields.LobbySceneType @0x70");
+        CHECK_EQ((int)k->RolePackID, 0x601007, "RolePackFields.RolePackID @0x90 (pack join key)");
+
+        auto *old = (RolePackFields *)(g_buf + 0x18);   // pre-fix base
+        CHECK_EQ((int)old->RolePackID, 0x601009,
+                 "pre-fix +0x18 base read the neighbour, not RolePackID");
     }
 }
 

@@ -1395,6 +1395,13 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 
     ImDrawList *draw = ImGui::GetBackgroundDrawList();
     DrawESP(ImGui::GetBackgroundDrawList(), screenWidth, screenHeight, get_dpi());
+    // Mythic kill icon for the LOCAL player's held weapon. The in-match HUD
+    // reads it from the weapon's InventoryInfo record (Weapon : Inventory,
+    // m_InventoryInfo @0x98), so filling that in is what makes an applied mythic
+    // skin show its kill icon - independently of whether the game calls (and
+    // trusts) the getter hooks. Runs once per rendered frame and only writes
+    // when the value actually differs.
+    KillDecoration_ApplyLocalInventoryInfo();
     floating_info::Render(draw, screenWidth, screenHeight);
 
     if (windowCollapsed) {
@@ -1923,6 +1930,14 @@ if (runtimeState.activeTab == 4) {
                                     // Hitbox priority
                                     static const char* hitboxModes[] = { "Head", "Chest", "Limbs", "Any" };
                                     custom::Combo("Hitbox", &Config.NewFeaturesMenu.TriggerbotHitboxPriority, hitboxModes, IM_ARRAYSIZE(hitboxModes));
+                                    // Target filter. Applied AFTER every hard gate
+                                    // (alive / not us / not a teammate / under the
+                                    // crosshair), so it can only narrow the list:
+                                    // "All" is exactly the old behaviour.
+                                    static const char* triggerFilters[] = {
+                                        "All", "Visible Only", "Within 25 m", "Within 50 m", "Within 100 m"
+                                    };
+                                    custom::Combo("Filter", &Config.NewFeaturesMenu.TriggerbotFilter, triggerFilters, IM_ARRAYSIZE(triggerFilters));
                                     // The advisory options that used to sit here (Lead Target,
                                     // Check Spread, Require Ready) could not change a
                                     // shot, so they are gone; so is the debug Test Fire
@@ -1967,10 +1982,10 @@ if (runtimeState.activeTab == 4) {
                                     ImGui::TextColored(dim, "Scan=%d Enemy=%d Cand=%d Ray=%d Tgt=%d Fire=%d",
                                         td.scans, td.enemyCount, td.candidates,
                                         td.losChecked, td.targets, td.fires);
-                                    ImGui::TextColored(dim, "R=%.0f Closest=%.0fpx LOSblk=%d Friend=%d",
+                                    ImGui::TextColored(dim, "R=%.0f Closest=%.0fpx LOSblk=%d Friend=%d Filt=%d",
                                         td.radiusPx,
                                         td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx),
-                                        td.losBlocked, td.friendsInLine);
+                                        td.losBlocked, td.friendsInLine, td.filteredOut);
                                     // Which path accepted (or would accept) the shot, and
                                     // what the visibility ray actually hit. "Rays=id/blk"
                                     // is the anti-wall gate: id = the nearest thing on the

@@ -71,6 +71,7 @@ void LoadConfig() {
         else if (key == "NewFeatures.TriggerbotDelay") Config.NewFeaturesMenu.TriggerbotDelay = std::stoi(valueStr);
         else if (key == "NewFeatures.TriggerbotRadius") Config.NewFeaturesMenu.TriggerbotRadius = std::stoi(valueStr);
         else if (key == "NewFeatures.TriggerbotHitboxPriority") Config.NewFeaturesMenu.TriggerbotHitboxPriority = std::stoi(valueStr);
+        else if (key == "NewFeatures.TriggerbotFilter") Config.NewFeaturesMenu.TriggerbotFilter = std::stoi(valueStr);
         else if (key == "NewFeatures.NoHitFlinch") Config.NewFeaturesMenu.NoHitFlinch = (valueStr == "1");
         else if (key == "NewFeatures.NoDrift") Config.NewFeaturesMenu.NoDrift = (valueStr == "1");
         else if (key == "NewFeatures.NoSlideFatigue") Config.NewFeaturesMenu.NoSlideFatigue = (valueStr == "1");
@@ -129,6 +130,7 @@ void SaveConfig() {
     file << "NewFeatures.TriggerbotDelay " << Config.NewFeaturesMenu.TriggerbotDelay << "\n";
     file << "NewFeatures.TriggerbotRadius " << Config.NewFeaturesMenu.TriggerbotRadius << "\n";
     file << "NewFeatures.TriggerbotHitboxPriority " << Config.NewFeaturesMenu.TriggerbotHitboxPriority << "\n";
+    file << "NewFeatures.TriggerbotFilter " << Config.NewFeaturesMenu.TriggerbotFilter << "\n";
     file << "NewFeatures.NoHitFlinch " << Config.NewFeaturesMenu.NoHitFlinch << "\n";
     file << "NewFeatures.NoDrift " << Config.NewFeaturesMenu.NoDrift << "\n";
     file << "NewFeatures.NoSlideFatigue " << Config.NewFeaturesMenu.NoSlideFatigue << "\n";

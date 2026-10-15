@@ -135,49 +135,97 @@ index ⇒ blank thumbnail, while the in-game model kept coming from
   `Skin/Thread.h` 0/0/0, `System/UI/SkinTab.h` 0/0/0, `Skin/Fields.h` 0/0/0.
 - Every class offset and RVA used above re-read out of `dump.cs`.
 
+## Follow-up pass checks (character tab, kill-icon record, triggerbot filter)
+
+- `Skin/tests/offset_check.cpp` now also covers the two character-tab classes,
+  as `static_assert`s on the compiled layout plus runtime sentinels read back
+  through the exact casts the loader uses: `RoleConfFields` `ColorID 0x22`,
+  `ColorSubID 0x23`, `RoleLvGroupID 0x2C`, `ShowRare 0x2F`, `BlockAppearance
+  0x30`, `ID 0x34`, `RolePackID 0x44`, `LOCID_Name 0xA0`, `WinnerCircle 0xF8`;
+  `RolePackFields` `EntryAnimID 0x40`, `GestureId 0x54`, `HandEffectUI 0x58`,
+  `KillStreakSkinID 0x68`, `LoadingFrame 0x6C`, `LobbySceneType 0x70`,
+  `RolePackID 0x90`, `AirPoseBR 0xA8`. The same test drives the pre-fix `+0x18`
+  base and shows it reading `KeepInCatalog` as `ID` - the empty Character tab -
+  so the fix is measured, not asserted. Passes (`OK: all loader offsets match
+  the il2cpp dump`).
+- `Skin/tests/skin_headers_check.cpp` (new): a `-fsyntax-only` TU that includes
+  `System/UI/SkinTab.h` (and therefore `Skin/Fields.h` + `Skin/Thread.h` +
+  `Skin/Camo.h`) and instantiates the render entry point. 0 errors.
+- `Main.cpp` compiled with `-fsyntax-only` over the whole header graph (stubs +
+  the `__aarch64__` shim): 0 errors.
+- `InventoryInfo` offsets (`0x4C` / `0x5C`), `Inventory.m_InventoryInfo 0x98`,
+  `Weapon : Inventory` and the ctor RVAs (`RoleConfConfig 0x90F20BC`,
+  `RolePackConfConfig 0x90F784C`, `RoleSkinConfig 0x90F95C8`,
+  `CharacterModelConfig 0xB1A9738`, `SPKillIconItemConfConfig 0xAF67F1C`)
+  re-read out of `dump.cs`.
+- Still not run here: `ndk-build`, the APK and anything on-device.
+
 ## Not verified
 
 - No Android NDK here: `ndk-build`, the APK and in-match behaviour are untested
   by this report. Host checks validate syntax/types, not the device ABI.
 - If the game inlines `get_KillIconItemID`, hooking it cannot change the kill
   icon; the diagnostics distinguish that case (`attr=0/0` = never called) from a
-  key mismatch (`calls>0, hits=0`). The remaining lever there is writing
-  `WeaponAttrData.m_KillIconItem @0x78` on the local loadout's record, which
-  needs an existing `SimpleItem` instance for the item.
+  key mismatch (`calls>0, hits=0`). That case is now covered by the
+  `InventoryInfo` write described above (`icon=` in the diagnostics), which does
+  not depend on the getter being called. Writing `WeaponAttrData.m_KillIconItem
+  @0x78` instead would need an existing `SimpleItem` instance for the icon item
+  and is deliberately not attempted.
 - `Weapon.get_KillEffectGroupIDOverride` keys on the weapon id, so on the local
   client an enemy holding the same weapon id would also render the forced effect.
-## Same bug class found, deliberately NOT changed (out of scope)
+## Same bug class, fixed in the follow-up pass
 
-The convention above is violated in a few more places that belong to features
-other than the two reported ones. Each is dump-verified; none was changed here
-because an in-game regression there would be indistinguishable from an unrelated
-break, and they were not part of the request:
+The character tab (`CharacterModelConfig x ItemResourceConfig x RoleConfConfig`,
+with `RolePackConfConfig` refining the pack values) had two of these violations,
+and both are what kept the list empty - the "character skins still isn't loading"
+report:
 
-- `RoleConfFields` (character tab) is cast at `+0x18` while `RoleConfConfig`'s
-  first field is `0x10` (dump 818159), so `Z1->ID` (needed by the
-  `Z1->ID != W` match that populates the character list) reads `0x3C`
-  (`KeepInCatalog`) instead of `0x34` — with base `+0x10`, `ID` lands exactly on
-  `0x34`. The declaration also carries an extra `bool BlockBack` that the live
-  class does not have, which leaves `ColorID` (`0x23` vs real `0x22`),
-  `ColorSubID`, `ShowRare` and `RolePackID` (`0x48` vs real `0x44`) one to four
-  bytes high.
-- `RolePackFields` is cast at `+0x18` while `RolePackConfConfig`'s first field
-  is `0x10` (dump 818902), and its declaration is stale as well: the live class is
-  alphabetically ordered with `KillStreakSkinID 0x68`, `LoadingFrame 0x6C`,
-  `RolePackID 0x90`, while the struct comments claim `0x48`/`0x4C`/`0x6C` — so
-  this one needs the same declaration rebuild as `WeaponConfFields`, not just a
-  base change.
-- `VehicleSkinConfFields` (snowboard/vehicle skins) is cast at `+0x18` while
-  `VehicleSkinConfConfig.ColorID` is at `0x10` (dump 822946, `ID 0x20`,
-  `NewVehicleResId 0x28`, `VehicleId 0x48`), and the declaration is missing
-  `DisableInCollection`, so every field after `ColorID` is one byte high on top
-  of the eight.
+- `RoleConfFields` was cast at `+0x18` while `RoleConfConfig`'s first field is
+  `0x10` (dump 818159), so the `Z1->ID != W` match that populates the list read
+  `0x3C` (`KeepInCatalog`) instead of `0x34` (`ID`) and **no character ever
+  matched**. The cast is now `+0x10` and the declaration was rebuilt against the
+  dump (which is unmasked for this class): the phantom `bool BlockBack` is gone
+  and the real `int BlockAppearance 0x30` is in its place, so `ColorID 0x22`,
+  `ColorSubID 0x23`, `RoleLvGroupID 0x2C`, `ShowRare 0x2F`, `ID 0x34` and
+  `RolePackID 0x44` all land exactly where the class has them; the string tail
+  was one pointer short, which put `LOCID_Name` on `0x98` instead of `0xA0`.
+- `RolePackFields` was cast at `+0x18` too, and its declaration did not follow
+  the live (alphabetically ordered) class at all. Both are fixed: base `+0x10`
+  and the declaration rebuilt field for field, so `EntryAnimID 0x40`,
+  `GestureId 0x54`, `HandEffectUI 0x58`, `KillStreakSkinID 0x68`,
+  `LoadingFrame 0x6C`, `LobbySceneType 0x70` and `RolePackID 0x90` are real.
+- `LoadCharacterSkins` also latched `loadCharacter = true` **unconditionally**,
+  so the first 1.5 s poll - which almost always beats the config tables - marked
+  the list "loaded" forever and no later call ever retried. It now latches only
+  once all three tiers the join needs were actually present.
 
-- `ctorHook/ctorOffset.h` is an older duplicate of `Skin/Thread.h`'s loaders —
+`VehicleSkinConfFields` (snowboard) is still cast at `+0x18` against
+`VehicleSkinConfConfig.ColorID 0x10` (dump 822946) with a missing
+`DisableInCollection`; unchanged here, it belongs to the snowboard tab.
+
+- `ctorHook/ctorOffset.h` is an older duplicate of `Skin/Thread.h`'s loaders -
   it declares its own `sBool`/`activeKillEffects` and copies of the `+0x18`-based
   loops. Nothing includes it (verified by searching every file in the repo,
   build files included), so it is dead code, but it is the file where the old
   bases still live; a loader fix belongs in `Skin/Thread.h`.
+
+## The mythic kill icon: the record the HUD reads
+
+The getter hooks can only change the icon if the game both calls them **and**
+accepts the id they return; an inlined `get_KillIconItemID` cannot be hooked at
+all. There is a second, independent lever, and it is now used:
+
+`public class Weapon : Inventory` (dump 737390), and `Inventory` carries
+`protected InventoryInfo m_InventoryInfo; // 0x98` (dump 761114,
+`get_InventoryInfo 0xC362DCC`). `InventoryInfo` (dump 1088476, TypeDefIndex
+23000) is the struct the in-match HUD reads its decorations from - `KillIcon
+0x4C`, `KillEffectGroupID 0x40`, `KillBoard 0x48`, `MythicArmorID 0x50`,
+`KillEffectLevel 0x5C`. `KillDecoration_ApplyLocalInventoryInfo()` (called once
+per rendered frame, local player's held weapon only) writes `KillIcon` when the
+applied-skin map has that weapon and raises `KillEffectLevel` to 5. Only when
+the value actually differs, and `KillEffectGroupID` is deliberately untouched:
+kill effects already work through the getter hooks, and that map's value is an
+effect id or an asset id depending on which source won at load time.
 
 Left otherwise correct and unchanged: `RoleSkinFields +0x18`
 (`RoleSkinConfig.ClothType 0x18`), `MythicArmorFields +0x14`,
