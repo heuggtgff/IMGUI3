@@ -146,6 +146,17 @@ static void *fake_get_parent(void *t)
 }
 static Vector3 fake_get_forward(void *) { return Vector3{0.0f, 0.0f, 1.0f}; }
 
+// Pawn.get_HeadPosition() (m_unity + api18 = 0x51B86EC, Slot 215). This is the
+// game's OWN head getter - the accessor the triggerbot uses instead of the
+// m_HeadBone FIELD offset. The fake answers with the position of the pawn's
+// m_HeadBone transform, i.e. exactly what the real getter returns on device.
+static Vector3 fake_headPosition(Pawn *p)
+{
+    void *bone = *(void **)((char *)p + Class_Pawn_m_HeadBone);
+    if (bone == nullptr) return Vector3{0.0f, 0.0f, 0.0f};
+    return fake_get_position((Transform *)bone);
+}
+
 // ---- camera / screen fakes ------------------------------------------------
 static Camera *fake_camera_main() { return (Camera *)g_camObj.b; }
 static int fake_screen_w() { return 1600; }
@@ -250,6 +261,11 @@ static void resetWorld()
 
     objPos(g_targetHead, 0.5f, 1.7f, 3.3f);
     objPos(g_targetMesh, 0.5f, 0.0f, 3.3f);
+    // The pawn ROOT transform sits at the feet on device (same place as m_Mesh),
+    // so the body span the trigger now measures (head -> root) is the same body
+    // the old bone-field walk used.
+    objPos(g_targetRoot, 0.5f, 0.0f, 3.3f);
+    objPos(g_localRoot,  0.0f, 0.0f, 0.0f);
     objParent(g_wallRoot, nullptr);
     objParent(g_trigRoot, nullptr);
 
@@ -272,6 +288,7 @@ static void installFns()
     api7  = (uintptr_t)&fake_camera_main;
     api9  = (uintptr_t)&fake_get_transform;
     api10 = (uintptr_t)&fake_get_position;
+    api18 = (uintptr_t)&fake_headPosition;     // Pawn.get_HeadPosition
     api4  = (uintptr_t)&fake_screen_w;
     api5  = (uintptr_t)&fake_screen_h;
 

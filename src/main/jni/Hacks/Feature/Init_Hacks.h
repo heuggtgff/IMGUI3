@@ -233,7 +233,6 @@ sColorsESPBOT sColorsESPBOT{0};
         int TriggerbotMode = 0;        // 0 = Always, 1 = ADS only, 2 = Firing only
         int TriggerbotDelay = 0;       // ms (humanized reaction delay)
         int TriggerbotRadius = 40;     // crosshair zone width in px
-        int TriggerbotHitboxPriority = 3; // 0=Head, 1=Chest, 2=Limbs, 3=Any
         // Which enemies the trigger may engage. 0 = All (no filter, the
         // behaviour before this option existed), 1 = only pawns the game itself
         // reports as visible, 2/3/4 = only inside 25 / 50 / 100 m. The filter can

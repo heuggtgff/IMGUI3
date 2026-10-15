@@ -67,7 +67,6 @@ void SaveConfiguration(const std::string& filename) {
     // .contains()), but nothing was ever WRITING them - the new triggerbot
     // options silently reset to defaults on every save/load cycle.
     config["NewFeatures"]["TriggerbotDelay"] = Config.NewFeaturesMenu.TriggerbotDelay;
-    config["NewFeatures"]["TriggerbotHitboxPriority"] = Config.NewFeaturesMenu.TriggerbotHitboxPriority;
     config["NewFeatures"]["TriggerbotFilter"] = Config.NewFeaturesMenu.TriggerbotFilter;
     config["NewFeatures"]["NoCrouch"] = Config.NewFeaturesMenu.NoCrouch;
 
@@ -141,8 +140,6 @@ bool LoadConfiguration(const std::string& filename) {
             Config.NewFeaturesMenu.TriggerbotDelay = config["NewFeatures"]["TriggerbotDelay"].get<int>();
         if (config["NewFeatures"].contains("TriggerbotRadius"))
             Config.NewFeaturesMenu.TriggerbotRadius = config["NewFeatures"]["TriggerbotRadius"].get<int>();
-        if (config["NewFeatures"].contains("TriggerbotHitboxPriority"))
-            Config.NewFeaturesMenu.TriggerbotHitboxPriority = config["NewFeatures"]["TriggerbotHitboxPriority"].get<int>();
         if (config["NewFeatures"].contains("TriggerbotFilter"))
             Config.NewFeaturesMenu.TriggerbotFilter = config["NewFeatures"]["TriggerbotFilter"].get<int>();
         Config.NewFeaturesMenu.NoHitFlinch = config["NewFeatures"]["NoHitFlinch"].get<bool>();

@@ -1927,9 +1927,15 @@ if (runtimeState.activeTab == 4) {
                                     // files keep loading.
                                     custom::SliderInt("Radius", &Config.NewFeaturesMenu.TriggerbotRadius, 4, 240, "%d px");
                                     
-                                    // Hitbox priority
-                                    static const char* hitboxModes[] = { "Head", "Chest", "Limbs", "Any" };
-                                    custom::Combo("Hitbox", &Config.NewFeaturesMenu.TriggerbotHitboxPriority, hitboxModes, IM_ARRAYSIZE(hitboxModes));
+                                    // No Hitbox pick: Head/Chest/Limbs/Any needed a
+                                    // raw bone FIELD offset (m_HeadBone 0x308 /
+                                    // m_Mesh 0x628) that did not hold up in BR (the
+                                    // panel showed Cand=0 with 5 enemies, so the zone
+                                    // path never fired). The trigger now uses the
+                                    // enemy's own on-screen BODY - the game's
+                                    // Pawn.get_HeadPosition getter and the root
+                                    // transform, measured against the crosshair
+                                    // segment and confirmed by the visibility ray.
                                     // Target filter. Applied AFTER every hard gate
                                     // (alive / not us / not a teammate / under the
                                     // crosshair), so it can only narrow the list:
@@ -1942,7 +1948,7 @@ if (runtimeState.activeTab == 4) {
                                     // Check Spread, Require Ready) could not change a
                                     // shot, so they are gone; so is the debug Test Fire
                                     // button. Everything the trigger actually obeys is above
-                                    // (Mode, Radius, Hitbox) plus StartFire itself.
+                                    // (Mode, Radius, Filter) plus StartFire itself.
                                 }
                                 // Debug status (shows in-game). Every number below is
                                 // written by the GAME-THREAD decision tree

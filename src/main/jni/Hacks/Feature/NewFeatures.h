@@ -415,9 +415,10 @@ namespace NewFeatures
     // The enemy / team pawn lists keep an entry for a few frames after a pawn
     // despawns (death, respawn, match end), so this is exactly the entity-
     // detection path of a real match: the name-walk calls get_transform() on
-    // every pawn in the list, and the hitbox walk calls get_position() on two
-    // bones of every pawn under the crosshair. A readable-but-dead pawn passed
-    // every earlier check and crashed on the first native call.
+    // every pawn in the list, and the aim-point walk calls
+    // get_HeadPosition() / get_transform()->get_position() on every pawn under
+    // the crosshair. A readable-but-dead pawn passed every earlier check and
+    // crashed on the first native call.
     // UnityEngine.Object.m_CachedPtr (dump.cs 169503) - every Pawn / Weapon /
     // Transform / Collider derives from Object, so one offset covers all of them.
     constexpr size_t AF_OBJ_CACHEDPTR = 0x10;
@@ -609,7 +610,7 @@ namespace NewFeatures
     //       the game's own Weapon.CanFire())
     //    2. trigger mode                      (Always / ADS only / Firing only)
     //    3. target acquisition & validity     (enemy, alive, not self, not a
-    //       teammate, hitbox projected inside the crosshair zone)
+    //       teammate, his on-screen BODY inside the crosshair zone)
     //    4. line of sight                     (camera -> aim point, raycast)
     //    5. rangeless + lead                  (travel time, predicted point,
     //       the predicted point's own line of sight)
@@ -620,16 +621,6 @@ namespace NewFeatures
     //  crosshair keeps covering it (the trigger is released the moment it does
     //  not).
     // =====================================================================
-
-    // Which hitbox of a pawn is validated. Also the UI's Hitbox combo:
-    // 0 = Head, 1 = Chest, 2 = Limbs, 3 = Any.
-    enum class HitboxPriority : int
-    {
-        Head  = 0,
-        Chest = 1,
-        Limbs = 2,
-        Any   = 3
-    };
 
     // Weapon fire mode. Weapon has no "get_FireMode" in the dump; the three
     // flags are asked one by one:
@@ -726,14 +717,19 @@ namespace NewFeatures
         static constexpr float kRadToDeg        = 57.29578f;
     };
 
-    // An aim point: where on the pawn the crosshair has to be, and how big the
-    // hitbox living there is (used by the spread-containment test).
+    // An aim point on a pawn: where the crosshair has to be, how big the hitbox
+    // living there is (spread-containment test), plus the pawn's head and feet in
+    // world space so the scan can measure the on-screen BODY instead of one
+    // floating point. There is NO user-facing hitbox choice any more.
     struct A_FireAimPoint
     {
-        Vector3        pos;
-        HitboxPriority hitbox;
-        float          radius;   // metres
-        bool           valid;
+        Vector3 pos;       // chest (or head when the root transform did not answer)
+        Vector3 head;      // Pawn.get_HeadPosition() RVA 0x51B86EC
+        Vector3 feet;      // pawn root transform position
+        float   radius;    // metres
+        bool    valid;
+        bool    headOk;
+        bool    feetOk;
     };
 
     // One enemy inside the crosshair zone, with everything the tree needs.
@@ -836,85 +832,76 @@ namespace NewFeatures
                        feet.z + (head.z - feet.z) * t);
     }
 
-    // Where to aim on this pawn for ONE hitbox (no fallback here - the scan walks
-    // the hitboxes in the user's priority order and stops at the first one that is
-    // actually under the crosshair, which is the "which hitbox is under the
-    // crosshair" question the shot has to answer).
-    // Head bone (Pawn.m_HeadBone 0x308) and mesh root (Pawn.m_Mesh 0x628) are the
-    // two the rest of this project already reads in game every frame (DrawESP).
+    // Squared screen distance from (px,py) to the segment (ax,ay)->(bx,by), all
+    // in pixels. This is how "is the crosshair on this pawn's BODY" is answered
+    // now: a body is a SEGMENT on screen, not a point, so a body that fills the
+    // screen at 2 m and a body a few px tall at 150 m are measured the same way
+    // and neither depends on a bone field offset.
+    inline float A_FirePointSegDistSq(float px, float py,
+                                      float ax, float ay, float bx, float by)
+    {
+        const float vx = bx - ax, vy = by - ay;
+        const float wx = px - ax, wy = py - ay;
+        const float vv = vx * vx + vy * vy;
+        float t = 0.0f;
+        if (vv > 0.0001f) {
+            t = (wx * vx + wy * vy) / vv;
+            if (t < 0.0f) t = 0.0f; else if (t > 1.0f) t = 1.0f;
+        }
+        const float dx = px - (ax + vx * t);
+        const float dy = py - (ay + vy * t);
+        return dx * dx + dy * dy;
+    }
+
+    // Where on this pawn to aim. There is NO user hitbox pick any more, and no
+    // raw bone FIELD offset either:
     //
-    // The torso is probed at 0.72 of the feet->head axis (chest height), not at
-    // the plain midpoint: the midpoint is the HIPS, so aiming centre-mass used to
-    // be validated against a point below the chest - one of the "sometimes it
-    // does not shoot" reports. Limbs use 0.45 (thigh/waist height).
-    inline A_FireAimPoint A_FireAimPointFor(Pawn *pawn, HitboxPriority which)
+    //   head  - Pawn.get_HeadPosition() RVA 0x51B86EC (Slot 215, dump 714489).
+    //           This is the game's OWN answer and the very getter DrawESP already
+    //           calls in game every frame, so it keeps working when the
+    //           m_HeadBone @0x308 / m_Mesh @0x628 FIELD offsets drift between
+    //           builds - which is exactly why the old bone-field walk found ZERO
+    //           candidates in BR (device diag: Enemy=5 Cand=0 while the centre
+    //           ray still named pawns 597 times).
+    //   chest - 0.72 of the feet->head axis (the plain midpoint is the HIPS, so
+    //           aiming centre-mass was validated against a point below the chest).
+    //   feet  - the pawn root transform (Component.get_transform ->
+    //           Transform.get_position), the same call the hit-naming walk uses.
+    //
+    // A zero head vector means the game did not answer and the root position is
+    // used instead - one of the two is enough, so a pawn is never dropped just
+    // because one accessor failed.
+    inline A_FireAimPoint A_FireAimPointFor(Pawn *pawn)
     {
         A_FireAimPoint ap{};
         ap.valid = false;
-        ap.hitbox = which;
         ap.radius = A_FireTune::kBodyRadius;
         if (!A_FireObjectAlive((void *)pawn)) return ap;
 
-        Transform *headBone = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
-        Transform *mesh     = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
-        // The bones are Unity objects too. A pawn the game is tearing down keeps
-        // its managed wrapper (readable, so a plain validity check passes) while
-        // the native transforms behind m_HeadBone / m_Mesh are already gone, and
-        // get_position() on one of those dereferences a null native pointer.
-        const bool hasHead = A_FireObjectAlive((void *)headBone);
-        const bool hasMesh = A_FireObjectAlive((void *)mesh);
-        if (!hasHead && !hasMesh) return ap;
+        const Vector3 head = pawn->get_HeadPosition();
+        ap.head = head;
+        ap.headOk = (head.x != 0.0f || head.y != 0.0f || head.z != 0.0f);
 
-        if (which == HitboxPriority::Head || which == HitboxPriority::Any) {
-            if (hasHead) {
-                ap.pos = headBone->get_position();
-                ap.radius = A_FireTune::kHeadRadius;
-                ap.hitbox = HitboxPriority::Head;
-                ap.valid = true;
-                return ap;
-            }
-            if (which == HitboxPriority::Head) return ap;       // asked for head, no head bone
-        }
+        Transform *root = pawn->get_transform();
+        const bool rootOk = A_FireObjectAlive((void *)root);
+        const Vector3 feet = rootOk ? root->get_position() : Vector3::zero();
+        ap.feet = feet;
+        ap.feetOk = rootOk;
 
-        const Vector3 head = hasHead ? headBone->get_position() : Vector3::zero();
-        const Vector3 root = hasMesh ? mesh->get_position()     : Vector3::zero();
-
-        if (which == HitboxPriority::Chest || which == HitboxPriority::Any) {
-            if (hasHead && hasMesh) {
-                ap.pos = A_FireAlongBody(head, root, 0.72f);    // chest
-                ap.radius = A_FireTune::kBodyRadius;
-                ap.hitbox = HitboxPriority::Chest;
-                ap.valid = true;
-                return ap;
-            }
-            if (which == HitboxPriority::Chest) return ap;
-        }
-
-        if (hasMesh) {                                          // Limbs and the last Any fallback
-            if (hasHead) {
-                ap.pos = A_FireAlongBody(head, root, 0.45f);     // waist / thighs
-            } else {
-                ap.pos = Vector3(root.x, root.y + 0.55f, root.z);
-            }
+        if (ap.headOk && ap.feetOk) {
+            ap.pos = A_FireAlongBody(head, feet, 0.72f);        // chest
             ap.radius = A_FireTune::kBodyRadius;
-            ap.hitbox = HitboxPriority::Limbs;
-            ap.valid = true;
+        } else if (ap.headOk) {
+            ap.pos = head;                                      // head only
+            ap.radius = A_FireTune::kHeadRadius;
+        } else if (ap.feetOk) {
+            ap.pos = Vector3(feet.x, feet.y + 1.05f, feet.z);   // eye height off the root
+            ap.radius = A_FireTune::kBodyRadius;
+        } else {
+            return ap;                                          // the game answered nothing
         }
+        ap.valid = true;
         return ap;
-    }
-
-    // The hitbox order the scan walks: the user's pick first, then the others, so
-    // a pawn whose head is not under the crosshair is still shot in the body
-    // instead of being dropped (that is the "Any" case, and the Head/Chest cases
-    // keep their pick first while still allowing the rest as a fallback).
-    inline void A_FireHitboxOrder(HitboxPriority want, HitboxPriority out[3])
-    {
-        switch (want) {
-            case HitboxPriority::Head:  out[0] = HitboxPriority::Head;  out[1] = HitboxPriority::Chest; out[2] = HitboxPriority::Limbs; break;
-            case HitboxPriority::Chest: out[0] = HitboxPriority::Chest; out[1] = HitboxPriority::Head;  out[2] = HitboxPriority::Limbs; break;
-            case HitboxPriority::Limbs: out[0] = HitboxPriority::Limbs; out[1] = HitboxPriority::Chest; out[2] = HitboxPriority::Head;  break;
-            default:                    out[0] = HitboxPriority::Head;  out[1] = HitboxPriority::Chest; out[2] = HitboxPriority::Limbs; break;
-        }
     }
 
     // ---- Weapon readiness -------------------------------------------------
@@ -976,15 +963,15 @@ namespace NewFeatures
         return interval;
     }
 
-    // A pawn is alive if the field says so (the offset the whole project already
-    // reads) or, failing that, if the game's own Pawn.get_IsAlive() 0x51B7C40
-    // says so. Two independent answers, and only "dead" from BOTH blocks a shot.
+    // A pawn is alive if the game's OWN getter says so, or failing that if the
+    // m_IsAlive @0x548 field (the read DrawESP does) says so. The getter
+    // (Pawn.get_IsAlive 0x51B7C40, Slot 49 - dump 714396) is asked FIRST because
+    // it cannot drift with a field offset; only "dead" from BOTH blocks a shot.
     inline bool A_FirePawnAlive(Pawn *pawn)
     {
         if (!A_FireObjectAlive((void *)pawn)) return false;
-        if (((Pawn *)pawn)->m_IsAlive()) return true;
         if (fn_PawnIsAlive != nullptr && fn_PawnIsAlive(pawn)) return true;
-        return false;
+        return ((Pawn *)pawn)->m_IsAlive();
     }
 
     // ---- Spread / lead containment ---------------------------------------
@@ -1342,7 +1329,6 @@ namespace NewFeatures
         float          bulletSpeed = 0.0f;   // m/s
         bool           speedKnown = false;   // the game answered the bullet speed
         bool           leadUsed = false;     // the predicted point was used
-        HitboxPriority hitbox = HitboxPriority::Any;
         int            path = 1;             // 0 = centre-of-screen ray (path A), 1 = crosshair zone (path B)
         bool           visible = false;      // the shot line to the aim point was proven clear
         bool           visibilityIdentified = false; // ... and the thing ON that line was this very pawn
@@ -1442,13 +1428,17 @@ namespace NewFeatures
         if (depthOut != nullptr) *depthOut = -1;
         if (!A_FireObjectAlive(hitTransform) || !A_FireObjectAlive((void *)pawn)) return false;
 
+        // The pawn's own root transform. The old version also compared the raw
+        // m_HeadBone @0x308 / m_Mesh @0x628 FIELDS; those are the offsets that did
+        // not hold up in BR (Enemy=5 Cand=0), so they are gone. A hit on any bone
+        // still reaches this root through the parent chain - that is what makes a
+        // head, a backpack or an arm count as "the enemy".
         Transform *root = pawn->get_transform();
-        Transform *head = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_HeadBone);
-        Transform *mesh = *(Transform **)((uintptr_t)pawn + Class_Pawn_m_Mesh);
+        if (!Tools::IsPtrValid((void *)root)) return false;
 
         void *t = hitTransform;
-        for (int depth = 0; depth < 12 && A_FireObjectAlive(t); depth++) {
-            if (t == (void *)root || t == (void *)head || t == (void *)mesh) {
+        for (int depth = 0; depth < 24 && A_FireObjectAlive(t); depth++) {
+            if (t == (void *)root) {
                 if (depthOut != nullptr) *depthOut = depth;
                 return true;
             }
@@ -1456,6 +1446,19 @@ namespace NewFeatures
             void *parent = fn_TransformGetParent(t);
             if (!Tools::IsPtrValid(parent) || parent == t) break;
             t = parent;
+        }
+
+        // The walk did not reach the root (a deep skeleton, or a collider parented
+        // under a bone further than the bound). Fall back to the game's own head
+        // getter: a hit sitting on the pawn's body IS the pawn for our purpose, and
+        // this is the same accessor DrawESP uses, so it does not depend on any of
+        // the bone field offsets.
+        const Vector3 head = pawn->get_HeadPosition();
+        if (head.x != 0.0f || head.y != 0.0f || head.z != 0.0f) {
+            const Vector3 hp = ((Transform *)hitTransform)->get_position();
+            const float dx = hp.x - head.x, dy = hp.y - head.y, dz = hp.z - head.z;
+            const float r = 0.60f;
+            if (dx * dx + dy * dy + dz * dz <= r * r) return true;
         }
         return false;
     }
@@ -1811,6 +1814,12 @@ namespace NewFeatures
     // =====================================================================
     //  THE SCAN (target acquisition + shot validation)
     //
+    //  Target validity never comes from a hitbox pick or a raw bone field: the
+    //  enemy's own head getter and root transform give an on-screen BODY, the
+    //  crosshair has to be on it, and the shot then has to survive the ray that
+    //  NAMES him. That is what makes the trigger fire at exactly what the player
+    //  can see, at any range and on any ping.
+    //
     //  Two paths, in this order:
     //    A. the camera's own forward ray - "enemy exactly in the centre of the
     //       screen". Bone-free, and unoccluded by construction.
@@ -1932,7 +1941,6 @@ namespace NewFeatures
         const float radiusSq = radius * radius;
         d.radiusPx = radius;
 
-        const HitboxPriority want = (HitboxPriority)Config.NewFeaturesMenu.TriggerbotHitboxPriority;
         // Read once per scan, not per candidate.
         const int targetFilter = Config.NewFeaturesMenu.TriggerbotFilter;
         const float focalPx = A_FireFocalPx();
@@ -1958,23 +1966,18 @@ namespace NewFeatures
                 // A centre-ray pawn the filter refuses simply falls through to
                 // the zone scan below, which applies the same filter and does the
                 // counting.
-                // Best probe for the report: whichever of the three sits closest to
-                // the centre. The shot itself does not depend on it - the centre ray
-                // already proved visibility and ownership.
-                HitboxPriority order[3];
-                A_FireHitboxOrder(want, order);
-                A_FireAimPoint ap{};
+                // The shot does not depend on the probe - the centre ray already
+                // proved visibility AND ownership - so this is only the aim point
+                // handed to the spread/lead report.
+                const A_FireAimPoint ap = A_FireAimPointFor(centred);
                 float bestSq = -1.0f;
-                for (int k = 0; k < 3; k++) {
-                    const A_FireAimPoint cand = A_FireAimPointFor(centred, order[k]);
-                    if (!cand.valid) continue;
+                if (ap.valid) {
                     Vector3 sc = Vector3::zero();
-                    if (!w2s(cand.pos, sc) || !(sc.z > 0.0f))
-                        continue;                 // no projection / behind the camera
-                    const float dx = sc.x - cx;
-                    const float dy = sc.y - cy;
-                    const float d2 = dx * dx + dy * dy;
-                    if (bestSq < 0.0f || d2 < bestSq) { bestSq = d2; ap = cand; }
+                    if (w2s(ap.pos, sc) && sc.z > 0.0f) {
+                        const float dx = sc.x - cx;
+                        const float dy = sc.y - cy;
+                        bestSq = dx * dx + dy * dy;
+                    }
                 }
                 out.pawn      = centred;
                 out.aim       = ap;
@@ -1983,7 +1986,6 @@ namespace NewFeatures
                 if (ap.valid) w2s(ap.pos, out.screenPos);
                 out.pxOffset  = bestSq >= 0.0f ? sqrtf(bestSq) : -1.0f;
                 out.worldDist = ap.valid ? Vector3::Distance(camPos, ap.pos) : centreHitDist;
-                out.hitbox    = ap.hitbox;
                 out.path      = 0;
                 out.visible   = true;
                 out.visibilityIdentified = true;            // the ray NAMED him
@@ -2033,30 +2035,39 @@ namespace NewFeatures
                 continue;
             }
 
-            // Walk the hitboxes in the user's order and stop at the first one that
-            // is under the crosshair: that answers "which hitbox would this shot
-            // hit" without a hitbox-enumeration API (this dump has none).
-            HitboxPriority order[3];
-            A_FireHitboxOrder(want, order);
+            const A_FireAimPoint ap = A_FireAimPointFor(p);
+            if (!ap.valid) continue;                              // the game answered nothing about his body
 
-            A_FireAimPoint ap{};
-            float pxOffset = -1.0f;
-            for (int k = 0; k < 3 && !ap.valid; k++) {
-                const A_FireAimPoint cand = A_FireAimPointFor(p, order[k]);
-                if (!cand.valid) continue;
-                Vector3 sc = Vector3::zero();                     // behind the camera / no symbol
-                if (!w2s(cand.pos, sc) || !(sc.z > 0.0f))
-                    continue;
-                const float dx = sc.x - cx;
-                const float dy = sc.y - cy;
-                const float d2 = dx * dx + dy * dy;
-                if (!(d2 >= 0.0f)) continue;
-                if (d.closestPx < 0.0f || d2 < d.closestPx) d.closestPx = d2;   // "how close did anything get"
-                if (d2 > radiusSq) continue;                      // this hitbox is not under the crosshair
-                ap = cand;
-                pxOffset = sqrtf(d2);
+            // Where is his BODY on screen? Project head and feet and take the
+            // crosshair's distance to the segment between them; fall back to the
+            // chest point when the body does not project. This one measurement
+            // replaces the whole hitbox-priority walk: no bone field offset, no
+            // user pick, and a body that fills the screen at 2 m is handled exactly
+            // like one a few px tall at 150 m.
+            float d2 = -1.0f;
+            Vector3 scChest = Vector3::zero();
+            if (w2s(ap.pos, scChest) && scChest.z > 0.0f) {
+                const float dx = scChest.x - cx;
+                const float dy = scChest.y - cy;
+                d2 = dx * dx + dy * dy;
             }
-            if (!ap.valid) continue;                              // nothing of this pawn is under the crosshair
+            // The chest already answers it (and is the case that fires): do not
+            // pay two more WorldToScreenPoint calls for the body span.
+            if (d2 >= 0.0f && d2 > radiusSq && ap.headOk && ap.feetOk) {
+                Vector3 scHead = Vector3::zero();
+                Vector3 scFeet = Vector3::zero();
+                if (w2s(ap.head, scHead) && w2s(ap.feet, scFeet) &&
+                    scHead.z > 0.0f && scFeet.z > 0.0f) {
+                    const float body = A_FirePointSegDistSq(cx, cy,
+                                                            scHead.x, scHead.y,
+                                                            scFeet.x, scFeet.y);
+                    if (d2 < 0.0f || body < d2) d2 = body;
+                }
+            }
+            if (d2 < 0.0f) continue;                              // his body is not on screen
+            if (d.closestPx < 0.0f || d2 < d.closestPx) d.closestPx = d2;   // "how close did anything get"
+            if (d2 > radiusSq) continue;                          // not under the crosshair
+            const float pxOffset = sqrtf(d2);
             if (n >= MAX_CANDIDATES) continue;
 
             // Second pass: the rules that only apply once the distance to the
@@ -2132,8 +2143,32 @@ namespace NewFeatures
             d.losChecked++;
             bool losIdentified = false;
             float losHitDist = -1.0f;
-            const AF_Ray los = A_FireRayToTarget(camPos, c.aim.pos, c.pawn, c.aim.radius,
-                                                 localPawn, &losIdentified, &losHitDist);
+            AF_Ray los = A_FireRayToTarget(camPos, c.aim.pos, c.pawn, c.aim.radius,
+                                           localPawn, &losIdentified, &losHitDist);
+
+            // The chest can be behind cover while the HEAD is exposed - the classic
+            // "peeking over the wall" shot, and one of the "sometimes it does not
+            // shoot" cases. When the chest line is blocked, retry at the game's own
+            // head position before giving up on this pawn. The shot only ever goes
+            // out on a ray that came back Clear, and the probe below is the one that
+            // was actually validated.
+            Vector3 probePoint  = c.aim.pos;
+            float   probeRadius = c.aim.radius;
+            if (los != AF_Ray::Clear && c.aim.headOk) {
+                bool headIdentified = false;
+                float headHitDist = -1.0f;
+                const AF_Ray losHead = A_FireRayToTarget(camPos, c.aim.head, c.pawn,
+                                                         A_FireTune::kHeadRadius,
+                                                         localPawn, &headIdentified, &headHitDist);
+                if (losHead == AF_Ray::Clear) {
+                    los           = losHead;
+                    losIdentified = headIdentified;
+                    losHitDist    = headHitDist;
+                    probePoint    = c.aim.head;
+                    probeRadius   = A_FireTune::kHeadRadius;
+                }
+            }
+            const float probeDist = Vector3::Distance(camPos, probePoint);
             d.lastLosHitDist = losHitDist;
             if (losIdentified) d.raysIdentified++; else d.raysBlocked++;
             if (los == AF_Ray::Unknown) d.rayUnknown = true;   // no ray symbol -> fail closed
@@ -2148,14 +2183,14 @@ namespace NewFeatures
             //     point of a rangeless trigger), but the bullet still has to
             //     arrive while the target is still there.
             float travel = 0.0f;
-            Vector3 predicted = c.aim.pos;
+            Vector3 predicted = probePoint;
             bool lead = false;
 
-            if (wantLead && speedKnown && c.worldDist > 1.0f) {
-                travel = c.worldDist / bulletSpeed;
+            if (wantLead && speedKnown && probeDist > 1.0f) {
+                travel = probeDist / bulletSpeed;
                 d.lastTravel = travel;
                 if (travel > 0.002f && travel <= A_FireTune::kMaxTravelTime) {
-                    predicted = c.aim.pos + c.velocity * travel;
+                    predicted = probePoint + c.velocity * travel;
                     lead = true;
                 }
                 // ADVISORY ONLY. A long flight time (kMaxTravelTime) and a covered
@@ -2163,11 +2198,11 @@ namespace NewFeatures
                 // long-range half of "sometimes it does not shoot". The lead is a
                 // prediction, so when it happens to be covered the shot is taken at
                 // the aim point instead of being refused.
-                if (lead && A_FireRayToTarget(camPos, predicted, c.pawn, c.aim.radius,
+                if (lead && A_FireRayToTarget(camPos, predicted, c.pawn, probeRadius,
                                               localPawn) != AF_Ray::Clear) {
                     d.leadPathBlocked = true;
                     lead = false;
-                    predicted = c.aim.pos;
+                    predicted = probePoint;
                 }
             }
 
@@ -2181,12 +2216,12 @@ namespace NewFeatures
                     const float pdy = scPred.y - cy;
                     predPx = sqrtf(pdx * pdx + pdy * pdy);
                 } else {
-                    predicted = c.aim.pos;          // prediction left the screen
+                    predicted = probePoint;         // prediction left the screen
                     lead = false;
                 }
             }
-            const float hitboxPx = (focalPx > 0.0f && c.worldDist > 0.01f)
-                                 ? (c.aim.radius * focalPx / c.worldDist) : 0.0f;
+            const float hitboxPx = (focalPx > 0.0f && probeDist > 0.01f)
+                                 ? (probeRadius * focalPx / probeDist) : 0.0f;
             // ADVISORY ONLY - this used to `continue`. At range a hitbox is only a
             // few px wide while the cone is wide, so the old test vetoed shots the
             // user had the crosshair on: the other half of "sometimes it does not
@@ -2196,12 +2231,12 @@ namespace NewFeatures
 
             // (d) FRIENDLY IN THE LINE OF FIRE - pure geometry, catches the
             //     teammate the ray misses but the spread cone would hit.
-            Vector3 dirToAim(c.aim.pos.x - camPos.x, c.aim.pos.y - camPos.y, c.aim.pos.z - camPos.z);
+            Vector3 dirToAim(probePoint.x - camPos.x, probePoint.y - camPos.y, probePoint.z - camPos.z);
             const float dirLen = Vector3::Magnitude(dirToAim);
             if (dirLen > 0.01f) {
                 dirToAim = Vector3(dirToAim.x / dirLen, dirToAim.y / dirLen, dirToAim.z / dirLen);
                 int friends = 0;
-                if (A_FireFriendlyInLine(friendProbes, friendCount, camPos, dirToAim, c.worldDist, &friends)) {
+                if (A_FireFriendlyInLine(friendProbes, friendCount, camPos, dirToAim, probeDist, &friends)) {
                     d.friendsInLine += friends;
                     blockedFriend = true;
                     continue;
@@ -2211,12 +2246,11 @@ namespace NewFeatures
             // ---- SURVIVES EVERYTHING -> this is the shot ----
             out.pawn       = c.pawn;
             out.aim        = c.aim;
-            out.aimPoint   = c.aim.pos;
+            out.aimPoint   = probePoint;
             out.screenPos = Vector3::zero();
-            w2s(c.aim.pos, out.screenPos);
+            w2s(probePoint, out.screenPos);
             out.pxOffset   = c.pxOffset;
-            out.worldDist  = c.worldDist;
-            out.hitbox     = c.aim.hitbox;
+            out.worldDist  = probeDist;
             out.travelTime = travel;
             out.predicted  = predicted;
             out.predPxOffset = predPx;
@@ -2234,7 +2268,7 @@ namespace NewFeatures
             d.lastPredPx = predPx;
             d.lastHitboxPx = hitboxPx;
             d.lastTravel = travel;
-            d.lastWorldDist = c.worldDist;
+            d.lastWorldDist = probeDist;
             d.lastBulletSpeed = bulletSpeed;
             g_afireLosOk = true;
             d.targets++;
@@ -2507,11 +2541,11 @@ namespace NewFeatures
         d.fires++;
         s_dbgTriggerState = 2;                           // firing
 
-        LOGI("[NewFeatures] triggerbot: StartFire(held=%p) target=%p path=%s hitbox=%d aim=%.1fpx "
+        LOGI("[NewFeatures] triggerbot: StartFire(held=%p) target=%p path=%s aim=%.1fpx "
              "hit=%.3fm ident=%d dist=%.3f travel=%.4f",
              (void *)held, (void *)target.pawn,
              target.path == 0 ? "centre-ray" : "zone",
-             (int)target.hitbox, target.pxOffset,
+             target.pxOffset,
              d.lastLosHitDist, (int)target.visibilityIdentified,
              target.worldDist, target.travelTime);
 
