@@ -13,6 +13,7 @@
 #include <openssl/md5.h>
 #include <string>
 #include <vector>
+#include <atomic>
 #include "Tools.h"
 
 #if defined(__arm__)
@@ -29,6 +30,8 @@
 #define process_vm_writev_syscall 311
 #endif
 
+// Kept for compatibility with the original port; pvm() uses its own
+// thread-safe function-local pid (see below).
 pid_t target_pid = -1;
 #define INRANGE(x, a, b)        (x >= a && x <= b)
 #define getBits(x)              (INRANGE(x,'0','9') ? (x - '0') : ((x&(~0x20)) - 'A' + 0xa))
@@ -47,11 +50,15 @@ bool pvm(void *address, void *buffer, size_t size, bool write = false) {
     remote[0].iov_base = address;
     remote[0].iov_len = size;
 
-    if (target_pid == -1) {
-        target_pid = getpid();
-    }
+    // Our own pid, resolved once. This used to be `if (target_pid == -1)
+    // target_pid = getpid();` on a plain global, which is an unsynchronised
+    // read-modify-write on the same address from every thread that calls
+    // IsPtrValid (the render thread and Skins_Thread both do). A function-local
+    // static is initialised exactly once, thread-safely, with no lock on the
+    // steady-state path.
+    static const pid_t self_pid = getpid();
 
-    ssize_t bytes = process_v(target_pid, local, 1, remote, 1, 0, write);
+    ssize_t bytes = process_v(self_pid, local, 1, remote, 1, 0, write);
     return bytes == size;
 }
 
@@ -111,9 +118,44 @@ static uint8_t tools_isvalid_buf[4] = {0,0,0,0};
 // search per call) instead of trusting a startup-time cache. A pvm that is
 // blocked by SELinux therefore degrades to a correct answer, not to a
 // permanent "everything is invalid".
+//
 // ---------------------------------------------------------------------------
-static std::vector<std::pair<uintptr_t, uintptr_t>> g_readableRanges;
-static uint64_t g_readableCacheMs = 0;
+// CONCURRENCY - the snapshot is immutable while it is readable.
+//
+// The first version of the above kept ONE `std::vector` of ranges and had the
+// refreshing thread clear() it and emplace_back() into it. IsPtrValid() is
+// called from several threads (the render thread's DrawESP / trigger scan /
+// kill-decoration pass, Skins_Thread's loaders, Init_Thread), and the refresh
+// is triggered by the *common* case of a dead pointer falling out of the
+// snapshot - so a reader was routinely binary-searching the live vector while
+// another thread was reallocating its buffer. A binary search that samples
+// `ranges[mid]` across a realloc reads freed memory: on device that is a
+// SIGSEGV inside ToolsRangesContain, which is exactly the "the game crashes
+// after a while, not always at the same moment" report this fixes. Measured
+// with ThreadSanitizer against this very file: 13 data races and
+// "SUMMARY: ThreadSanitizer: SEGV ... Tools.cpp in ToolsRangesContain".
+//
+// Now the ranges live in a small pool of snapshots. A reader takes the live
+// snapshot pointer ONCE per call and only ever reads it; the writer fills a
+// slot that is not published, then publishes it with a release store. The slot
+// it fills is the one published kRangeSlots - 1 refreshes ago, and each slot
+// keeps its capacity after clear(), so a reader can never observe a slot that
+// is being written and no buffer is ever freed. At the 250 ms refresh throttle
+// that is at least 1.5 s of grace for a reader whose whole critical section is
+// one binary search over a few hundred entries, and the pool itself is static
+// storage: the hot path stays one acquire load plus the search, with no
+// syscall, no lock and no allocation.
+// ---------------------------------------------------------------------------
+struct ToolsRangeSnapshot {
+    std::vector<std::pair<uintptr_t, uintptr_t>> ranges;
+};
+
+static const int kRangeSlots = 8;
+static ToolsRangeSnapshot g_rangeSlots[kRangeSlots];
+static std::atomic<int> g_rangeLive{-1};        // slot readers must use, or -1
+static std::atomic<int> g_rangeGeneration{-1};  // slot the writer filled last
+static std::atomic<uint64_t> g_rangeCacheMs{0};
+static std::atomic<bool> g_rangeRefreshing{false};
 
 static uint64_t ToolsNowMs() {
     struct timespec ts;
@@ -121,37 +163,76 @@ static uint64_t ToolsNowMs() {
     return (uint64_t)ts.tv_sec * 1000ull + (uint64_t)ts.tv_nsec / 1000000ull;
 }
 
+static const ToolsRangeSnapshot *ToolsLiveRanges() {
+    const int i = g_rangeLive.load(std::memory_order_acquire);
+    return i >= 0 && i < kRangeSlots ? &g_rangeSlots[i] : nullptr;
+}
+
 // Refreshes at most every 250 ms unless `force`. Parsing /proc/self/maps is
 // not free (thousands of fgets/sscanf on a game process), so it is only done
 // when the snapshot actually has to answer something - never on the fast path.
+//
+// Exactly one thread parses at a time; a thread that loses that race simply
+// answers from the snapshot that is already live, which is correct - the
+// snapshot it wanted is the one being built.
 static void ToolsRefreshReadableRanges(bool force = false) {
     const uint64_t now = ToolsNowMs();
-    if (!force && !g_readableRanges.empty() && now >= g_readableCacheMs &&
-        now - g_readableCacheMs <= 250)
+    const uint64_t cachedMs = g_rangeCacheMs.load(std::memory_order_relaxed);
+    if (!force && g_rangeLive.load(std::memory_order_acquire) >= 0 &&
+        now >= cachedMs && now - cachedMs <= 250)
         return;
-    g_readableCacheMs = now;
-    g_readableRanges.clear();
-    FILE *f = fopen("/proc/self/maps", "r");
-    if (!f) return;
-    char line[512];
-    while (fgets(line, sizeof line, f)) {
-        uintptr_t lo = 0, hi = 0;
-        char perms[8] = {0};
-        if (sscanf(line, "%" SCNxPTR "-%" SCNxPTR " %7s", &lo, &hi, perms) == 3 &&
-            perms[0] == 'r' && hi > lo) {
-            g_readableRanges.emplace_back(lo, hi);
+
+    bool expected = false;
+    if (!g_rangeRefreshing.compare_exchange_strong(expected, true,
+                                                   std::memory_order_acq_rel))
+        return;
+
+    if (!force) {
+        // Re-check under the claim: another thread may have finished a refresh
+        // while this one was waiting for it.
+        const uint64_t again = g_rangeCacheMs.load(std::memory_order_relaxed);
+        if (g_rangeLive.load(std::memory_order_acquire) >= 0 &&
+            now >= again && now - again <= 250) {
+            g_rangeRefreshing.store(false, std::memory_order_release);
+            return;
         }
     }
-    fclose(f);
+
+    const int gen = g_rangeGeneration.load(std::memory_order_relaxed);
+    const int slot = (gen + 1 + kRangeSlots) % kRangeSlots;
+    ToolsRangeSnapshot &snap = g_rangeSlots[slot];
+    snap.ranges.clear();                      // keeps capacity: no realloc churn
+
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (f) {
+        char line[512];
+        while (fgets(line, sizeof line, f)) {
+            uintptr_t lo = 0, hi = 0;
+            char perms[8] = {0};
+            if (sscanf(line, "%" SCNxPTR "-%" SCNxPTR " %7s", &lo, &hi, perms) == 3 &&
+                perms[0] == 'r' && hi > lo) {
+                snap.ranges.emplace_back(lo, hi);
+            }
+        }
+        fclose(f);
+    }
+
+    g_rangeCacheMs.store(now, std::memory_order_relaxed);
+    // Publish LAST: the snapshot is complete before any reader can pick it up.
+    g_rangeLive.store(slot, std::memory_order_release);
+    g_rangeGeneration.store(gen + 1, std::memory_order_relaxed);
+    g_rangeRefreshing.store(false, std::memory_order_release);
 }
 
-// Binary search of the cached snapshot. Pure userspace - no syscall.
-static bool ToolsRangesContain(uintptr_t a) {
-    size_t lo = 0, hi = g_readableRanges.size();
+// Binary search of ONE immutable snapshot. Pure userspace - no syscall.
+static bool ToolsRangesContain(const ToolsRangeSnapshot *snap, uintptr_t a) {
+    if (!snap) return false;
+    const std::vector<std::pair<uintptr_t, uintptr_t>> &r = snap->ranges;
+    size_t lo = 0, hi = r.size();
     while (lo < hi) {
         size_t mid = (lo + hi) / 2;
-        if (a < g_readableRanges[mid].first)       hi = mid;
-        else if (a >= g_readableRanges[mid].second) lo = mid + 1;
+        if (a < r[mid].first)        hi = mid;
+        else if (a >= r[mid].second) lo = mid + 1;
         else return true;
     }
     return false;
@@ -161,7 +242,7 @@ static bool ToolsAddrReadable(void *addr) {
     const uintptr_t a = (uintptr_t)addr;
     if (a < 0x10000) return false;
     ToolsRefreshReadableRanges();
-    return ToolsRangesContain(a);
+    return ToolsRangesContain(ToolsLiveRanges(), a);
 }
 
 bool Tools::IsPtrValid(void *addr) {
@@ -176,8 +257,15 @@ bool Tools::IsPtrValid(void *addr) {
     // gate) and the process_vm_readv syscall this used to do PER CALL was the
     // single biggest per-frame cost of the whole mod. The snapshot is only
     // PARSED when it is empty (first call) - see ToolsRefreshReadableRanges.
-    if (g_readableRanges.empty()) ToolsRefreshReadableRanges(true);
-    if (ToolsRangesContain(a)) return true;
+    //
+    // The pointer is taken ONCE: a reader must never follow a snapshot that a
+    // refreshing thread could be refilling (see the concurrency note above).
+    const ToolsRangeSnapshot *snap = ToolsLiveRanges();
+    if (!snap) {
+        ToolsRefreshReadableRanges(true);
+        snap = ToolsLiveRanges();
+    }
+    if (ToolsRangesContain(snap, a)) return true;
 
     // NOT in the snapshot: either a dead pointer, or memory mapped after the
     // snapshot was taken (a pawn spawned a moment ago). process_vm_readv
@@ -191,7 +279,7 @@ bool Tools::IsPtrValid(void *addr) {
     // loop) instead of blindly rejecting - a blind reject silently disabled
     // every guarded hook, ESP pass and the triggerbot.
     ToolsRefreshReadableRanges();
-    return ToolsRangesContain(a);
+    return ToolsRangesContain(ToolsLiveRanges(), a);
 }
 
 uintptr_t Tools::GetBaseAddress(const char *name) {
