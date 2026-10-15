@@ -92,32 +92,7 @@ SPKillIconItemFields *killiconFields;
 BRDeadboxSkinFields *deadboxFields;
 BRDropPlaneSkinFields *dropplaneFields;
 
-struct VehicleSkinConfFields {
-    uint8_t ColorID;
-    bool ExternalUnVisible;
-    uint8_t GoGetPos;
-    bool IsAutoDemolition;
-    uint8_t LockedShowOrder;
-    bool ShowInBag;
-    bool ShowRare;
-    uint8_t SkinMusicsID;
-    uint8_t SkinStyle;
-    char pad_19[3];
-    uint CurrencyID;
-    uint ID;
-    int MusicsID;
-    int NewVehicleResId;
-    float RoomShowScale;
-    int SellPrice;
-    int SkinExtraMesh;
-    int SkinParam;
-    int SkinParam2;
-    int SkinParam3;
-    int UILowModel;
-    int VehicleId;
-};
-
-VehicleSkinConfFields* vehicleSkinFields;
+VehicleSkinConfFields* vehicleSkinFields;   // struct lives in Skin/Fields.h (offset-tested)
 
 uintptr_t Item2InventoryAddress = 0x6971D34;
 uintptr_t WeaponConfAddress = 0xAF7E7FC;
@@ -142,6 +117,7 @@ uintptr_t RolePackConfAddress = 0x90F784C;
 
 uintptr_t WeaponConfName = 0xAF7FDC8;
 uintptr_t GetDropPlaneName = 0xB198B08;
+uintptr_t GetVehicleSkinName = 0xAF74B38;   // VehicleSkinConfConfig.get_Name (dump 823011)
 uintptr_t GetNameRoleSkin = 0x90F98F4;
 uintptr_t GetRoleConfName = 0x90F4214;
 uintptr_t GetDeadBoxIDAddress = 0x90F2CA0;
@@ -846,7 +822,7 @@ void LoadCharacterSkins() {
         if (!a || !Tools::IsPtrValid(a))
             continue;
 
-        auto *fx = (RoleSkinFields *)((uintptr_t)a + 0x18);
+        auto *fx = (RoleSkinFields *)((uintptr_t)a + 0x10);
 
         if (!Tools::IsPtrValid(fx))
             continue;
@@ -1577,7 +1553,7 @@ inline void* FindVehicleSkinConfigById(int skinId) {
         return exact->second;
     for (void* skin : vehicleSkinConfigInstance) {
         if (!SkinPtr(skin)) continue;
-        auto* fields = (VehicleSkinConfFields*)((uintptr_t)skin + 0x18);
+        auto* fields = (VehicleSkinConfFields*)((uintptr_t)skin + 0x10);
         if (SkinPtr(fields) && (int)fields->ID == skinId)
             return skin;
     }
@@ -1591,7 +1567,7 @@ inline int ActiveVehicleSkinIdForType(int vehicleType) {
 
 inline int ActiveVehicleSkinIdForConf(void* skinConf) {
     if (!SkinPtr(skinConf)) return 0;
-    auto* fields = (VehicleSkinConfFields*)((uintptr_t)skinConf + 0x18);
+    auto* fields = (VehicleSkinConfFields*)((uintptr_t)skinConf + 0x10);
     if (!SkinPtr(fields)) return 0;
     auto byId = activeVehicleSkinsById.find((int)fields->VehicleId);
     if (byId != activeVehicleSkinsById.end()) return byId->second;
@@ -1618,7 +1594,7 @@ inline int ActiveSkisSkinId() {
 inline void ForceSkisSkinFields(void* instance, int selected) {
     if (!SkinPtr(instance) || selected <= 0) return;
     void* conf = FindVehicleSkinConfigById(selected);
-    auto* fields = SkinPtr(conf) ? (VehicleSkinConfFields*)((uintptr_t)conf + 0x18) : nullptr;
+    auto* fields = SkinPtr(conf) ? (VehicleSkinConfFields*)((uintptr_t)conf + 0x10) : nullptr;
     const int mesh = SkinPtr(fields) ? fields->NewVehicleResId : 0;
     *(uint*)((uintptr_t)instance + 0x88) = (uint)selected;
     if (mesh > 0) {
@@ -1722,14 +1698,19 @@ void LoadSnowboardSkins() {
 
     for (void* skin : skinConfs) {
         if (!skin || !Tools::IsPtrValid(skin)) continue;
-        auto* fields = (VehicleSkinConfFields*)((uintptr_t)skin + 0x18);
+        auto* fields = (VehicleSkinConfFields*)((uintptr_t)skin + 0x10);
         if (!Tools::IsPtrValid(fields)) continue;
         if (fields->VehicleId != 31707110) continue;
         int skinId = (int)fields->ID;
         if (skinId <= 0 || loadedIds[skinId]) continue;
         loadedIds[skinId] = true;
         std::string prefix = GetRarityPrefix((int)fields->ColorID);
-        std::string name = prefix + "Snowboard Skin " + std::to_string(skinId);
+        // Real name when the localisation table is ready (dump 823011); the id
+        // form is the fallback so the entry stays clickable and unique.
+        std::string skinName = GetNameString(GetVehicleSkinName, skin);
+        std::string name = skinName.empty()
+            ? prefix + "Snowboard Skin " + std::to_string(skinId)
+            : prefix + skinName;
         snowboardData.push_back({name, skinId});
     }
 }

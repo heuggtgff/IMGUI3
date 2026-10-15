@@ -17,6 +17,7 @@ extern uintptr_t RoleSkinAddress;
 extern uintptr_t RolePackConfAddress;
 extern uintptr_t WeaponConfName;
 extern uintptr_t GetDropPlaneName;
+extern uintptr_t GetVehicleSkinName;
 extern uintptr_t GetNameRoleSkin;
 extern uintptr_t GetRoleConfName;
 extern uintptr_t GetDeadBoxIDAddress;
@@ -127,40 +128,59 @@ extern char searchQuery[256];
 extern std::string ToLower(std::string str);
 extern uintptr_t getRealOffset(uintptr_t offset);
 
+// RoleSkinConfig (dump 819208): first field m_ownerRoleIDs @0x10, so the loader
+// base is +0x10. The old declaration started at ClothType with a +0x18 cast:
+// that happened to line up for the byte cluster and most asset ids, but FxAssetID_1P
+// landed on the real FxAssetID_UI (0x58 instead of 0x50), so the Watch tab stored
+// the UI effect id and the apply path wrote it into BindEffect1P. The old decl was
+// also missing HideInBag + IsDisassemble, which shifted every flag from
+// IsCanBeUsedForAllRole on.
 struct RoleSkinFields
 {
-    uint8_t ClothType;             // 0x18
-    uint8_t ColorID;               // 0x19
-    uint8_t GoGetPos;              // 0x1A
-    uint8_t HatSubMode;            // 0x1B
-    uint8_t IsCanBeUsedForAllRole; // 0x1C
-    bool IsCloseScreenSaver;       // 0x1D
-    uint8_t SecondTab;             // 0x1E
-    bool ShowInBag;                // 0x1F
-    bool ShowRare;                 // 0x20
-    int BRBagAssetID;              // 0x24
-    int BRClothAssetID;            // 0x28
-    int BRHatAssetID;              // 0x2C
-    int BRLeftArmAssetID;          // 0x30
-    int BRSuitAssetID;             // 0x34
-    int BRWingAssetID;             // 0x38
-    int BagAssetID;                // 0x3C
-    int CamoID;                    // 0x40
-    int ClothAssetID;              // 0x48
-    int FxAssetIDHandGestureUI;    // 0x48
-    int FxAssetIDShow;             // 0x4C
-    int FxAssetID_1P;              // 0x50
-    int FxAssetID_3P;              // 0x54
-    int FxAssetID_UI;              // 0x58
-    int HatAssetID;                // 0x5C
-    uint ID;                       // 0x60
-    int LeftArm1PAssetID;          // 0x64
-    int LeftArmAssetID;            // 0x68
-    int ShowBagAssetID;            // 0x6C
-    int ShowClothAssetID;          // 0x70
-    int ShowHatAssetID;            // 0x74
-    int SuitAssetID;               // 0x80
-    int WingAssetID;               // 0x80
+    void *m_ownerRoleIDs;          // 0x10 @0x00 (List<uint>)
+    uint8_t ClothType;             // 0x18 @0x08
+    uint8_t ColorID;               // 0x19 @0x09
+    uint8_t GoGetPos;              // 0x1A @0x0A
+    uint8_t HatSubMode;            // 0x1B @0x0B
+    bool HideInBag;                // 0x1C @0x0C
+    uint8_t IsCanBeUsedForAllRole; // 0x1D @0x0D
+    bool IsCloseScreenSaver;       // 0x1E @0x0E
+    uint8_t IsDisassemble;         // 0x1F @0x0F
+    uint8_t SecondTab;             // 0x20 @0x10
+    bool ShowInBag;                // 0x21 @0x11
+    bool ShowRare;                 // 0x22 @0x12
+    char pad_23[1];                // 0x23 (@0x13)
+    int BRBagAssetID;              // 0x24 @0x14
+    int BRClothAssetID;            // 0x28 @0x18
+    int BRHatAssetID;              // 0x2C @0x1C
+    int BRLeftArmAssetID;          // 0x30 @0x20
+    int BRSuitAssetID;             // 0x34 @0x24
+    int BRWingAssetID;             // 0x38 @0x28
+    int BagAssetID;                // 0x3C @0x2C
+    int CamoID;                    // 0x40 @0x30
+    int ClothAssetID;              // 0x44 @0x34
+    int FxAssetIDHandGestureUI;    // 0x48 @0x38
+    int FxAssetIDShow;             // 0x4C @0x3C
+    int FxAssetID_1P;              // 0x50 @0x40 (the Watch tab's watchvalue)
+    int FxAssetID_3P;              // 0x54 @0x44
+    int FxAssetID_UI;              // 0x58 @0x48 (what the +0x18 cast used to return)
+    int HatAssetID;                // 0x5C @0x4C
+    uint ID;                       // 0x60 @0x50
+    int LeftArm1PAssetID;          // 0x64 @0x54
+    int LeftArmAssetID;            // 0x68 @0x58
+    int ShowBagAssetID;            // 0x6C @0x5C
+    int ShowClothAssetID;          // 0x70 @0x60
+    int ShowHatAssetID;            // 0x74 @0x64
+    int SubTypeForCommonAttr;      // 0x78 @0x68
+    int SuitAssetID;               // 0x7C @0x6C
+    int WingAssetID;               // 0x80 @0x70
+    char pad_84[4];                // 0x84 (@0x74) - aligns the arrays to 8
+    void *ExtraAttriAssetIDs_1P;   // 0x88 @0x78 (int[])
+    void *ExtraAttriAssetIDs_3P;   // 0x90 @0x80 (int[])
+    void *ExtraAttriAssetIDs_UI;   // 0x98 @0x88 (int[])
+    void *GoGetUrl;                // 0xA0 @0x90
+    char pad_98[24];               // 0xA8..0xB7 (@0x98) - LOCID_* are static
+    void *MaterialIDs;             // 0xC0 @0xB0 (int[])
 };
 extern RoleSkinFields *roleskinFields;
 
@@ -620,3 +640,48 @@ struct BRDropPlaneSkinFields
     int Priority;           // 0x28
 };
 extern BRDropPlaneSkinFields *dropplaneFields;
+
+// VehicleSkinConfConfig (dump 822946). ColorID is the first field @0x10, so the
+// offsets below are relative to a +0x10 loader base: the old +0x18 base made ID
+// read NewVehicleResId and VehicleId read UILowModel, which is why the Snowboard
+// tab could never match a skin (LoadSnowboardSkins filters on VehicleId, and
+// FindVehicleSkinConfigById on ID). The dump's byte flags 0x11..0x19 are copied
+// one for one - the old decl was missing DisableInCollection, which shifted
+// every flag after ColorID by one slot.
+struct VehicleSkinConfFields
+{
+    uint8_t ColorID;         // 0x10 @0x00
+    bool DisableInCollection; // 0x11 @0x01
+    bool ExternalUnVisible;  // 0x12 @0x02
+    uint8_t GoGetPos;        // 0x13 @0x03
+    bool IsAutoDemolition;   // 0x14 @0x04
+    uint8_t LockedShowOrder; // 0x15 @0x05
+    bool ShowInBag;          // 0x16 @0x06
+    bool ShowRare;           // 0x17 @0x07
+    uint8_t SkinMusicsID;    // 0x18 @0x08
+    uint8_t SkinStyle;       // 0x19 @0x09
+    char pad_1A[2];          // 0x1A (@0x0A) - aligns CurrencyID to 4
+    uint CurrencyID;         // 0x1C @0x0C
+    uint ID;                 // 0x20 @0x10 (skin join key)
+    int MusicsID;            // 0x24 @0x14
+    int NewVehicleResId;     // 0x28 @0x18 (mesh the apply path forces)
+    float RoomShowScale;     // 0x2C @0x1C
+    int SellPrice;           // 0x30 @0x20
+    int SkinExtraMesh;       // 0x34 @0x24
+    int SkinParam;           // 0x38 @0x28
+    int SkinParam2;          // 0x3C @0x2C
+    int SkinParam3;          // 0x40 @0x30
+    int UILowModel;          // 0x44 @0x34
+    int VehicleId;           // 0x48 @0x38 (31707110 == snowboard)
+    char pad_3C[12];         // 0x4C (@0x3C) - AudioDownloadKey is static
+    void *FeatureDescLocid1; // 0x58 @0x48
+    void *FeatureDescLocid2; // 0x60 @0x50
+    void *GameType;          // 0x68 @0x58 (byte[])
+    void *GoGetUrl;          // 0x70 @0x60
+    char pad_68[24];         // 0x78..0x8F (@0x68)
+    void *PreloadRes;        // 0x90 @0x80
+    char pad_88[48];         // 0x98..0xC7 (@0x88)
+    void *SkinParams;        // 0xC8 @0xB8 (int[]) - what VehicleSkinParams reads
+    void *WeaponSkin;        // 0xD0 @0xC0
+};
+extern VehicleSkinConfFields *vehicleSkinFields;

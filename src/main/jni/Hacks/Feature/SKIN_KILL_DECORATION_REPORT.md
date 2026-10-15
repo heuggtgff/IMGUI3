@@ -29,7 +29,7 @@ offsets are *not* masked):
 | `MythicSightConfig` (814614) | `ShowInBag` | `0x10` | `+0x18` | **`+0x10`** |
 | `BRDeadboxSkinConfig` (802767) | `ColorID` | `0x10` | `+0x18` | **`+0x10`** |
 | `BRDropPlaneSkinConfig` (802811) | `ColorID` | `0x10` | `+0x18` | **`+0x10`** |
-| `RoleSkinConfig` (819208) | `ClothType` | `0x18` | `+0x18` | `+0x18` (was right) |
+| `RoleSkinConfig` (819208) | `m_ownerRoleIDs` | `0x10` | `+0x18` (decl started at `ClothType`) | **`+0x10`** |
 | `MythicArmorConfig` (814559) | `AssetID` | `0x14` | `+0x14` | `+0x14` (was right) |
 | `WeaponConfConfig` (823910) | `Accuracy` | `0x20` | `+0x20` | `+0x20` (was right) |
 | `Item2InventoryConfig` (811194) | `ItemID` | `0x20` | `+0x20` | `+0x20` (was right) |
@@ -199,9 +199,10 @@ report:
   the list "loaded" forever and no later call ever retried. It now latches only
   once all three tiers the join needs were actually present.
 
-`VehicleSkinConfFields` (snowboard) is still cast at `+0x18` against
+`VehicleSkinConfFields` (snowboard) was still cast at `+0x18` against
 `VehicleSkinConfConfig.ColorID 0x10` (dump 822946) with a missing
-`DisableInCollection`; unchanged here, it belongs to the snowboard tab.
+`DisableInCollection` at the time this pass was written; both are fixed in the
+pass below.
 
 - `ctorHook/ctorOffset.h` is an older duplicate of `Skin/Thread.h`'s loaders -
   it declares its own `sBool`/`activeKillEffects` and copies of the `+0x18`-based
@@ -227,7 +228,93 @@ the value actually differs, and `KillEffectGroupID` is deliberately untouched:
 kill effects already work through the getter hooks, and that map's value is an
 effect id or an asset id depending on which source won at load time.
 
-Left otherwise correct and unchanged: `RoleSkinFields +0x18`
-(`RoleSkinConfig.ClothType 0x18`), `MythicArmorFields +0x14`,
+Left otherwise correct and unchanged: `MythicArmorFields +0x14`,
 `WeaponConfFields +0x20`, `Item2InventoryFields +0x20`,
 `WeaponAssetGroupFields +0x40`, `SkinPtr`/`GetIl2CppArrayLen`.
+
+## Third pass: the Snowboard tab, and the RoleSkinConfig declaration
+
+The screenshot that prompted this pass shows the Snowboard tab next to the others,
+so the same audit was run over the two config classes that pass had not looked at
+with the same rigour: `VehicleSkinConfConfig` (snowboard) and `RoleSkinConfig`
+(Watch).
+
+### Snowboard (`VehicleSkinConfConfig`, dump 822946) - a real fix
+
+Two independent defects, one of them fatal:
+
+- The class' first field is `ColorID` **at `0x10`**, but all four
+  `VehicleSkinConfFields` casts in `Skin/Thread.h` (`FindVehicleSkinConfigById`,
+  `ActiveVehicleSkinIdForConf`, `ForceSkisSkinFields`, `LoadSnowboardSkins`) used
+  `+0x18`. So `fields->ID` read `NewVehicleResId` (0x28) and, more importantly,
+  `fields->VehicleId` read the slot at `0x50` - the alignment hole past
+  `VehicleId`, where the dump has only the **static** `AudioDownloadKey`. The
+  snowboard list is built by `if (fields->VehicleId != 31707110) continue;`, so
+  **every** config was discarded and the tab could never fill, while
+  `System/UI/SkinTab.h`'s `SelectSnowboardSkin` already used the correct `+0x10`
+  base - the read and the write disagreed about the layout.
+- The declaration was missing `DisableInCollection` (0x11), which shifted every
+  flag from `ExternalUnVisible` on by one slot. The int fields survived because
+  the old `char pad_19[3]` accidentally restored the 4-byte alignment, which is
+  exactly why this one never showed up as a wrong asset id.
+
+Both are fixed: the casts are `+0x10` and the declaration now follows the dump
+line for line (`ColorID 0x10` through `VehicleId 0x48`, then the string/array
+tail through `SkinParams 0xC8` - included because `VehicleSkinParams()` reads
+that field - and `WeaponSkin 0xD0`). The struct moved to
+`Skin/Fields.h` - where every other offset-tested declaration lives - so the host
+test can lock it down; `Skin/Thread.h` keeps the `vehicleSkinFields` definition.
+
+Also: the list named its entries `"[M] Snowboard Skin <id>"`. The real
+`get_Name()` for this class is a dump RVA (`0xAF74B38`, dump 823011, same
+`// RVA:` convention that `GetRoleConfName 0x90F4214` / `GetDropPlaneName
+0xB198B08` already use and that works in your build), so the entry now carries
+the real localised name with the rarity prefix, falling back to the id form when
+the call returns an empty string (localisation table not ready) - the entry stays
+clickable and unique either way.
+
+### Watch (`RoleSkinConfig`, dump 819208) - a declaration cleanup, no behaviour change
+
+The earlier pass marked this class "was right" because the declaration started at
+`ClothType 0x18` and its base was `+0x18`, so the pair cancelled out. That is true
+for the two fields the Watch tab uses - `ColorID` resolved to 0x19 and
+`FxAssetID_1P` to 0x50, and the runtime test now *checks* that the pre-fix
+declaration returned the same `watchvalue` the fixed one does, rather than
+claiming otherwise. What was wrong was everything around them:
+
+- the class' real first field is `m_ownerRoleIDs` @`0x10`, so the base is
+  `+0x10`;
+- `HideInBag` (0x1C) and `IsDisassemble` (0x1F) were missing, so
+  `IsCanBeUsedForAllRole`, `IsCloseScreenSaver`, `SecondTab`, `ShowInBag` and
+  `ShowRare` each read their neighbour (`ShowRare` read `SecondTab`, `SecondTab`
+  read `IsCloseScreenSaver`, ...);
+- the tail was mis-declared: `ClothAssetID`'s comment said 0x48 while it sits at
+  0x44, and `SuitAssetID`/`WingAssetID` were both commented 0x80 while they sit
+  at 0x78/0x7C, so the old declaration read `SubTypeForCommonAttr` as
+  `SuitAssetID` and `SuitAssetID` as `WingAssetID`.
+
+All of it is now the literal dump layout, and `Skin/Thread.h` uses `+0x10`.
+
+### Checks re-run after these edits
+
+- `Skin/tests/offset_check.cpp` (`g++ -std=c++17 -D__fastcall= -I src/main/jni
+  -I src/main/jni/Skin/tests/stubs`): `static_asserts: all struct layouts match
+  the dump` + `OK: all loader offsets match the il2cpp dump`, exit 0. New: 27
+  `static_assert`s for `VehicleSkinConfFields` and 29 for `RoleSkinFields`
+  (layout from `offsetof`), plus runtime sentinels read through the exact loader
+  casts, and an `OldRoleSkinFields` mirror of the pre-fix declaration that
+  measures what it used to read (`SecondTab` as `ShowRare`, `SubTypeForCommonAttr`
+  as `SuitAssetID`, ...) so the cleanup is shown, not asserted. The snowboard
+  pre-fix check drives `+0x18` and returns `NewVehicleResId` for `ID` and the
+  `0x50` slot for `VehicleId` - the wrong value that emptied the tab.
+- `Skin/tests/skin_headers_check.cpp` (`-fsyntax-only` over `SkinTab.h` →
+  `Fields.h` + `Thread.h` + `Camo.h`): 0 errors, exit 0. This is the check that
+  matters for the struct's move to `Fields.h`.
+- `Main.cpp` (`-fsyntax-only` over the whole header graph, stubs + the
+  `__aarch64__` shim + the curl/xhook include paths): 0 errors, exit 0.
+- Still not run here: `ndk-build`, the APK, anything on-device. The new
+  `get_Name` call in particular is unverified on device: the RVA and the calling
+  convention match the other name getters, and `GetNameString` guards the pointer,
+  but if the Snowboard tab's entries keep the `Snowboard Skin <id>` form on your
+  build, that call returned empty and the fallback is what you are seeing - the
+  list itself is driven by the corrected `VehicleId`/`ID` reads either way.
