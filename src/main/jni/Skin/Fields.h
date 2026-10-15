@@ -1,6 +1,9 @@
 #include <cstdint>
+#include <cctype>
+#include <map>
 #include <string>
 #include <array>
+#include <unordered_map>
 #include <vector>
 
 extern uintptr_t Item2InventoryAddress;
@@ -128,6 +131,132 @@ struct snowboardInfo
     int skinId;
 };
 extern std::vector<snowboardInfo> snowboardData;
+
+// ── Camo catalogue ──────────────────────────────────────────────────────────
+// One entry per camo the GAME has, not a hand-written list: LoadCamos() in
+// Skin/Thread.h walks every WeaponCamosConfig row the ctor hook captured and
+// inserts each distinct camo here.
+//
+// WeaponCamosConfig (dump 823828) is a config table of its own:
+//     CamoType 0x10, ColorID 0x11, NeedShowInEndGame 0x12, BelongWeaponID 0x14,
+//     CamoItemID 0x18, ConceptID 0x1C, DMZseason 0x20, KeepInCatalog 0x24,
+//     TextureAssetID 0x28, TextureSpecialAssetID 0x2C, LOCID_Describe 0x30,
+//     LOCID_Name 0x38, Mission_id 0x40, Personal_mission_id 0x48,
+//     SmallIconSpriteName 0x50
+// (the loader's +0x10 cast, exactly what Skin/Camo.h already uses).
+//
+// The table carries one row per (camo, weapon) pair - that is why the game's own
+// lookup is `WeaponCamosConfig.GetCamosConfig(uint camoID, int weaponID = 0)` -
+// so entries are de-duplicated by CamoItemID. That id is what the game equips:
+// it is the value the Gold/Diamond/... checkboxes have always written into
+// WeaponConfConfig.DefWeaponSkinID, and it is what ApplyCamoToEveryGun() writes
+// for every weapon conf now.
+struct camoInfo
+{
+    std::string camoName;   // the game's own name; "Camo <id>" when it is not ready
+    int camoItemID;         // CamoItemID - the id the game equips
+    int applyID;            // what DefWeaponSkinID is set to (see below)
+    int textureAssetID;     // TextureAssetID - identifies the 7 proven camos
+    int belongWeaponID;     // 0 = usable on every weapon
+};
+extern std::vector<camoInfo> camoData;
+
+// Case-insensitive lower of a name, used for matching and for the ordering.
+inline std::string CamoNameLower(const std::string &s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (char ch : s)
+        out.push_back((char)::tolower((unsigned char)ch));
+    return out;
+}
+
+// "Camo 1234" is what a row is called until the game's name table resolves.
+inline bool IsPlaceholderCamoName(const std::string &name)
+{
+    return name.rfind("Camo ", 0) == 0;
+}
+
+// The camo ids this build has PROVEN: they are the constants the original
+// template shipped (Gold 0x1D37F755, Platinum 0x1D37F756, Damascus 0x1D37F757,
+// Diamond 0x1D37F758, Aether Crystal 0x1D37F77D, Red Sprite 0x1D37F77E,
+// Glacial Ripple 0x1D37F77F). A camo whose name matches one of these keeps
+// writing the id that already worked on device; every other camo uses the id
+// from the game's own table. `src` in the Camo tab's diagnostic row says which
+// one was used, and prints both ids for a known camo, so a mismatch is visible
+// instead of guessed at.
+inline int KnownCamoIdForName(const std::string &name)
+{
+    const std::string lower = CamoNameLower(name);
+
+    // Whole-WORD match, not a substring one: the real names carry extra words
+    // ("Aether Crystal", "Red Sprite", "Glacial Ripple", or a "<weapon> gold"
+    // prefix), while the table also holds camos that merely start with a keyword
+    // ("Golden Emerald"), which a plain substring test read as Gold.
+    auto is = [&](const char *want) {
+        const std::string w = want;
+        for (size_t pos = lower.find(w); pos != std::string::npos;
+             pos = lower.find(w, pos + 1)) {
+            const size_t end = pos + w.size();
+            const bool startsWord = (pos == 0) ||
+                !std::isalnum((unsigned char)lower[pos - 1]);
+            const bool endsWord = (end == lower.size()) ||
+                !std::isalnum((unsigned char)lower[end]);
+            if (startsWord && endsWord)
+                return true;
+        }
+        return false;
+    };
+    if (is("gold"))       return 0x1D37F755;
+    if (is("platinum"))   return 0x1D37F756;
+    if (is("damascus"))   return 0x1D37F757;
+    if (is("diamond"))    return 0x1D37F758;
+    if (is("aether"))     return 0x1D37F77D;
+    if (is("red sprite")) return 0x1D37F77E;
+    if (is("glacial"))    return 0x1D37F77F;
+    return 0;
+}
+
+// Add one camo row: ignored when its CamoItemID is already in the list (the
+// table repeats a camo once per weapon), otherwise inserted in case-insensitive
+// name order so the list stays stable while the table fills in. A second row for
+// a known id upgrades what the first one could not answer yet (its real name, its
+// texture asset id, and therefore whether a proven camo id applies).
+inline void InsertCamo(int camoItemID, const std::string &name,
+                       int textureAssetID, int belongWeaponID)
+{
+    if (camoItemID <= 0 || name.empty())
+        return;
+
+    for (auto &existing : camoData) {
+        if (existing.camoItemID != camoItemID)
+            continue;
+        if (existing.belongWeaponID != 0 && belongWeaponID == 0)
+            existing.belongWeaponID = 0;
+        if (existing.textureAssetID == 0 && textureAssetID != 0)
+            existing.textureAssetID = textureAssetID;
+        if (IsPlaceholderCamoName(existing.camoName) && !IsPlaceholderCamoName(name)) {
+            existing.camoName = name;
+            const int known = KnownCamoIdForName(name);
+            existing.applyID = known != 0 ? known : camoItemID;
+        }
+        return;
+    }
+
+    camoInfo entry;
+    entry.camoName = name;
+    entry.camoItemID = camoItemID;
+    entry.textureAssetID = textureAssetID;
+    entry.belongWeaponID = belongWeaponID;
+    const int known = KnownCamoIdForName(name);
+    entry.applyID = known != 0 ? known : camoItemID;
+
+    const std::string key = CamoNameLower(entry.camoName);
+    auto at = camoData.begin();
+    while (at != camoData.end() && CamoNameLower(at->camoName) <= key)
+        ++at;
+    camoData.insert(at, entry);
+}
 
 extern char searchQuery[256];
 extern std::string ToLower(std::string str);
@@ -508,6 +637,54 @@ struct WeaponConfFields
     void *UIPropertyUnlockLevel;     // 0x80
 };
 extern WeaponConfFields *weaponconfFields;
+
+// ---------------------------------------------------------------------------
+// Camo application - "replace the equipped camo on every gun".
+//
+// WeaponConfConfig.DefWeaponSkinID @0x38 (dump 823910, cast base +0x20 like the
+// rest of the file) is the field the weapon-skin path and the original
+// Gold/Diamond/... checkboxes both write, so it is the lever the game already
+// honours for "which camo is on this weapon". Every row of the table is written,
+// not only the weapons that happen to have a skin entry in itemData - that join
+// is what made the old checkboxes miss guns.
+//
+//   camoItemID > 0  - remember each conf's current value ONCE, then write the
+//                     camo id, so switching camo simply replaces it.
+//   camoItemID <= 0 - the tab's "Default / OFF": put the remembered values back.
+//                     Confs that were never touched are left completely alone,
+//                     which is why OFF can no longer blank a weapon's own
+//                     default skin the way writing a literal 0 did.
+//
+// `originals` is the caller's store (the tab keeps one for the session), so this
+// stays a pure function over the conf list and the host test can drive it.
+inline int ApplyCamoToEveryGun(int camoItemID,
+                               const std::vector<void *> &weaponConfs,
+                               std::unordered_map<uint, int> &originals)
+{
+    int written = 0;
+    for (void *conf : weaponConfs) {
+        if (!conf || !Tools::IsPtrValid(conf))
+            continue;
+        auto *cf = (WeaponConfFields *)((uintptr_t)conf + 0x20);
+        if (!Tools::IsPtrValid(cf) || cf->ID == 0)
+            continue;
+
+        if (camoItemID > 0) {
+            // emplace keeps the FIRST value seen: after a few camo switches the
+            // stored original is still the game's own, not the last pick.
+            originals.emplace(cf->ID, cf->DefWeaponSkinID);
+            cf->DefWeaponSkinID = camoItemID;
+            written++;
+        } else {
+            auto it = originals.find(cf->ID);
+            if (it == originals.end())
+                continue;
+            cf->DefWeaponSkinID = it->second;
+            written++;
+        }
+    }
+    return written;
+}
 
 struct WeaponCamosFields
 {

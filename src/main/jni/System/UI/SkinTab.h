@@ -335,24 +335,6 @@ inline void SelectSnowboardSkin(int skinId)
 
 inline void RenderSkinCategoryContent(int categoryIndex, bool drawSubTabs = false) {
 
-    // --- Camo States ---
-    static bool camoOff = true;
-    static bool camoDiamond = false;
-    static bool camoRedSprite = false; 
-    static bool camoGold = false;
-    static bool camoPlatinum = false;
-    static bool camoDamascus = false;
-    static bool camoAetherCrystal = false;
-    static bool camoGlacialRipple = false;
-    
-    #define ID_DIAMOND 0x1D37F758 
-    #define ID_RED_SPRITE 0x1D37F77E 
-    #define ID_GOLD 0x1D37F755
-    #define ID_PLATINUM 0x1D37F756
-    #define ID_DAMASCUS 0x1D37F757
-    #define ID_AETHER_CRYSTAL 0x1D37F77D
-    #define ID_GLACIAL_RIPPLE 0x1D37F77F
-    
     ImGui::BeginChild("SkinContent", ImVec2(0, 0));
     ImGui::Dummy(ImVec2(0, 8 * c::scale));
     
@@ -393,7 +375,8 @@ inline void RenderSkinCategoryContent(int categoryIndex, bool drawSubTabs = fals
     float halfWidth = (totalAvail - 10.0f) * 0.5f;
     float searchWidth = (skinSubTab == 0) ? halfWidth : totalAvail;
     
-    ImGui::TextColored(c::text::text_active, "Search Skin:");
+    // One search field for the tab; on the Camo sub-tab it is the camo search.
+    ImGui::TextColored(c::text::text_active, skinSubTab == 5 ? "Search Camo:" : "Search Skin:");
     if (skinSubTab == 0) {
         ImGui::SameLine(halfWidth + 20.0f);
         ImGui::TextColored(c::text::text_active, "Search Custom Char:");
@@ -438,8 +421,10 @@ inline void RenderSkinCategoryContent(int categoryIndex, bool drawSubTabs = fals
     // invisible control next to it. custom::Combo is the same control every other
     // dropdown in this menu uses (Mode / Hitbox / Box Type) and paints its own
     // label, field, arrow and popup.
+    // The Camo sub-tab deliberately has no filter dropdown - its list is the
+    // whole camo table, narrowed only by the search field.
     static int rarityFilter = 0;               // 0 = All
-    {
+    if (skinSubTab != 5) {
         static const char* rarityNames[] = {"All", "Mythic", "Legendary", "Epic",
                                             "Rare", "Uncommon", "Common"};
         custom::Combo("Filter", &rarityFilter, rarityNames, IM_ARRAYSIZE(rarityNames),
@@ -476,7 +461,7 @@ inline void RenderSkinCategoryContent(int categoryIndex, bool drawSubTabs = fals
         itemType = "Weapons";
         break;
     case 5:
-        itemCount = itemData.size();
+        itemCount = camoData.size();
         itemType = "Camo";
         break;
     case 6:
@@ -967,8 +952,9 @@ case 3:
         break;
 
     case 5:
-        // --- Camo Manager Tab Content ---
-        ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "Inject Camo to Mythic/Legendary Skins");
+    {
+        // --- Camo: the whole camo table, applied to every gun ---
+        ImGui::TextColored(ImVec4(1, 0.8f, 0, 1), "Camo - replaces the equipped camo on every gun");
         ImGui::Dummy(ImVec2(0, 10));
 
         // Skin / kill-decoration diagnostics: each count is a stage of the
@@ -1006,155 +992,75 @@ case 3:
         }
         ImGui::Dummy(ImVec2(0, 6));
 
-        if (custom::Checkbox("Default / OFF", &camoOff)) {
-            if (camoOff) {
-                camoDiamond = false;
-                camoRedSprite = false;
-                camoGold = false;
-                camoPlatinum = false;
-                camoDamascus = false;
-                camoAetherCrystal = false;
-                camoGlacialRipple = false;
-                for (const auto& getitem : itemData) {
-                    if (getitem.itemName.find("[M]") != std::string::npos || getitem.itemName.find("[L]") != std::string::npos) {
-                        for (auto conf : weaponConfInstance) {
-                            if (!conf) continue;
-                            weaponconfFields = (WeaponConfFields*)((uintptr_t)conf + 0x20);
-                            if (weaponconfFields->ID == getitem.WeaponConf[2]) weaponconfFields->DefWeaponSkinID = 0;
-                        }
-                    }
-                }
+        // --- Every camo in the build, one search field, no filter dropdown ---
+        // The list is camoData, filled by LoadCamos() (Skin/Thread.h) from the
+        // game's own WeaponCamosConfig table. Picking a row writes that camo's
+        // id into DefWeaponSkinID on EVERY weapon conf, so a camo a gun already
+        // had equipped (Gold on the KRM, say) is replaced by the pick.
+        static std::unordered_map<uint, int> camoOriginals;
+        static int selectedCamoItemID = -1;   // -1 = no override, the tab's OFF
+
+        // The ctor hooks push confs from another thread, so take a copy: the
+        // apply below then walks a list that cannot move under it.
+        std::vector<void *> camoConfs;
+        {
+            std::lock_guard<std::mutex> lock(g_dataMutex);
+            camoConfs = weaponConfInstance;
+        }
+
+        bool camoDefault = selectedCamoItemID < 0;
+        if (custom::Checkbox("Default / OFF", &camoDefault)) {
+            if (camoDefault) {
+                selectedCamoItemID = -1;
+                ApplyCamoToEveryGun(0, camoConfs, camoOriginals);
             }
+        }
+
+        // Diagnostic for the picked camo. `id` is the game's own CamoItemID and
+        // `apply` the value actually written: the proven constant for the seven
+        // camos this build already equips correctly, otherwise the row's own id.
+        // Seeing both is what makes a wrong id obvious on device.
+        for (const auto &camo : camoData) {
+            if (camo.camoItemID != selectedCamoItemID) continue;
+            ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                "Selected: %s  id=%08X apply=%08X%s  confs=%d",
+                camo.camoName.c_str(), (unsigned)camo.camoItemID, (unsigned)camo.applyID,
+                camo.applyID == camo.camoItemID ? "" : " (proven)", (int)camoConfs.size());
+            break;
         }
 
         ImGui::Separator();
 
-        if (custom::Checkbox("Diamond Camo", &camoDiamond)) {
-            if (camoDiamond) {
-                camoOff = false;
-                camoRedSprite = false;
-                for (const auto& getitem : itemData) {
-                    if (getitem.itemName.find("[M]") != std::string::npos || getitem.itemName.find("[L]") != std::string::npos) {
-                        for (auto conf : weaponConfInstance) {
-                            if (!conf) continue;
-                            weaponconfFields = (WeaponConfFields*)((uintptr_t)conf + 0x20);
-                            if (weaponconfFields->ID == getitem.WeaponConf[2]) {
-                                weaponconfFields->DefWeaponSkinID = ID_DIAMOND; 
-                            }
-                        }
+        if (camoData.empty()) {
+            ImGui::TextColored(ImVec4(1, 0.5f, 0.5f, 1),
+                "No camos loaded yet - open the game's camo menu once");
+        } else {
+            int shown = 0;
+            for (const auto &camo : camoData) {
+                if (strlen(searchQuery) >= MIN_SEARCH_LENGTH &&
+                    CamoNameLower(camo.camoName).find(searchLower) == std::string::npos)
+                    continue;
+                shown++;
+                // Names can repeat across rows, so the camo id keys the widget.
+                ImGui::PushID((int)camo.camoItemID);
+                bool checked = (selectedCamoItemID == camo.camoItemID);
+                if (DrawTieredSkinCheckbox(camo.camoName.c_str(), &checked)) {
+                    if (checked) {
+                        selectedCamoItemID = camo.camoItemID;
+                        ApplyCamoToEveryGun(camo.applyID, camoConfs, camoOriginals);
+                    } else {
+                        selectedCamoItemID = -1;
+                        ApplyCamoToEveryGun(0, camoConfs, camoOriginals);
                     }
                 }
+                ImGui::PopID();
             }
-        }
-
-        if (custom::Checkbox("Red Sprite Camo", &camoRedSprite)) {
-            if (camoRedSprite) {
-                camoOff = false;
-                camoDiamond = false;
-                for (const auto& getitem : itemData) {
-                    if (getitem.itemName.find("[M]") != std::string::npos || getitem.itemName.find("[L]") != std::string::npos) {
-                        for (auto conf : weaponConfInstance) {
-                            if (!conf) continue;
-                            weaponconfFields = (WeaponConfFields*)((uintptr_t)conf + 0x20);
-                            if (weaponconfFields->ID == getitem.WeaponConf[2]) {
-                                weaponconfFields->DefWeaponSkinID = ID_RED_SPRITE; 
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        if (custom::Checkbox("Gold Camo", &camoGold)) {
-            if (camoGold) {
-                camoOff = false;
-                camoRedSprite = false;
-                for (const auto& getitem : itemData) {
-                    if (getitem.itemName.find("[M]") != std::string::npos || getitem.itemName.find("[L]") != std::string::npos) {
-                        for (auto conf : weaponConfInstance) {
-                            if (!conf) continue;
-                            weaponconfFields = (WeaponConfFields*)((uintptr_t)conf + 0x20);
-                            if (weaponconfFields->ID == getitem.WeaponConf[2]) {
-                                weaponconfFields->DefWeaponSkinID = ID_GOLD; 
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        if (custom::Checkbox("Platimun Camo", &camoPlatinum)) {
-            if (camoPlatinum) {
-                camoOff = false;
-                camoGold = false;
-                for (const auto& getitem : itemData) {
-                    if (getitem.itemName.find("[M]") != std::string::npos || getitem.itemName.find("[L]") != std::string::npos) {
-                        for (auto conf : weaponConfInstance) {
-                            if (!conf) continue;
-                            weaponconfFields = (WeaponConfFields*)((uintptr_t)conf + 0x20);
-                            if (weaponconfFields->ID == getitem.WeaponConf[2]) {
-                                weaponconfFields->DefWeaponSkinID = ID_PLATINUM; 
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        if (custom::Checkbox("Damascus Camo", &camoDamascus)) {
-            if (camoDamascus) {
-                camoOff = false;
-                camoPlatinum = false;
-                for (const auto& getitem : itemData) {
-                    if (getitem.itemName.find("[M]") != std::string::npos || getitem.itemName.find("[L]") != std::string::npos) {
-                        for (auto conf : weaponConfInstance) {
-                            if (!conf) continue;
-                            weaponconfFields = (WeaponConfFields*)((uintptr_t)conf + 0x20);
-                            if (weaponconfFields->ID == getitem.WeaponConf[2]) {
-                                weaponconfFields->DefWeaponSkinID = ID_DAMASCUS; 
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        
-        if (custom::Checkbox("Aether Crystal Camo", &camoAetherCrystal)) {
-            if (camoAetherCrystal) {
-                camoOff = false;
-                camoDamascus = false;
-                for (const auto& getitem : itemData) {
-                    if (getitem.itemName.find("[M]") != std::string::npos || getitem.itemName.find("[L]") != std::string::npos) {
-                        for (auto conf : weaponConfInstance) {
-                            if (!conf) continue;
-                            weaponconfFields = (WeaponConfFields*)((uintptr_t)conf + 0x20);
-                            if (weaponconfFields->ID == getitem.WeaponConf[2]) {
-                                weaponconfFields->DefWeaponSkinID = ID_AETHER_CRYSTAL; 
-                            }
-                        }
-                    }
-                }
-            }
-        }
-           
-        if (custom::Checkbox("Glacial Ripple Camo", &camoGlacialRipple)) {
-            if (camoGlacialRipple) {
-                camoOff = false;
-                camoAetherCrystal = false;
-                for (const auto& getitem : itemData) {
-                    if (getitem.itemName.find("[M]") != std::string::npos || getitem.itemName.find("[L]") != std::string::npos) {
-                        for (auto conf : weaponConfInstance) {
-                            if (!conf) continue;
-                            weaponconfFields = (WeaponConfFields*)((uintptr_t)conf + 0x20);
-                            if (weaponconfFields->ID == getitem.WeaponConf[2]) {
-                                weaponconfFields->DefWeaponSkinID = ID_GLACIAL_RIPPLE; 
-                            }
-                        }
-                    }
-                }
-            }
+            if (shown == 0)
+                ImGui::TextColored(ImVec4(1, 0.5f, 0.5f, 1), "No camo matches the search");
         }
     break;
+    }
+
     case 6:
         if (!snowboardData.empty()) {
             // Selected (ON) first

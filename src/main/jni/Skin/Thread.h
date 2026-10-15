@@ -45,6 +45,7 @@ std::vector<watcher> watch;
 std::vector<deadbox> deadboxF;
 std::vector<planeID> dropplane;
 std::vector<snowboardInfo> snowboardData;
+std::vector<camoInfo> camoData;
 
 RoleSkinFields *roleskinFields;
 CharacterModelFields *characterfields;
@@ -1715,6 +1716,43 @@ void LoadSnowboardSkins() {
     }
 }
 
+// ── Camo catalogue ────────────────────────────────────────────────────────
+// Fills camoData from every WeaponCamosConfig row the ctor hook captured, so
+// the Camo tab lists the camos this build actually has instead of a
+// hand-written set. The table carries one row per (camo, weapon) pair - the
+// game's own lookup is GetCamosConfig(camoID, weaponID) - so CamoItemID is the
+// key and repeats are folded together by InsertCamo (Skin/Fields.h): the first
+// row supplies the entry and a later one upgrades the fields it could not
+// answer, which also covers rows whose name table was not ready yet.
+void LoadCamos() {
+    std::vector<void *> camoConfs;
+    {
+        std::lock_guard<std::mutex> lock(g_dataMutex);
+        camoConfs = weaponCamosConfigInstance;
+    }
+    if (camoConfs.empty()) return;
+
+    for (void *camo : camoConfs) {
+        if (!camo || !Tools::IsPtrValid(camo)) continue;
+        // WeaponCamosFields starts at CamoType (dump 823828) - same +0x10 cast
+        // Skin/Camo.h already reads the table with.
+        auto *fields = (WeaponCamosFields *)((uintptr_t)camo + 0x10);
+        if (!Tools::IsPtrValid(fields)) continue;
+        uint camoItemID = fields->CamoItemID;
+        if (camoItemID == 0) continue;
+
+        // get_Name resolves through the localisation table, which is empty until
+        // the game loads it, hence the placeholder name. (UnlockedCamo is this
+        // same getter - 0xAF7E580, WeaponCamosConfig.get_Name, dump 823888 -
+        // which is what Skin/Camo.h reads camo names with.)
+        std::string name = GetNameString(UnlockedCamo, camo);
+        if (name.empty())
+            name = "Camo " + std::to_string(camoItemID);
+
+        InsertCamo((int)camoItemID, name, fields->TextureAssetID, fields->BelongWeaponID);
+    }
+}
+
 void Skins_Thread()
 {
     while (!m_unity)
@@ -1814,6 +1852,7 @@ void Skins_Thread()
         LoadWeaponSkins();
         LoadPlaneSkins();
         LoadSnowboardSkins();
+        LoadCamos();
         LoadKillIcons();
         g_killDecorationDiag.killEffectWeapons = (int)killEffectByWeapon.size();
         g_killDecorationDiag.killEffectItemIDs = (int)killEffectItemByAssetId.size();
