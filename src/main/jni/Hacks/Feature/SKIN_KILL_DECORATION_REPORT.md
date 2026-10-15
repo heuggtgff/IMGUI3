@@ -318,3 +318,100 @@ All of it is now the literal dump layout, and `Skin/Thread.h` uses `+0x10`.
   but if the Snowboard tab's entries keep the `Snowboard Skin <id>` form on your
   build, that call returned empty and the fallback is what you are seeing - the
   list itself is driven by the corrected `VehicleId`/`ID` reads either way.
+
+## Fourth pass: the Target Character dropdown, and the blank character card
+
+Two reported symptoms, one command each:
+
+1. **"I put up Ghost - Stealth and selected it on the dropdown, and the skin still
+   applied on Charly."**
+2. **"The gun skin loads its model when choosing but the skin stays blank."**
+
+Both were in the character list's apply block in `System/UI/SkinTab.h`, and both
+were the *same* mistake the weapon path had already been fixed for: the block
+resolved its target, then threw the resolution away by OR-ing the default
+character's ids into every match.
+
+### Why it applied on Charly
+
+```
+if (cf->Traitor1P == selTraitor1P ||
+    cf->Traitor3P == selTraitor3P ||
+    cf->Traitor1P == 710001101) {   // <- Charly, always true for Charly's row
+```
+
+`710001101` is Charly's `Traitor1P`, so that third clause matched Charly's
+`CharacterModelConfig` **whatever the dropdown said** - and the same
+`|| itf->ID == 100301208` / `|| rf->ID == 100301208` was in the item-resource and
+`RoleConfConfig` loops (100301208 is Charly's item/role id). The dropdown looked
+like it worked because every selection wrote the same character.
+
+### Why the card stayed blank (and the gun's did not)
+
+The character loop wrote
+
+```
+itf->UIMiniSpriteNameIndex   = getchar.charRes[0];
+itf->UISmallSpriteNameIndex  = getchar.charRes[1];
+itf->UISpriteNameIndex       = getchar.charRes[2];
+// UISquareSpriteNameIndex   - never written
+```
+
+`charRes` holds the three **int** *asset* ids (`FxAssetID`, `InventoryModelID`,
+`ModelAssetIDRaw`); the sprite fields are **uint16 sprite-name indices**. An asset
+id truncated into a `uint16_t` is not a sprite name index the game can resolve, so
+the loadout card rendered empty - and the square sprite was skipped entirely. The
+sprite indices the character's own `ItemResourceConfig` row really carries were
+already loaded, but into a different member: `charInfo::ItemRes2`
+(`Skin/Thread.h`, read as `UIMiniSpriteNameIndex`/
+`UISmallSpriteNameIndex`/`UISpriteNameIndex`/`UISquareSpriteNameIndex`). The
+weapon path writes its four `ItemRes[]` indices with `!= 0` guards, which is why
+the gun's card and model kept working while the character's went blank.
+
+### Changes
+
+`Skin/Fields.h` - `ResolveTargetIds()` and `ApplyCharacterSkin()`, the whole apply
+as plain functions over the character structs (the UI's inline copy is gone, so a
+host test can drive the identical code):
+
+- **Only the selected target is written.** The model loop matches
+  `Traitor1P`/`Traitor3P` against the *resolved* ids with no extra clause; the
+  item-resource loop matches `ItemResourceFields.ID` and the `RoleConfConfig` loop
+  matches `RoleConfFields.ID`. Charly's hardcoded ids survive only inside
+  `ResolveTargetIds`, keyed on the *selected target's name*.
+- **Sprite indices come from `ItemRes2`; asset ids go to the asset fields.**
+  Assets: `FxAssetID`/`InventoryModelID`/`ModelAssetIDRaw` from `charRes[0..2]`.
+  Sprites: all four `UI*SpriteNameIndex` fields from `ItemRes2[0..3]`.
+- **Every write is `!= 0`-guarded** (the weapon path's rule): the zero of an
+  unmatched value never overwrites data the game already resolved.
+- `System/UI/SkinTab.h` - the character button calls the two functions, with a
+  bounds check on `g_selectedTargetCharIndex` (`g_targetCharacters` can be rebuilt
+  between two frames). The Watch tab passes through `ResolveTargetIds` too, and
+  its old `|| cf->Traitor1P == 710001101` is gone with it.
+
+### Checks run
+
+- **New host test** `Skin/tests/character_apply_check.cpp` (22 checks, exit 0,
+  prints `OK: all character-apply checks passed (22)`). It builds fake
+  `CharacterModelConfig` / `ItemResourceConfig` / `RoleConfConfig` /
+  `RolePackConfConfig` rows with sentinels at the exact post-`+0x10` field
+  offsets, then drives the real `ApplyCharacterSkin()`: selecting Ghost writes
+  Ghost's rows only (Charly's 12 model ids, item resource and `RoleConfConfig`
+  asserted untouched, and vice versa for Charly), sprite fields carry the
+  `ItemRes2` indices rather than truncated assets, the square index is written,
+  zero-valued skin fields cannot blank a card, and an id matching no row writes
+  nothing.
+- **The test is measured, not asserted**: with the model loop's
+  `|| Traitor1P == 710001101` restored it fails `T2 Charly's model config was NOT
+  touched` and `T5 an id that matches no row writes nothing` (exit 1); with the
+  `charRes`-into-sprites write restored it fails the four sprite checks (exit 1).
+- `Skin/tests/skin_headers_check.cpp` (`-fsyntax-only` over `SkinTab.h` ->
+  `Fields.h` + `Thread.h` + `Camo.h`): 0 errors, exit 0.
+- `Skin/tests/offset_check.cpp`: `static_asserts: all struct layouts match the
+  dump` + `OK: all loader offsets match the il2cpp dump`, exit 0 (the character
+  and role structs are unchanged by this pass).
+- `Main.cpp` (`-fsyntax-only` over the whole header graph, host stubs + the
+  `__aarch64__` prelude shim + the real `SDK/Xhook/xhook.h`): 0 errors, exit 0.
+- Still not run here: `ndk-build`, the APK, anything on-device. No NDK in this
+  VM, so this pass proves the writes, their targets and the struct layouts - not
+  the frame rate or the device ABI.

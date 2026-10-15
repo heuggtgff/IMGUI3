@@ -541,121 +541,30 @@ case 0:
                     !RoleConfConfigInstance.empty() &&
                     !RolePackConfConfigInstance.empty()) {
 
-                    auto& target = g_targetCharacters[g_selectedTargetCharIndex];
+                    // Bounds-checked: g_targetCharacters can be rebuilt between
+                    // two frames, and an out-of-range index would read past the
+                    // vector instead of just doing nothing.
+                    if (g_selectedTargetCharIndex < 0 ||
+                        g_selectedTargetCharIndex >= (int)g_targetCharacters.size())
+                        return;
 
-                    int selTraitor1P = (target.name == "Charly")
-                                       ? 710001101
-                                       : target.traitor1p;
+                    int selTraitor1P = 0, selTraitor3P = 0, selItemID = 0,
+                        selRoleID = 0, selPackID = 0;
+                    ResolveTargetIds(g_targetCharacters[g_selectedTargetCharIndex],
+                                     selTraitor1P, selTraitor3P,
+                                     selItemID, selRoleID, selPackID);
 
-                    int selTraitor3P = (target.name == "Charly")
-                                       ? 710001102
-                                       : target.traitor3p;
-
-                    int selItemID = (target.name == "Charly")
-                                    ? 100301208
-                                    : target.itemID;
-
-                    int selRoleID = (target.name == "Charly")
-                                    ? 100301208
-                                    : target.roleID;
-
-                    int selPackID = target.rolepackID;
-
-                    for (auto charModel : CharacterModelConfigInstance) {
-
-                        if (!charModel)
-                            continue;
-
-                        auto* cf = (CharacterModelFields*)((uintptr_t)charModel + 0x10);
-
-                        if (cf->Traitor1P == selTraitor1P ||
-                            cf->Traitor3P == selTraitor3P ||
-                            cf->Traitor1P == 710001101) {
-
-                            cf->BRBagModel         = getchar.charModel[0];
-                            cf->BRHeadModel        = getchar.charModel[1];
-                            cf->BRLobby            = getchar.charModel[2];
-                            cf->BRModel            = getchar.charModel[3];
-                            cf->BindEffect1P       = getchar.charModel[4];
-                            cf->ChangeClipEffect1P = getchar.charModel[5];
-                            cf->DefaultModelID     = getchar.charModel[6];
-                            cf->Guarder1P          = getchar.charModel[7];
-                            cf->Guarder3P          = getchar.charModel[8];
-                            cf->GuarderBagModel    = getchar.charModel[9];
-                            cf->GuarderHeadModel   = getchar.charModel[10];
-                            cf->GuarderLobby       = getchar.charModel[11];
-                        }
-                    }
-
-                    // ITEM RESOURCE
-                    for (auto itemRes : itemResourceConfigInstance) {
-
-                        if (!itemRes)
-                            continue;
-
-                        auto* itf = (ItemResourceFields*)((uintptr_t)itemRes + 0x10);
-
-                        if (itf->ID == selItemID ||
-                            itf->ID == 100301208) {
-
-                            itf->FxAssetID          = getchar.charRes[0];
-                            itf->InventoryModelID   = getchar.charRes[1];
-                            itf->ModelAssetIDRaw    = getchar.charRes[2];
-                            // charRes is the only character-resource array
-                            // available in the supplied character data (3 entries).
-                            itf->UIMiniSpriteNameIndex  = getchar.charRes[0];
-                            itf->UISmallSpriteNameIndex = getchar.charRes[1];
-                            itf->UISpriteNameIndex      = getchar.charRes[2];
-
-                            // The supplied character data has no 4th sprite-index
-                            // value, so do not read charRes[3] or a nonexistent
-                            // charRes2 member. Keep the square sprite unchanged.
-                            // If your Fields.h defines a separate 4-element array,
-                            // replace this line with that array's [3] value.
-
-                        }
-                    }
-
-                    for (auto roles : RoleConfConfigInstance) {
-
-                        if (!roles)
-                            continue;
-
-                        auto* rf = (RoleConfFields*)((uintptr_t)roles + 0x10);
-
-                        if (rf->ID == selRoleID ||
-                            rf->ID == 100301208) {
-
-                            rf->roleLeftArmID       = getchar.charRole[0];
-                            rf->roleFinalSuitID     = getchar.charRole[1];
-                            rf->roleBasicHologramID = getchar.charRole[2];
-                            rf->ColorID             = getchar.charRole[3];
-                            rf->ColorSubID          = getchar.charRole[4];
-                            rf->ShowRare            = getchar.charRole[5];
-                            rf->RoleLvGroupID       = getchar.charRole[6];
-                            rf->RolePackID          = getchar.charRole[7];
-                            rf->LOCID_Name          = getchar.charRole2[0];
-                        }
-                    }
-
-                    for (auto pack : RolePackConfConfigInstance) {
-
-                        if (!pack)
-                            continue;
-
-                        auto* pf = (RolePackFields*)((uintptr_t)pack + 0x10);
-
-                        if (pf->RolePackID == selPackID &&
-                            pf->LobbySceneType == 0 &&
-                            pf->LoadingFrame != 0) {
-
-                            pf->EntryAnimID      = getchar.charPack[1];
-                            pf->GestureId        = getchar.charPack[2];
-                            pf->HandEffectUI     = getchar.charPack[3];
-                            pf->LoadingFrame     = getchar.charPack[4];
-                            pf->KillStreakSkinID = getchar.charPack[5];
-                        }
-                    }
+                    // The whole apply lives in Skin/Fields.h so the host test
+                    // (Skin/tests/character_apply_check.cpp) drives the same code
+                    // this button does. Only the SELECTED target's rows are
+                    // written, and only the non-zero values of this character.
+                    ApplyCharacterSkin(getchar,
+                                       selTraitor1P, selTraitor3P,
+                                       selItemID, selRoleID, selPackID,
+                                       CharacterModelConfigInstance,
+                                       itemResourceConfigInstance,
+                                       RoleConfConfigInstance,
+                                       RolePackConfConfigInstance);
                 }
             });
 
@@ -680,16 +589,23 @@ case 1:
 
         SkinCheckbox(w.watchname.c_str(), &sBool[w.watchname], [&]() {
 
-            int sT1P = (g_targetCharacters[g_selectedTargetCharIndex].name == "Charly")
-                       ? 710001101
-                       : g_targetCharacters[g_selectedTargetCharIndex].traitor1p;
+            // Same target resolution the character tab uses, and the same
+            // "selected target only" rule: the old `|| cf->Traitor1P == 710001101`
+            // wrote Charly's model config whatever the dropdown showed.
+            int sT1P = 0, sT3P = 0, sItem = 0, sRole = 0, sPack = 0;
+            if (g_selectedTargetCharIndex >= 0 &&
+                g_selectedTargetCharIndex < (int)g_targetCharacters.size())
+                ResolveTargetIds(g_targetCharacters[g_selectedTargetCharIndex],
+                                 sT1P, sT3P, sItem, sRole, sPack);
 
             for (auto m : CharacterModelConfigInstance) {
 
+                if (!m)
+                    continue;
+
                 auto* cf = (CharacterModelFields*)((uintptr_t)m + 0x10);
 
-                if (cf->Traitor1P == sT1P ||
-                    cf->Traitor1P == 710001101) {
+                if (cf->Traitor1P == sT1P || cf->Traitor3P == sT3P) {
 
                     cf->BindEffect1P = w.watchvalue;
                 }

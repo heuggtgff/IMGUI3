@@ -1,3 +1,8 @@
+#include <cstdint>
+#include <string>
+#include <array>
+#include <vector>
+
 extern uintptr_t Item2InventoryAddress;
 extern uintptr_t WeaponConfAddress;
 extern uintptr_t WeaponConfExtraAddress;
@@ -346,6 +351,126 @@ struct ItemResourceFields
     uint64_t AvatarModelID;              // +0x28
 };
 extern ItemResourceFields *itemFields;
+
+// ---------------------------------------------------------------------------
+// Character skin application - one place the UI and the host test both drive.
+//
+// The character list used to carry this inline in System/UI/SkinTab.h, which is
+// how the two bugs below stayed invisible. It is now a plain function over the
+// character structs, so Skin/tests/character_apply_check.cpp can build fake
+// config rows and assert what gets written.
+// ---------------------------------------------------------------------------
+
+// The ids the config rows of the SELECTED target character carry. Charly is the
+// default character and the one the ids in the shipped config data disagree on,
+// so its three ids stay hardcoded exactly as before.
+inline void ResolveTargetIds(const TargetChar &t,
+                             int &traitor1p, int &traitor3p,
+                             int &itemId, int &roleId, int &packId)
+{
+    traitor1p = (t.name == "Charly") ? 710001101 : t.traitor1p;
+    traitor3p = (t.name == "Charly") ? 710001102 : t.traitor3p;
+    itemId    = (t.name == "Charly") ? 100301208 : t.itemID;
+    roleId    = (t.name == "Charly") ? 100301208 : t.roleID;
+    packId    = t.rolepackID;
+}
+
+// Copy `getchar`'s own config values onto the character selected in the Target
+// Character dropdown.
+//
+//   getchar     - the values of the character whose skin was clicked (its own
+//                 CharacterModelConfig / ItemResourceConfig / RoleConfConfig /
+//                 RolePackConfConfig rows, joined by Skin/Thread.h)
+//   sel*        - the ids of the SELECTED target, from ResolveTargetIds()
+//
+// ONLY rows belonging to the selected target are written. The old version OR-ed
+// Charly's ids (710001101 / 100301208) into every match, so choosing any
+// character still wrote Charly's config - "I picked Ghost - Stealth and it
+// applied on Charly".
+//
+// Every write is guarded with != 0, the same discipline the weapon-skin path in
+// SkinTab.h uses: these records belong to the game, and writing the zero of an
+// unmatched value is what blanks a card in the loadout.
+//
+// The four UI sprite indices come from ItemRes2 - the uint16_t[4] Skin/Thread.h
+// fills from this character's own ItemResourceConfig. charRes carries the three
+// int ASSET ids; the old code wrote those into the uint16 sprite fields (and
+// never wrote the square one), so every card got a sprite index that does not
+// resolve - the blank character skin.
+inline void ApplyCharacterSkin(const charInfo &getchar,
+                               int selTraitor1P, int selTraitor3P,
+                               int selItemID, int selRoleID, int selPackID,
+                               const std::vector<void *> &charModels,
+                               const std::vector<void *> &itemResources,
+                               const std::vector<void *> &roleConfs,
+                               const std::vector<void *> &rolePacks)
+{
+    for (auto charModel : charModels) {
+        if (!charModel) continue;
+        auto *cf = (CharacterModelFields *)((uintptr_t)charModel + 0x10);
+        if (cf->Traitor1P != selTraitor1P && cf->Traitor3P != selTraitor3P)
+            continue;
+
+        cf->BRBagModel         = getchar.charModel[0];
+        cf->BRHeadModel        = getchar.charModel[1];
+        cf->BRLobby            = getchar.charModel[2];
+        cf->BRModel            = getchar.charModel[3];
+        cf->BindEffect1P       = getchar.charModel[4];
+        cf->ChangeClipEffect1P = getchar.charModel[5];
+        cf->DefaultModelID     = getchar.charModel[6];
+        cf->Guarder1P          = getchar.charModel[7];
+        cf->Guarder3P          = getchar.charModel[8];
+        cf->GuarderBagModel    = getchar.charModel[9];
+        cf->GuarderHeadModel   = getchar.charModel[10];
+        cf->GuarderLobby       = getchar.charModel[11];
+    }
+
+    for (auto itemRes : itemResources) {
+        if (!itemRes) continue;
+        auto *itf = (ItemResourceFields *)((uintptr_t)itemRes + 0x10);
+        if (itf->ID != selItemID) continue;
+
+        if (getchar.charRes[0] != 0) itf->FxAssetID        = getchar.charRes[0];
+        if (getchar.charRes[1] != 0) itf->InventoryModelID = getchar.charRes[1];
+        if (getchar.charRes[2] != 0) itf->ModelAssetIDRaw  = getchar.charRes[2];
+
+        if (getchar.ItemRes2[0] != 0) itf->UIMiniSpriteNameIndex   = getchar.ItemRes2[0];
+        if (getchar.ItemRes2[1] != 0) itf->UISmallSpriteNameIndex  = getchar.ItemRes2[1];
+        if (getchar.ItemRes2[2] != 0) itf->UISpriteNameIndex       = getchar.ItemRes2[2];
+        if (getchar.ItemRes2[3] != 0) itf->UISquareSpriteNameIndex = getchar.ItemRes2[3];
+    }
+
+    for (auto roles : roleConfs) {
+        if (!roles) continue;
+        auto *rf = (RoleConfFields *)((uintptr_t)roles + 0x10);
+        if (rf->ID != selRoleID) continue;
+
+        rf->roleLeftArmID       = getchar.charRole[0];
+        rf->roleFinalSuitID     = getchar.charRole[1];
+        rf->roleBasicHologramID = getchar.charRole[2];
+        rf->ColorID             = getchar.charRole[3];
+        rf->ColorSubID          = getchar.charRole[4];
+        rf->ShowRare            = getchar.charRole[5];
+        rf->RoleLvGroupID       = getchar.charRole[6];
+        rf->RolePackID          = getchar.charRole[7];
+        rf->LOCID_Name          = getchar.charRole2[0];
+    }
+
+    for (auto pack : rolePacks) {
+        if (!pack) continue;
+        auto *pf = (RolePackFields *)((uintptr_t)pack + 0x10);
+        if (pf->RolePackID != selPackID ||
+            pf->LobbySceneType != 0 ||
+            pf->LoadingFrame == 0)
+            continue;
+
+        pf->EntryAnimID      = getchar.charPack[1];
+        pf->GestureId        = getchar.charPack[2];
+        pf->HandEffectUI     = getchar.charPack[3];
+        pf->LoadingFrame     = getchar.charPack[4];
+        pf->KillStreakSkinID = getchar.charPack[5];
+    }
+}
 
 struct WeaponConfFields
 {
