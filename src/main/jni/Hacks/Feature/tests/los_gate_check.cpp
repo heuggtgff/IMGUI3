@@ -660,6 +660,23 @@ static void setEnemyList(Pawn **pawns, int n)
 static Vector3 w2sOnCrosshair(const Vector3 &) { return Vector3{820.0f, 450.0f, 1.0f}; }   // 20 px off centre
 static Vector3 w2sAwayFromCrosshair(const Vector3 &) { return Vector3{1400.0f, 450.0f, 1.0f}; }
 
+// The REAL forward projection, the inverse of fake_screen_to_world: the camera
+// at (0,1.6,0) with the basis (+Z forward, +X right, +Y up) and the fallback
+// focal length. Path A's projected-body bound computes the body half-span from
+// head/feet projections - a constant-point fake would make every body a
+// 0-px span and refuse everything, so where path A is expected to fire this
+// projects world positions the way the device camera does.
+static Vector3 w2sTrueProjection(const Vector3 &w)
+{
+    const float f = (900.0f * 0.5f) /
+                    tanf(NewFeatures::A_FireTune::kFallbackFov * 0.5f *
+                         NewFeatures::A_FireTune::kDegToRad);
+    const float dx = w.x - 0.0f;
+    const float dy = w.y - 1.6f;
+    const float dz = w.z - 0.0f;
+    return Vector3{800.0f + (dx / dz) * f, 450.0f - (dy / dz) * f, dz};
+}
+
 static void testScan()
 {
     // The dot is on the centre of the 1600x900 fake screen, so the scan measures
@@ -709,10 +726,13 @@ static void testScan()
     restoreHonestDotRay();
 
     // --- S3: centre ray names him -> path A fires --------------------------
+    // Path A now also demands a projected body: the true projection is what
+    // makes head/feet land on real screen positions (the old constant-point
+    // fake turned every body into a 0-px span).
     resetWorld();
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
-    g_w2sImpl = w2sOnCrosshair;
+    g_w2sImpl = w2sTrueProjection;
     g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
     g_losHits    = {};
     {
@@ -863,10 +883,13 @@ static FireBlock runScanOnCrosshairSetup(TriggerTarget &out, bool dotSeesPawn = 
     // list is separate from the LOS list, so a test can put him under the dot's
     // ray (path A fires) or leave the ray hitting only our own body - either
     // way the decision belongs to the ray once an honest dot ray exists.
+    // When path A is expected to FIRE, the projection fake has to be the real
+    // one: the projected-body bound measures the head/feet span on screen, and
+    // a constant-point fake would refuse every accept as a 0-px body.
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
-    g_w2sImpl = w2sOnCrosshair;
+    g_w2sImpl = dotSeesPawn ? w2sTrueProjection : w2sOnCrosshair;
     if (dotSeesPawn)
         g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };  // the dot NAMES him
     else
@@ -993,6 +1016,40 @@ static void testCrosshairAim()
     fn_TransformGetUp     = fake_get_up;
     fn_ScreenToWorldPoint = fake_screen_to_world;
 
+    // --- X8: THE BESIDE-THE-ARM REPORT, pinned ------------------------------
+    // The dot is 200 px right of centre; the dot ray grazes an UNREGISTERED
+    // piece of the enemy's component hierarchy (his "arm", from the trigger's
+    // point of view) a few centimetres off his silhouette - the wall-collider
+    // in the fake, because that is exactly what an unregistered near-arm hit
+    // looks like. The parent walk reaches his root transform, so the ray does
+    // "name" him; but his projected body sits ~190 px LEFT of the dot, so the
+    // projected-body bound refuses: the dot is BESIDE the arm, not on him.
+    // This is the exact over-fire the report describes.
+    resetWorld();
+    // 40 m out: his projected body is ~33 px tall / ~9 px wide, so a dot a
+    // couple hundred px sideways is BESIDE the arm, not inside the silhouette.
+    objPos(g_targetHead, 0.5f, 1.7f, 40.0f);
+    objPos(g_targetMesh, 0.5f, 0.0f, 40.0f);
+    objPos(g_targetRoot, 0.5f, 0.0f, 40.0f);
+    setCrosshair(200.0f, 0.0f, 80.0f);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };  // the ray "names" him
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone,
+              "X8 aimed BESIDE the enemy's arm (200 px off his body) -> no fire");
+        CHECK(g_triggerDiag.dotRayDeclined >= 1,
+              "X8 ... and the panel counts it as a projected-body refusal");
+        CHECK(out.pawn == nullptr, "X8 no target escapes the bound");
+    }
+    restoreHonestDotRay();
+    g_w2sImpl = nullptr;
+
     // Leave the config as the rest of the suite expects it.
     resetWorld();
     setCrosshair(0.0f, 0.0f, 80.0f);
@@ -1102,7 +1159,7 @@ static FireBlock runTreeOnCrosshairSetup(TriggerTarget &out)
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
-    g_w2sImpl = w2sOnCrosshair;
+    g_w2sImpl = w2sTrueProjection;   // path A fires here: real body projection
     // The dot's ray NAMES the enemy (path A fires): the mode gate under test
     // sits in front of the scan, so the scan's Fired verdict has to be
     // reachable at all.

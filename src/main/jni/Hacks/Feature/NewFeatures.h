@@ -397,6 +397,20 @@ namespace NewFeatures
         // declared), not an address; the real RVA is 0x51B38CC.
         constexpr uintptr_t Pawn_get_Velocity               = 0x51B38CC; // Vector3() - Pawn.get_Velocity (dump 713743)
 
+        // THE GAME'S OWN collider -> attackable-target registry. When a ray
+        // lands on a collider of an enemy's body, the GAME ITSELF knows which
+        // target that collider damages - including every fire collider the
+        // scene hangs around/behind the visual mesh. Asking the registry
+        // instead of trusting the scene-graph parent chain means a hit the
+        // game does NOT credit to the enemy can never pass as him. This is
+        // the fix for "I aim beside the enemy's ARM and it still shoots".
+        //   GamePlay.get_AttackableColliderMap() 0x856A020  (dump 1072741,
+        //     static, English NameOf GamePlay.attackableColliderMap)
+        //   AttackableColliderMap.GetAttackableTargetForCollider(col)
+        //                                        0x773FA68  (dump 961708)
+        constexpr uintptr_t GamePlay_get_AttackableColliderMap = 0x856A020; // object() - GamePlay.AttackableColliderMap (dump 1072741)
+        constexpr uintptr_t AtkColliderMap_GetTargetForCollider = 0x773FA68; // object(col) - AttackableColliderMap.GetAttackableTargetForCollider (dump 961708)
+
         // Camera.get_transform 0x5023A00 / Transform.get_position 0x50206AC are
         // NOT in the dump (0x50206AC is set_position) and were never used -
         // transform access goes through cam->get_transform()->get_position().
@@ -1279,6 +1293,8 @@ namespace NewFeatures
         int    crosshairRayPlain;    // 1 = the plain camera forward did
         bool   dotRayHonest;         // 1 = this scan had a ray through the dot
         bool   dotRayDecided;        // 1 = the shot was decided by the dot ray
+        int    dotRayDeclined;       // lifetime: the dot ray named a pawn but the dot is not ON him
+        float  projKeepFrac;         // last accepted shot: dot->hit px / accepted body px (< 1 = on body)
         int    raysIdentified;  // last scan: rays whose nearest hit WAS the target
         int    raysBlocked;     // last scan: rays stopped by something else
         bool   rayUnknown;      // last scan: a ray symbol did not resolve (fail closed)
@@ -1306,6 +1322,9 @@ namespace NewFeatures
                                 // 4 no StartFire ptr, 5 pointers ok / no heartbeat
     };
     inline TriggerbotDiag g_triggerDiag{};
+
+    inline void *(*fn_GameGetAttackableColliderMap)() = nullptr;         // GamePlay.AttackableColliderMap
+    inline void *(*fn_AtkMapGetTargetForCollider)(void *, void *) = nullptr;
 
     // Debug state for the menu: 0 = no target, 1 = target, 2 = firing.
     inline std::atomic<int> s_dbgTriggerState = 0;
@@ -1592,6 +1611,23 @@ namespace NewFeatures
         if (depthOut != nullptr) *depthOut = -1;
         if (!A_FireObjectAlive(hitTransform) || !A_FireObjectAlive((void *)pawn)) return false;
 
+        // Registry first. The game's AttackableColliderMap answers "would this
+        // collider DAMAGE this target" - exactly the question the trigger
+        // answers for the user - and it does NOT credit a collider the game
+        // would not damage the pawn as (aim-assist / fire / melee / any ghost
+        // volume around or behind him). If the registry has an answer and it
+        // names a DIFFERENT target, that hit is not this pawn. Registry has
+        // no record (common for root transforms and skeleton bones) - keep
+        // walking below; the parent-chain walk still owns those cases.
+        if (fn_AtkMapGetTargetForCollider != nullptr) {
+            void *map = fn_GameGetAttackableColliderMap ? fn_GameGetAttackableColliderMap() : nullptr;
+            if (A_FireObjectAlive(map)) {
+                void *target = fn_AtkMapGetTargetForCollider(map, hitTransform);
+                if (A_FireObjectAlive(target) && target != (void *)pawn)
+                    return false;
+            }
+        }
+
         // The pawn's own root transform. The old version also compared the raw
         // m_HeadBone @0x308 / m_Mesh @0x628 FIELDS; those are the offsets that did
         // not hold up in BR (Enemy=5 Cand=0), so they are gone. A hit on any bone
@@ -1867,6 +1903,20 @@ namespace NewFeatures
     // compares every level against every pawn's transform, so ONE ray answers both
     // "what did I hit" and "whose is it". Cheap: <=12 * enemyCount getter calls,
     // and it only ever runs for the centre ray.
+    // Registry = the identity referee (see the note in A_FireHitIsTarget).
+    // Returns 0 = the registry has no record (or is missing, no opinion),
+    // 1 = the game says the collider IS this pawn's shootable body,
+    // -1 = the game says it is NOT this pawn's body (another target's volume).
+    inline int A_FireRegistryOwnerIs(void *hitTransform, Pawn *pawn)
+    {
+        if (fn_AtkMapGetTargetForCollider == nullptr) return 0;
+        void *map = fn_GameGetAttackableColliderMap ? fn_GameGetAttackableColliderMap() : nullptr;
+        if (!A_FireObjectAlive(map)) return 0;                     // no record -> no opinion
+        void *target = fn_AtkMapGetTargetForCollider(map, hitTransform);
+        if (!A_FireObjectAlive(target)) return 0;                  // no record -> no opinion
+        return target == (void *)pawn ? 1 : -1;
+    }
+
     inline Pawn *A_FirePawnFromHitTransform(void *hitTransform, Pawn **items, int count,
                                             int *depthOut = nullptr)
     {
@@ -1883,6 +1933,31 @@ namespace NewFeatures
             tcache[i] = nullptr;
             Pawn *p = items[i];
             if (A_FireListObjectAlive((void *)p)) tcache[i] = (void *)p->get_transform();
+        }
+
+        // THE REGISTRY ASKS FIRST, on the hit collider itself: if the game
+        // tracks it but credits it to ANOTHER target (an aim-assist / fire
+        // volume bulging out of HIS silhouette, a teammate's volume in front),
+        // the honest answer is "the pawn the registry names" - or scenery,
+        // when that target is not on this list. Bones / body meshes usually
+        // carry no registry record of their own, so a "no record" passes
+        // through to the parent-chain walk below.
+        if (fn_AtkMapGetTargetForCollider != nullptr) {
+            void *map = fn_GameGetAttackableColliderMap ? fn_GameGetAttackableColliderMap() : nullptr;
+            if (A_FireObjectAlive(map)) {
+                void *target = fn_AtkMapGetTargetForCollider(map, hitTransform);
+                if (A_FireObjectAlive(target) && A_FireObjectAlive(target)) {
+                    for (int i = 0; i < count; i++) {
+                        Pawn *p = items[i];
+                        if (!A_FireListObjectAlive((void *)p)) continue;
+                        if ((void *)p == target) {
+                            if (depthOut != nullptr) *depthOut = 0;
+                            return p;                       // the ray landed on HIM
+                        }
+                    }
+                    return nullptr;                         // another target's volume, not listed
+                }
+            }
         }
 
         void *t = hitTransform;
@@ -2030,6 +2105,7 @@ namespace NewFeatures
         d.lastBulletSpeed = 0.0f;
         d.dotRayHonest = false;
         d.dotRayDecided = false;
+        d.projKeepFrac = -1.0f;
 
         BaseGame *game = (BaseGame *)fn_GameGetMatchGame();
         if (!Tools::IsPtrValid((void *)game)) return FireBlock::NoMatch;
@@ -2122,11 +2198,20 @@ namespace NewFeatures
                 d.rayUnknown = true;                        // no way at all to trace
             } else if (centred != nullptr && centred != localPawn &&
                        !IsSameTeamAcceptBots(localPawn, centred) && A_FirePawnAlive(centred)) {
-                // Nothing narrows this any more: the pawn the dot's own ray landed
-                // on, past our body and past trigger volumes, IS the shot.
-                // The shot does not depend on the probe - the centre ray already
-                // proved visibility AND ownership - so this is only the aim point
-                // handed to the spread/lead report.
+                // THE NAME IS NOT ENOUGH: a registry-empty hit a few
+                // centimetres off the silhouette (a railing the ray grazes,
+                // unregistered geometry in his component hierarchy) can still
+                // walk up to the enemy's root transform, and at close range the
+                // ray and his body can belong to that ONE hit. So the pawn the
+                // dot ray NAMED must also be a pawn the dot PROJECTS ON:
+                // project the pawn's head/feet body axis and demand the dot's
+                // pixel sit within the projected BODY HALF-SPAN, plus the ray's
+                // own pixel thickness (the dot is never thinner than itself).
+                //   * This is physical: pixels-of-body measured with the camera
+                //     focal length, never a screen-size guess.
+                //   * A hit the registry DID name him passes automatically -
+                //     nothing narrows there.
+                //   * One outside the projection = the dot is BESIDE him.
                 const A_FireAimPoint ap = A_FireAimPointFor(centred);
                 float bestSq = -1.0f;
                 if (ap.valid) {
@@ -2135,6 +2220,22 @@ namespace NewFeatures
                         const float dx = sc.x - cx;
                         const float dy = sc.y - cy;
                         bestSq = dx * dx + dy * dy;
+                    }
+                }
+                float bodyRadiusPx = -1.0f;
+                if (ap.valid && ap.headOk && ap.feetOk && focalPx > 0.0f) {
+                    Vector3 scHead = Vector3::zero(), scFeet = Vector3::zero();
+                    if (w2s(ap.head, scHead) && w2s(ap.feet, scFeet) &&
+                        scHead.z > 0.0f && scFeet.z > 0.0f) {
+                        const float halfSpan = 0.5f * sqrtf((scHead.x - scFeet.x) * (scHead.x - scFeet.x) +
+                                                            (scHead.y - scFeet.y) * (scHead.y - scFeet.y));
+                        bodyRadiusPx = halfSpan + 2.0f;     // + the dot ray's own pixel thickness
+                        if (bestSq < 0.0f || bestSq > bodyRadiusPx * bodyRadiusPx) {
+                            // the dot is BESIDE him, not ON him -> no shot
+                            d.dotRayDeclined++;
+                            return FireBlock::NoEnemyInZone;
+                        }
+                        d.projKeepFrac = bestSq >= 0.0f ? sqrtf(bestSq) / bodyRadiusPx : -1.0f;
                     }
                 }
                 out.pawn      = centred;
@@ -2907,6 +3008,18 @@ namespace NewFeatures
         auto rayAllAddr = UnityRva(RVA::Physics_RaycastAll);
         if (Tools::IsPtrValid(rayAllAddr))
             fn_PhysicsRaycastAll = (void *(*)(Vector3, Vector3, float))rayAllAddr;
+
+        // The game's collider -> target registry (RVA note above). Both are
+        // plain il2cpp statics/instance methods with this build's standard
+        // call shape; GetAttackableTargetForCollider's dump entry
+        // ([Out] object col) is the same instance-parameter shape every other
+        // getter here is called with.
+        auto atkMapAddr = UnityRva(RVA::GamePlay_get_AttackableColliderMap);
+        if (Tools::IsPtrValid(atkMapAddr))
+            fn_GameGetAttackableColliderMap = (void *(*)())atkMapAddr;
+        auto atkTargetAddr = UnityRva(RVA::AtkColliderMap_GetTargetForCollider);
+        if (Tools::IsPtrValid(atkTargetAddr))
+            fn_AtkMapGetTargetForCollider = (void *(*)(void *, void *))atkTargetAddr;
         else
             LOGE("[NewFeatures] triggerbot: RaycastAll RVA 0x%llX did not resolve -"
                  " LOS falls back to the single-ray + occlusion path",
