@@ -31,16 +31,25 @@
 //                           teammate within 0.35 m of the bullet line and closer
 //                           than the target blocks the shot
 //
-//   PATH A - "enemy exactly in the centre of the screen":
-//     ONE ray from the camera along the camera's own forward
-//     (Transform.get_forward 0x509C650), bounded by Physics.Raycast
-//     (origin, direction, out RaycastHit, maxDistance) 0x506C188. Whichever pawn
-//     the first hit belongs to (Transform.get_parent 0x507BDEC walks the hit's
-//     parent chain against every candidate's transform) is the enemy under the
-//     crosshair - centred AND unobstructed by construction, because a wall in
-//     front of him would have been the first hit. This path needs no bones and
-//     no projection, so it keeps working even if the Pawn bone offsets drift
-//     between game builds.
+//   PATH A - "the enemy the DOT is on" (the menu's dot crosshair):
+//     ONE ray from the camera THROUGH THE DOT'S OWN PIXEL, turned into the world
+//     ray by the game's own projection (Camera.ScreenToWorldPoint 0x5023D34, the
+//     exact inverse of the WorldToScreenPoint 0x5023B54 this repo projects
+//     with), traced by Physics.RaycastAll 0x506CBB0. Whichever pawn the first
+//     meaningful hit belongs to is the enemy the dot is on - centred AND
+//     unobstructed by construction, because a wall in front of him would have
+//     been the first hit. The hit's identity comes from the game's own collider
+//     registry (GamePlay.get_AttackableColliderMap 0x856A020 ->
+//     AttackableColliderMap.GetAttackableTargetForCollider 0x773FA68) with the
+//     parent-chain walk (Transform.get_parent 0x507BDEC) behind it.
+//     THE NAME IS NOT ENOUGH - the dot must also PROJECT ONTO him: the
+//     feet->head body axis is projected and the dot has to sit within the body's
+//     own WIDTH of it (0.32 m half width in pixels, from that same axis), plus
+//     the dot ray's own pixel thickness. Aim-assist / fire volumes bulge out of
+//     every silhouette, and a ray that grazes one walks up into HIS hierarchy,
+//     so without the bound the trigger fired with the dot BESIDE the enemy.
+//     A dot whose body cannot be measured that way is refused unless it is on
+//     the enemy's aim point inside the drawn dot's own radius.
 //
 //   PATH B - the crosshair zone, for a crosshair that is near but not exactly on
 //     the enemy: BaseGame::EnemyPawns @0x178 -> team id (Pawn.get_TeamId
@@ -133,10 +142,12 @@
 //     Camera::get_main()          RVA 0x5024010
 //     Camera::WorldToScreenPoint  RVA 0x5023B54   (the 1-arg overload - see the
 //                                 note above A_FireScan's candidate loop)
-//     Pawn::IsAiming()            RVA 0x519BB10   ("ADS only" mode; note
-//                                 0x516699C is Weapon::get_IsAiming, and
-//                                 calling that on a Pawn is what the old
-//                                 build did)
+//     Pawn::IsAiming()            RVA 0x519BB10   NOT CALLED any more - it is a
+//                                 native method that walks the pawn's own
+//                                 weapon chain, and it is what crashed the
+//                                 "ADS only" mode. That mode now reads the
+//                                 held weapon's own fields (m_IsAiming @0xC21,
+//                                 m_AimingPercentage @0x460) instead.
 //     Pawn::get_IsFiring()        RVA 0x51A8A38   ("Firing only" mode)
 //
 //   The LOS rays used by the tree (dump.cs line -> RVA):
@@ -180,6 +191,11 @@
 //        Weapon::get_DelaySprintFire()  RVA 0x513CBC4
 //        Weapon.m_DelaySprintFire @0x9F8 / WeaponData.DelaySprintFire @0x2C8
 //        -> sprint-out timer that blocks firing.
+//        The Feats.h hook on that getter returns ~0 for the LOCAL player's held
+//        weapon only, and its body is a PURE pointer compare against a cache
+//        refreshed from the local pawn's tick. It used to resolve the local pawn
+//        and call Pawn.get_CurrentWeapon() from inside the getter - a native call
+//        on a possibly destroyed pawn - which is what crashed this option.
 //
 //   3.3 No Fire Delay (re-fire cooldown)
 //        Weapon::get_FireInterval()     RVA 0x5105C74  (shot-to-shot cooldown)
@@ -249,6 +265,16 @@ namespace NewFeatures
         constexpr uintptr_t Pawn_FirstPersonCamDestX        = 0x700; // m_FirstPersonCameraDestOffsetX
 
         constexpr uintptr_t WeaponShake_Owner               = 0x78;  // WeaponShakeController::m_Pawn
+
+        // Weapon aiming state, read as FIELDS by the triggerbot's "ADS only"
+        // gate. Both offsets come straight from the Weapon class in dump.cs:
+        //   m_IsAiming          @0xC21  private bool  (behind get_IsAiming 0x516699C)
+        //   m_AimingPercentage  @0x460  private float (0..1 ADS transition)
+        // A field read on a weapon A_FireObjectAlive accepted cannot walk into
+        // unrelated code, which is exactly what calling Pawn.IsAiming() 0x519BB10
+        // could do (that call is gone).
+        constexpr uintptr_t Weapon_m_IsAiming               = 0xC21; // bool
+        constexpr uintptr_t Weapon_m_AimingPercentage       = 0x460; // float
     }
 
     // ---------------------------------------------------------------------
@@ -297,6 +323,11 @@ namespace NewFeatures
         constexpr uintptr_t Pawn_get_LastPawnPos            = 0x51B8D30; // ref object() - Pawn.get_LastPawnPos
         constexpr uintptr_t Camera_get_main                 = 0x5024010; // Camera*() - Camera.get_main
         constexpr uintptr_t Camera_WorldToScreenPoint       = 0x5023B54; // Vector3 Camera.WorldToScreenPoint(Vector3)  <- 1-arg overload (0x5023AB8 is the 2-arg one)
+        // Camera.ScreenToWorldPoint(Vector3) - dump.cs 157960, the 1-arg overload
+        // (0x5023C98 is the 2-arg one). The exact inverse of the WorldToScreenPoint
+        // above: it turns the crosshair PIXEL into the shot ray, so the dot the user
+        // sees and the line the trigger fires down are one mapping.
+        constexpr uintptr_t Camera_ScreenToWorldPoint       = 0x5023D34; // Vector3 Camera.ScreenToWorldPoint(Vector3)
         constexpr uintptr_t Physics_RaycastLOS              = 0x506C1E4; // bool(Vector3, Vector3, out RaycastHit) - 3-param overload (dump.cs 173933), NO maxDistance
         // ---- Visibility rays that can NAME what they hit (dump.cs 173927-173945)
         //   0x506C188  bool Raycast(Vector3 origin, Vector3 direction, out RaycastHit hit, float maxDistance)   <- nearest hit + limit
@@ -375,6 +406,20 @@ namespace NewFeatures
         // declared), not an address; the real RVA is 0x51B38CC.
         constexpr uintptr_t Pawn_get_Velocity               = 0x51B38CC; // Vector3() - Pawn.get_Velocity (dump 713743)
 
+        // THE GAME'S OWN collider -> attackable-target registry. When a ray
+        // lands on a collider of an enemy's body, the GAME ITSELF knows which
+        // target that collider damages - including every fire collider the
+        // scene hangs around/behind the visual mesh. Asking the registry
+        // instead of trusting the scene-graph parent chain means a hit the
+        // game does NOT credit to the enemy can never pass as him. This is
+        // the fix for "I aim beside the enemy's ARM and it still shoots".
+        //   GamePlay.get_AttackableColliderMap() 0x856A020  (dump 1072741,
+        //     static, English NameOf GamePlay.attackableColliderMap)
+        //   AttackableColliderMap.GetAttackableTargetForCollider(col)
+        //                                        0x773FA68  (dump 961708)
+        constexpr uintptr_t GamePlay_get_AttackableColliderMap = 0x856A020; // object() - GamePlay.AttackableColliderMap (dump 1072741)
+        constexpr uintptr_t AtkColliderMap_GetTargetForCollider = 0x773FA68; // object(col) - AttackableColliderMap.GetAttackableTargetForCollider (dump 961708)
+
         // Camera.get_transform 0x5023A00 / Transform.get_position 0x50206AC are
         // NOT in the dump (0x50206AC is set_position) and were never used -
         // transform access goes through cam->get_transform()->get_position().
@@ -446,16 +491,9 @@ namespace NewFeatures
         return A_FireObjectAlive(obj);
     }
 
-    // Pawn::IsAiming() @0x519BB10 - "the local player is scoping / ADS"
-    inline bool IsLocalPlayerScoping()
-    {
-        void *localPawn = LocalPlayer();
-        if (!IsReadable(localPawn)) return false;
-        // `static`: UnityRva() re-opens and regex-scans /proc/self/maps on every
-        // call - a full maps scan per query is not something a hot path may do.
-        static auto isAiming = (bool (*)(void *))UnityRva(RVA::Pawn_IsAiming);
-        return isAiming != nullptr && isAiming(localPawn);
-    }
+    // NOTE: IsLocalPlayerScoping() (Pawn.IsAiming on the local pawn) is gone with
+    // the ADS gate that used to need it - see A_FireHeldWeaponAiming for why the
+    // pawn-level native call was replaced by two weapon fields.
 
     inline bool IsPawnAlive(void *pawn)
     {
@@ -543,6 +581,10 @@ namespace NewFeatures
     inline void (*fn_Weapon_StartFire)(void *) = nullptr;
     inline void (*fn_Weapon_StopFire)(void *, bool) = nullptr;
     inline Vector3 (*fn_WorldToScreen)(void *, Vector3) = nullptr;  // 1-arg overload
+    // Camera.ScreenToWorldPoint, the 1-arg overload (RVA block). Used for exactly
+    // one thing: turning the crosshair PIXEL into the shot ray (CrosshairRayDir),
+    // so a missing symbol costs accuracy and never the feature.
+    inline Vector3 (*fn_ScreenToWorldPoint)(void *, Vector3) = nullptr;
     inline bool (*fn_PhysicsRaycastLOS)(Vector3, Vector3, float, void *) = nullptr;
     // Nearest-hit ray with an out RaycastHit and an explicit maxDistance
     // (0x506C188). Nothing in the tree can tell a wall from an enemy without
@@ -588,7 +630,6 @@ namespace NewFeatures
     inline void *(*fn_GameGetMatchGame)() = nullptr;
     inline bool (*fn_PawnRecentlyRendered)(void *) = nullptr;
     inline bool (*fn_PawnLastOccVisible)(void *) = nullptr;
-    inline bool (*fn_PawnIsAiming)(void *) = nullptr;
     inline bool (*fn_PawnGetIsFiring)(void *) = nullptr;
 
     // ---- ShouldFire tree pointers (every RVA verified, see the RVA block) ---
@@ -712,6 +753,12 @@ namespace NewFeatures
         static constexpr float kMinStemGap      = 0.05f;   // m - floor for that stem (never fires a 0-length ray)
         static constexpr float kHeadRadius      = 0.14f;   // m - head hitbox half width
         static constexpr float kBodyRadius      = 0.30f;   // m - torso/limb hitbox half width
+        // m - the half WIDTH of a body, which is what "the dot is ON him" is
+        // measured with in path A: the projected feet->head axis is the body's
+        // centre line, and this is how far to the SIDE of it a dot may sit and
+        // still be on the enemy (shoulders + gear). Deliberately NOT the half
+        // HEIGHT - a body is tall, not round (see the path A bound below).
+        static constexpr float kBodyHalfWidthM  = 0.32f;
         static constexpr float kFriendlyRadius  = 0.35f;   // m - teammate capsule half width
         static constexpr float kSelfExclusion    = 0.15f;   // m - a blocker this close to the
                                                            // camera only proves the camera is
@@ -951,6 +998,37 @@ namespace NewFeatures
         return fn_WeaponCanFire(weapon);
     }
 
+    // ---- "ADS only" (TriggerbotMode 1): is the LOCAL player's weapon aiming? ---
+    // Two dump-verified Weapon fields, read on a weapon A_FireObjectAlive has
+    // already accepted:
+    //   Weapon.m_IsAiming          @0xC21  bool   (behind get_IsAiming 0x516699C)
+    //   Weapon.m_AimingPercentage  @0x460  float  (0..1 ADS transition)
+    // Either one answering yes means the player is scoping; a transition that is
+    // more than half done already counts, so the mode fires while the scope comes
+    // up instead of waiting for it to finish. The percentage is range-checked: a
+    // value outside 0..2 is not an ADS progress at all and is ignored rather than
+    // read as "always aiming".
+    //
+    // Pawn.IsAiming() 0x519BB10 is NOT called any more. It is a native method
+    // that walks the pawn's own weapon / fire-component chain internally, so no
+    // guard on this side can bound what it touches - that is the crash the "ADS
+    // Only" option caused. A field read at a fixed offset cannot jump anywhere.
+    inline bool A_FireHeldWeaponAiming(void *weapon,
+                                       bool *flagOut = nullptr,
+                                       float *percentOut = nullptr)
+    {
+        if (!A_FireObjectAlive(weapon)) {          // destroyed / not a weapon
+            if (flagOut)    *flagOut = false;
+            if (percentOut) *percentOut = 0.0f;
+            return false;
+        }
+        const bool  flag    = *(bool *)((uintptr_t)weapon + Offsets::Weapon_m_IsAiming);
+        const float percent = *(float *)((uintptr_t)weapon + Offsets::Weapon_m_AimingPercentage);
+        if (flagOut)    *flagOut = flag;
+        if (percentOut) *percentOut = percent;
+        return flag || (percent > 0.5f && percent <= 2.0f);
+    }
+
     // The weapon's own fire interval, in seconds
     // (Weapon.RealFireInterval 0x50EC250 dump 739186, Weapon.get_FireInterval
     // 0x5105C74 dump 740026). Used as the trigger's re-press pacing, so the
@@ -1142,7 +1220,8 @@ namespace NewFeatures
     //    Weapon::Tick                  0x5114C34  void(float) Slot 33 [HOOKED]
     //    Pawn::Tick                    0x51C366C  void(float) Slot 33 (base only)
     //    Pawn::get_CurrentWeapon       0x518BEA8  Weapon*()
-    //    Pawn::IsAiming()              0x519BB10  bool()  (0x516699C is
+    //    Pawn::IsAiming()              0x519BB10  bool()  - NOT CALLED (see the
+    //                                             ADS note; 0x516699C is
     //                                             Weapon::get_IsAiming)
     //    Pawn::get_IsFiring()          0x51A8A38  bool()
     //    Weapon::StartFire()           0x5123C84  void()   Slot 55 [raw ptr]
@@ -1203,7 +1282,6 @@ namespace NewFeatures
         int    blockCount[(int)FireBlock::Count];  // lifetime counter per FireBlock reason
         int    lastBlock;       // FireBlock of the most recent scan
         int    candidates;      // enemies inside the crosshair zone, last scan
-        int    filteredOut;     // ... dropped by the user's target filter, last scan
         int    losChecked;      // candidates that got a visibility ray, last scan
         int    friendsInLine;   // teammates that blocked a shot, last scan
         bool   ammoOk;          // Weapon.AmmoCanFire()/get_ClipAmmoCount() verdict
@@ -1217,16 +1295,21 @@ namespace NewFeatures
         float  lastWorldDist;   // camera -> aim point (m)
         float  lastBulletSpeed; // m/s (assumed speed if speedKnown is false)
         // ---- visibility ray bookkeeping (the anti-wall gate) --------------
-        int    aimPath;         // 0 = centre-of-screen ray accepted, 1 = zone scan
-        unsigned crosshairPawn; // pawn the centre ray landed on (0 = nothing named)
-        float  crosshairHitDist;// m, centre ray first-hit distance (-1 = no hit)
-        // The crosshair this scan aimed from and whether the dot moved it: what
-        // the menu prints so "my dot is off-centre, is the trigger on it?" is
+        int    aimPath;         // 0 = the dot's own ray accepted, 1 = the dot's zone
+        unsigned crosshairPawn; // pawn the dot's ray landed on (0 = nothing named)
+        float  crosshairHitDist;// m, that ray's first-hit distance (-1 = no hit)
+        // The crosshair this scan aimed from - the dot - and how its pixel became
+        // the shot ray: the menu prints it so "where does the trigger aim?" is
         // answered by the feature, not guessed at.
-        float  crosshairCx;        // px, left edge -> crosshair
-        float  crosshairCy;        // px, top edge  -> crosshair
-        int    crosshairOffsetUsed;    // 1 = the dot's offset bent the centre ray
-        int    crosshairOffsetDropped; // 1 = offset asked, camera basis missing
+        float  crosshairCx;         // px, left edge -> the dot
+        float  crosshairCy;         // px, top edge  -> the dot
+        int    crosshairRayViaGame;  // 1 = the game's own projection gave the ray
+        int    crosshairRayFellBack; // 1 = camera basis + focal rebuilt the ray
+        int    crosshairRayPlain;    // 1 = the plain camera forward did
+        bool   dotRayHonest;         // 1 = this scan had a ray through the dot
+        bool   dotRayDecided;        // 1 = the shot was decided by the dot ray
+        int    dotRayDeclined;       // lifetime: the dot ray named a pawn but the dot is not ON him
+        float  projKeepFrac;         // last accepted shot: dot->hit px / accepted body px (< 1 = on body)
         int    raysIdentified;  // last scan: rays whose nearest hit WAS the target
         int    raysBlocked;     // last scan: rays stopped by something else
         bool   rayUnknown;      // last scan: a ray symbol did not resolve (fail closed)
@@ -1242,10 +1325,21 @@ namespace NewFeatures
         float  lastFireInterval;// s, the weapon's own interval (measured, NOT enforced)
         unsigned aimingTarget;  // Weapon.get_AimingTarget() - the game's own answer
         float  aimingTargetDis; // Weapon.get_CurrentAimingTargetDis()
+        // ---- "ADS only" (TriggerbotMode 1) --------------------------------
+        // The LOCAL WEAPON's own aiming state, read as fields on the weapon the
+        // scan already validated: Weapon.m_IsAiming @0xC21 (the bool behind
+        // Weapon.get_IsAiming 0x516699C) and Weapon.m_AimingPercentage @0x460
+        // (0..1 ADS transition). Pawn.IsAiming() 0x519BB10 is never called any
+        // more - see the note on A_FireHeldWeaponAiming.
+        int    adsFlag;         // last scan: Weapon.m_IsAiming (0/1)
+        float  adsPct;          // last scan: Weapon.m_AimingPercentage
 
                                 // 4 no StartFire ptr, 5 pointers ok / no heartbeat
     };
     inline TriggerbotDiag g_triggerDiag{};
+
+    inline void *(*fn_GameGetAttackableColliderMap)() = nullptr;         // GamePlay.AttackableColliderMap
+    inline void *(*fn_AtkMapGetTargetForCollider)(void *, void *) = nullptr;
 
     // Debug state for the menu: 0 = no target, 1 = target, 2 = firing.
     inline std::atomic<int> s_dbgTriggerState = 0;
@@ -1284,94 +1378,111 @@ namespace NewFeatures
         return p;
     }
 
-    // ---- Crosshair geometry (ONE source of truth) ---------------------------
-    // The dot the menu draws and the point the triggerbot aims through are the
-    // same screen position: the render centre plus the user's offsets. The
-    // defaults are 0 px, i.e. exactly the centre, so nothing moves - and nothing
-    // about the triggerbot changes - unless the sliders are touched.
-    inline void CrosshairDotCentrePx(float &cx, float &cy)
+    // ---- The crosshair (ONE source of truth) -------------------------------
+    // There is exactly ONE crosshair in this build: the menu's dot. It is drawn
+    // at the render centre plus the user's offsets, the trigger aims through that
+    // same pixel, and the trigger's zone is that same dot's own radius. There is
+    // no second, hidden "triggerbot crosshair" and no switch connecting the two -
+    // what the user sees IS what the trigger fires with.
+    inline void CrosshairCentrePx(float &cx, float &cy)
     {
         cx = (float)get_width()  * 0.5f + Config.Crosshair.OffsetX;
         cy = (float)get_height() * 0.5f + Config.Crosshair.OffsetY;
     }
 
-    // The offsets the TRIGGERBOT uses: the dot's own when the dot is wired to it
-    // (the menu's default), otherwise zero, i.e. the screen centre.
-    inline void CrosshairAimOffsetPx(float &dx, float &dy)
+    // The world ray from the camera THROUGH the crosshair pixel - the line the
+    // shot follows, dot on the centre or dragged off it.
+    //
+    // The game's OWN projection answers it: Camera.ScreenToWorldPoint(Vector3)
+    // 0x5023D34 (dump.cs 157960) is the exact inverse of the
+    // Camera.WorldToScreenPoint 0x5023B54 (dump.cs 157939) that the ESP, the aim
+    // maths and this scan already project with, so the ray and the pixel are one
+    // mapping by construction - no focal-length reconstruction and no
+    // aspect-ratio assumption can disagree with it.
+    //
+    //   viaGame    : the game's projection gave the ray - the shot follows the dot.
+    //   fellBack   : it did not, so the camera basis (Transform.get_right/get_up,
+    //                RVAs verified in the RVA block) plus A_FireFocalPx() rebuilt
+    //                the ray from the offsets.
+    //   plainCentre: neither could apply the offsets, so the ray is the plain
+    //                camera forward - which IS the centre pixel. Reported, never
+    //                silently substituted, whenever the dot is off the centre.
+    inline void CrosshairRayDir(void *cam, void *camTransform, const Vector3 &camPos,
+                                Vector3 &out, bool &viaGame, bool &fellBack,
+                                bool &plainCentre)
     {
-        if (!Config.Crosshair.TriggerbotUsesIt) { dx = 0.0f; dy = 0.0f; return; }
-        dx = Config.Crosshair.OffsetX;
-        dy = Config.Crosshair.OffsetY;
-    }
-
-    // Where the triggerbot measures from.
-    inline void CrosshairAimCentrePx(float &cx, float &cy)
-    {
-        float dx = 0.0f, dy = 0.0f;
-        CrosshairAimOffsetPx(dx, dy);
-        cx = (float)get_width()  * 0.5f + dx;
-        cy = (float)get_height() * 0.5f + dy;
-    }
-
-    // The direction from the camera THROUGH the crosshair pixel - the ray the
-    // shot follows when the crosshair the user sees is the one firing.
-    //   f = camera forward (on its own this IS the centre ray), r/u = the rest of
-    //   the camera basis (Transform.get_right/get_up), F = A_FireFocalPx(), the
-    //   vertical focal length in px, so a pixel offset (dx right, dy down) is
-    //       normalize(f + r*dx/F - u*dy/F)
-    // For the default 0,0 this returns f UNCHANGED - no rebuild, no normalize -
-    // so the default case is bit-for-bit the ray this path always cast.
-    // `used` says the offset was really applied. `dropped` says an offset was
-    // asked for but the basis (or a sane focal length) did not resolve: the
-    // centre ray then stays the camera forward while the ZONE path still follows
-    // the dot, and the menu prints that it happened instead of hiding it.
-    inline void CrosshairRayDir(void *camTransform, float dxPx, float dyPx,
-                                Vector3 &out, bool &used, bool &dropped)
-    {
-        used = false;
-        dropped = false;
+        viaGame = false;
+        fellBack = false;
+        plainCentre = false;
         out = fn_TransformGetForward(camTransform);
-        if (dxPx == 0.0f && dyPx == 0.0f)
-            return;
-        if (fn_TransformGetRight == nullptr || fn_TransformGetUp == nullptr) {
-            dropped = true;
+
+        float cx = 0.0f, cy = 0.0f;
+        CrosshairCentrePx(cx, cy);
+
+        // 1. The game's own screen -> world projection. The depth only scales the
+        //    returned point along the ray, so any sane positive value gives the
+        //    same direction.
+        if (fn_ScreenToWorldPoint != nullptr && A_FireObjectAlive(cam)) {
+            const Vector3 world =
+                fn_ScreenToWorldPoint(cam, Vector3(cx, cy, A_FireTune::kCrosshairRayMax));
+            const Vector3 dir(world.x - camPos.x,
+                              world.y - camPos.y,
+                              world.z - camPos.z);
+            if (Vector3::Magnitude(dir) > 1.0e-4f) {
+                out = Vector3::Normalized(dir);
+                viaGame = true;
+                return;
+            }
+        }
+
+        // 2. The dot is on the centre: the camera forward already IS that ray, so
+        //    there is nothing to rebuild and the default case stays the shot the
+        //    pre-dot build took.
+        const float dxPx = Config.Crosshair.OffsetX;
+        const float dyPx = Config.Crosshair.OffsetY;
+        if (dxPx == 0.0f && dyPx == 0.0f) {
+            plainCentre = true;
             return;
         }
-        const float focalPx = A_FireFocalPx();
-        if (!(focalPx > 1.0f)) {
-            dropped = true;
-            return;
+
+        // 3. Off-centre without the game's projection: rebuild the ray from the
+        //    camera basis and the focal length.
+        //       normalize(f + r*dx/F - u*dy/F)
+        if (fn_TransformGetRight != nullptr && fn_TransformGetUp != nullptr) {
+            const float focalPx = A_FireFocalPx();
+            if (focalPx > 1.0f) {
+                const Vector3 right = fn_TransformGetRight(camTransform);
+                const Vector3 up    = fn_TransformGetUp(camTransform);
+                const Vector3 dir = out + right * (dxPx / focalPx) - up * (dyPx / focalPx);
+                if (Vector3::Magnitude(dir) > 1.0e-6f) {
+                    out = Vector3::Normalized(dir);
+                    fellBack = true;
+                    return;
+                }
+            }
         }
-        const Vector3 right = fn_TransformGetRight(camTransform);
-        const Vector3 up    = fn_TransformGetUp(camTransform);
-        const Vector3 dir = out + right * (dxPx / focalPx) - up * (dyPx / focalPx);
-        if (!(Vector3::Magnitude(dir) > 1.0e-6f)) {
-            dropped = true;
-            return;
-        }
-        out = Vector3::Normalized(dir);
-        used = true;
+
+        // 4. Nothing can honour an off-centre dot here (no projection and no
+        //    basis/FOV). Handing back the plain centre ray as the "dot's ray"
+        //    would be a lie in the other direction - the dot sits at (cx,cy)
+        //    but the ray is the camera's own forward - and that lie is exactly
+        //    the over-fire report: what the trigger scanned and what the user
+        //    aimed with were two different lines. All three flags stay false,
+        //    so the scan treats this as NO honest dot ray and keeps to the
+        //    zone scan below, which measures the real dot's zone and its own
+        //    line of sight.
     }
 
-    // Crosshair radius in pixels. Default is V3's zone: 2.5 % of the screen
-    // width (== 27 px on a 1600-wide render - tight by design, aimbot is the
-    // one that snaps FOR you, this only fires when YOU aim). The menu exposes
-    // a Triggerbot Radius slider in FULL pixels so a 40-px-hardcoded value can
-    // never hide legitimate targets again (device diag showed R=40 / Near=147,
-    // i.e. the zone was simply smaller than the crosshair-to-dummy distance).
+    // The trigger's crosshair zone radius, in pixels: the dot's own radius - the
+    // circle the menu draws. Size is the dot's DIAMETER, so a 20 px dot covers
+    // 10 px and a 2 px dot covers 1 px, and there is no second radius the user
+    // cannot see. Clamped only against degenerate values.
     inline float A_FireCrosshairRadiusPx()
     {
+        float radius = Config.Crosshair.Size * 0.5f;
+        if (!(radius > 0.0f)) radius = 3.0f;              // 0/negative size -> default dot
         const float w = (float)get_width();
-        const float fallback = w > 0.0f ? w * 0.025f : 64.0f;
-        float radius = (float)Config.NewFeaturesMenu.TriggerbotRadius;
-        if (!(radius > 0.0f)) radius = fallback;          // 0/negative -> default
-        if (radius < 4.0f)   radius = 4.0f;               // degenerate guard
-        if (radius > w * 0.5f) radius = w * 0.5f;         // never the whole screen
-        // The Aimbot's Aim-Assist slider may widen the zone, never shrink it.
-        if (Config.Aim.AimAssistSize > 0.0f) {
-            const float fromSlider = w * (Config.Aim.AimAssistSize / 100.0f) * 0.5f;
-            if (fromSlider > radius) radius = fromSlider;
-        }
+        if (w > 0.0f && radius > w * 0.5f) radius = w * 0.5f;   // never the whole screen
         return radius;
     }
 
@@ -1514,6 +1625,23 @@ namespace NewFeatures
     {
         if (depthOut != nullptr) *depthOut = -1;
         if (!A_FireObjectAlive(hitTransform) || !A_FireObjectAlive((void *)pawn)) return false;
+
+        // Registry first. The game's AttackableColliderMap answers "would this
+        // collider DAMAGE this target" - exactly the question the trigger
+        // answers for the user - and it does NOT credit a collider the game
+        // would not damage the pawn as (aim-assist / fire / melee / any ghost
+        // volume around or behind him). If the registry has an answer and it
+        // names a DIFFERENT target, that hit is not this pawn. Registry has
+        // no record (common for root transforms and skeleton bones) - keep
+        // walking below; the parent-chain walk still owns those cases.
+        if (fn_AtkMapGetTargetForCollider != nullptr) {
+            void *map = fn_GameGetAttackableColliderMap ? fn_GameGetAttackableColliderMap() : nullptr;
+            if (A_FireObjectAlive(map)) {
+                void *target = fn_AtkMapGetTargetForCollider(map, hitTransform);
+                if (A_FireObjectAlive(target) && target != (void *)pawn)
+                    return false;
+            }
+        }
 
         // The pawn's own root transform. The old version also compared the raw
         // m_HeadBone @0x308 / m_Mesh @0x628 FIELDS; those are the offsets that did
@@ -1790,6 +1918,20 @@ namespace NewFeatures
     // compares every level against every pawn's transform, so ONE ray answers both
     // "what did I hit" and "whose is it". Cheap: <=12 * enemyCount getter calls,
     // and it only ever runs for the centre ray.
+    // Registry = the identity referee (see the note in A_FireHitIsTarget).
+    // Returns 0 = the registry has no record (or is missing, no opinion),
+    // 1 = the game says the collider IS this pawn's shootable body,
+    // -1 = the game says it is NOT this pawn's body (another target's volume).
+    inline int A_FireRegistryOwnerIs(void *hitTransform, Pawn *pawn)
+    {
+        if (fn_AtkMapGetTargetForCollider == nullptr) return 0;
+        void *map = fn_GameGetAttackableColliderMap ? fn_GameGetAttackableColliderMap() : nullptr;
+        if (!A_FireObjectAlive(map)) return 0;                     // no record -> no opinion
+        void *target = fn_AtkMapGetTargetForCollider(map, hitTransform);
+        if (!A_FireObjectAlive(target)) return 0;                  // no record -> no opinion
+        return target == (void *)pawn ? 1 : -1;
+    }
+
     inline Pawn *A_FirePawnFromHitTransform(void *hitTransform, Pawn **items, int count,
                                             int *depthOut = nullptr)
     {
@@ -1806,6 +1948,31 @@ namespace NewFeatures
             tcache[i] = nullptr;
             Pawn *p = items[i];
             if (A_FireListObjectAlive((void *)p)) tcache[i] = (void *)p->get_transform();
+        }
+
+        // THE REGISTRY ASKS FIRST, on the hit collider itself: if the game
+        // tracks it but credits it to ANOTHER target (an aim-assist / fire
+        // volume bulging out of HIS silhouette, a teammate's volume in front),
+        // the honest answer is "the pawn the registry names" - or scenery,
+        // when that target is not on this list. Bones / body meshes usually
+        // carry no registry record of their own, so a "no record" passes
+        // through to the parent-chain walk below.
+        if (fn_AtkMapGetTargetForCollider != nullptr) {
+            void *map = fn_GameGetAttackableColliderMap ? fn_GameGetAttackableColliderMap() : nullptr;
+            if (A_FireObjectAlive(map)) {
+                void *target = fn_AtkMapGetTargetForCollider(map, hitTransform);
+                if (A_FireObjectAlive(target) && A_FireObjectAlive(target)) {
+                    for (int i = 0; i < count; i++) {
+                        Pawn *p = items[i];
+                        if (!A_FireListObjectAlive((void *)p)) continue;
+                        if ((void *)p == target) {
+                            if (depthOut != nullptr) *depthOut = 0;
+                            return p;                       // the ray landed on HIM
+                        }
+                    }
+                    return nullptr;                         // another target's volume, not listed
+                }
+            }
         }
 
         void *t = hitTransform;
@@ -1834,9 +2001,12 @@ namespace NewFeatures
         return nullptr;
     }
 
-    // ---- PATH A: the enemy under the exact centre of the screen -----------
-    // One ray from the camera along the camera's own forward
-    // (Transform.get_forward 0x509C650). Whatever it hits FIRST that is not
+    // ---- PATH A: the enemy under the dot (the menu's dot crosshair) -----------
+    // One ray from the camera THROUGH THE DOT'S PIXEL - CrosshairRayDir()
+    // turns the dot's pixel into the game-projected world ray, honouring the
+    // X/Y offsets; the camera's own forward (Transform.get_forward
+    // 0x509C650) stands in only when the dot IS the screen centre. Whatever it
+    // hits FIRST that is not
     // our own body and not an invisible trigger volume is what the crosshair is
     // really on, so:
     //   - the hit names an enemy pawn -> that pawn is centred AND unoccluded. A
@@ -1850,15 +2020,15 @@ namespace NewFeatures
     // It needs no bones and no projection math, so it keeps working even if the
     // Pawn bone offsets drift between game builds - the failure mode that turns
     // path B into "sometimes it does not shoot" with no visible reason.
-    inline Pawn *A_FireCrosshairRayPawn(const Vector3 &camPos, const Vector3 &camForward,
+    inline Pawn *A_FireCrosshairRayPawn(const Vector3 &camPos, const Vector3 &rayDir,
                                         Pawn **items, int count, Pawn *localPawn,
                                         float *hitDistOut, bool *symbolMissing)
     {
         if (hitDistOut != nullptr) *hitDistOut = -1.0f;
         if (symbolMissing != nullptr) *symbolMissing = false;
-        const float len = Vector3::Magnitude(camForward);
-        if (!(len > 0.0001f)) return nullptr;
-        const Vector3 dir(camForward.x / len, camForward.y / len, camForward.z / len);
+        const float len = Vector3::Magnitude(rayDir);
+        if (!(len > 0.0001f)) return nullptr;                 // no dot ray -> no path A
+        const Vector3 dir(rayDir.x / len, rayDir.y / len, rayDir.z / len);
 
         // Preferred: RaycastAll, walking past our own geometry and triggers.
         if (fn_PhysicsRaycastAll != nullptr) {
@@ -1908,55 +2078,25 @@ namespace NewFeatures
     //  can see, at any range and on any ping.
     //
     //  Two paths, in this order:
-    //    A. the camera's own forward ray - "enemy exactly in the centre of the
-    //       screen". Bone-free, and unoccluded by construction.
+    //    A. the RAY THROUGH THE DOT'S PIXEL - whatever that ray hits first is
+    //       the answer ("is the dot on an enemy", bone-free, unoccluded).
     //    B. the crosshair zone - any enemy whose hitbox projects inside the
     //       configured px radius, with the nearest-hit ray naming the first thing
     //       on the shot line.
+    //  THE ACCURACY GATE between them: with an honest dot ray, path A IS the
+    //  whole answer and the gate refuses everything the dot ray did not name,
+    //  so path B only runs when no honest dot ray could be produced at all.
     //  Returns FireBlock::Fired with `out` filled, or the one reason the shot was
     //  refused. Candidates are checked nearest-to-crosshair first, so the pawn
     //  under the crosshair is the one that gets the ray budget.
     // =====================================================================
-    // ---- the user's target filter ------------------------------------------
-    // Checked only AFTER a pawn has survived every hard gate (alive, not us, not
-    // a teammate, under the crosshair), so it can only ever NARROW the candidate
-    // list: it can never turn a blocked shot into a fired one. Every rule is a
-    // local read or a symbol the gate already uses - no new game method is
-    // involved, which is what makes the filter safe to add to a working feature.
-    //
-    //   All         - every valid enemy (the behaviour before the filter existed)
-    //   VisibleOnly - only pawns the GAME says it drew / did not occlude last
-    //                 frame (Pawn.get_LastOccVisible / get_RecentlyRendered, the
-    //                 same verdicts the near-origin escape uses)
-    //   Within*     - only pawns whose aim point is inside that range
-    enum class TriggerFilter : int
-    {
-        All         = 0,
-        VisibleOnly = 1,
-        Within25m   = 2,
-        Within50m   = 3,
-        Within100m  = 4
-    };
-
-    // worldDist < 0 means "not known yet" - a rule that needs the distance lets
-    // the pawn through and is re-asked once the aim point exists.
-    inline bool A_FireFilterPass(int filter, void *pawn, float worldDist)
-    {
-        switch ((TriggerFilter)filter) {
-            case TriggerFilter::VisibleOnly:
-                return A_FireGameSaysVisible((Pawn *)pawn);
-            case TriggerFilter::Within25m:
-                return worldDist < 0.0f || worldDist <= 25.0f;
-            case TriggerFilter::Within50m:
-                return worldDist < 0.0f || worldDist <= 50.0f;
-            case TriggerFilter::Within100m:
-                return worldDist < 0.0f || worldDist <= 100.0f;
-            case TriggerFilter::All:
-            default:
-                return true;
-        }
-    }
-
+    // The user's target filter (All / Visible Only / Within 25-50-100 m) is
+    // GONE. It never changed a shot on device and it quietly threw away
+    // candidates the rest of the tree would have accepted, so the rule set is now
+    // exactly the hard gates in A_FireScan: list-alive, not us, not a teammate,
+    // alive, body on screen, measured against the dot crosshair, and the
+    // visibility ray. A pawn the game reports as occluded is still eligible - the
+    // ray decides, and the ray can name the blocker.
     inline FireBlock A_FireScan(Pawn *localPawn, Weapon *weapon, TriggerTarget &out)
     {
         TriggerbotDiag &d = g_triggerDiag;
@@ -1968,7 +2108,6 @@ namespace NewFeatures
         d.candidates = 0;
         d.losChecked = 0;
         d.friendsInLine = 0;
-        d.filteredOut = 0;
         d.selfHitsSkipped = 0;
         d.triggerHitsSkipped = 0;
         d.occOverrides = 0;
@@ -1979,6 +2118,9 @@ namespace NewFeatures
         d.lastTravel = 0.0f;
         d.lastWorldDist = 0.0f;
         d.lastBulletSpeed = 0.0f;
+        d.dotRayHonest = false;
+        d.dotRayDecided = false;
+        d.projKeepFrac = -1.0f;
 
         BaseGame *game = (BaseGame *)fn_GameGetMatchGame();
         if (!Tools::IsPtrValid((void *)game)) return FireBlock::NoMatch;
@@ -2022,10 +2164,10 @@ namespace NewFeatures
         if (!Tools::IsPtrValid((void *)items) || count <= 0 || count > 1024)
             return FireBlock::NoEnemyInZone;
 
-        // The zone is measured from the crosshair the user sees, not from a
-        // hard-coded screen centre.
+        // The zone is measured from the crosshair the user sees - the dot - not
+        // from a hard-coded screen centre.
         float cx = 0.0f, cy = 0.0f;
-        CrosshairAimCentrePx(cx, cy);
+        CrosshairCentrePx(cx, cy);
         d.crosshairCx = cx;
         d.crosshairCy = cy;
         const float radius = A_FireCrosshairRadiusPx();
@@ -2033,45 +2175,69 @@ namespace NewFeatures
         d.radiusPx = radius;
 
         // Read once per scan, not per candidate.
-        const int targetFilter = Config.NewFeaturesMenu.TriggerbotFilter;
         const float focalPx = A_FireFocalPx();
         d.focalPx = focalPx;
 
-        // ---- 0. PATH A - the enemy under the exact centre of the screen ----
-        // Tried before the zone scan because it answers the user's "shoots when the
-        // enemy is exactly in the middle" requirement directly, without relying on
-        // m_HeadBone/m_Mesh offsets or on a projection radius.
+        // ---- 0. PATH A - the enemy under the CROSSHAIR (the menu's dot) -----
+        // The ray cast here is the ray through the dot's pixel, taken from the
+        // game's own projection, so it is exactly the line the player is aiming
+        // down. Whatever it hits FIRST - past our own body and past invisible
+        // trigger volumes - is what the dot is on, which is what makes this path
+        // incapable of shooting through anything and independent of bone offsets
+        // and of any projection radius.
+        // Is there an HONEST ray through the dot's own pixel at all? The
+        // game's own projection (viaGame), the rebuilt camera-basis ray
+        // (fellBack) and an exactly-centred dot (rayPlain) all ARE the dot's
+        // line. Anything else is NOT, and may not decide a shot.
+        bool honestDotRay = false;
+        Vector3 dotRayDir = Vector3::zero();
         if (fn_TransformGetForward != nullptr) {
-            // Path A follows the crosshair. With the dot at the default centre -
-            // or with the triggerbot unwired from the dot - this is the camera
-            // forward, i.e. exactly the ray this path always cast.
-            float crossDx = 0.0f, crossDy = 0.0f;
-            CrosshairAimOffsetPx(crossDx, crossDy);
-            bool crossOffsetUsed = false, crossOffsetDropped = false;
+            bool rayViaGame = false, rayFellBack = false, rayPlain = false;
             Vector3 camForward;
-            CrosshairRayDir(camTransform, crossDx, crossDy, camForward,
-                            crossOffsetUsed, crossOffsetDropped);
-            d.crosshairOffsetUsed = crossOffsetUsed ? 1 : 0;
-            d.crosshairOffsetDropped = crossOffsetDropped ? 1 : 0;
+            CrosshairRayDir(cam, camTransform, camPos, camForward,
+                            rayViaGame, rayFellBack, rayPlain);
+            d.crosshairRayViaGame  = rayViaGame  ? 1 : 0;
+            d.crosshairRayFellBack = rayFellBack ? 1 : 0;
+            d.crosshairRayPlain    = rayPlain    ? 1 : 0;
+            d.dotRayHonest = honestDotRay = rayViaGame || rayFellBack || rayPlain;
+            dotRayDir = camForward;
+        }
+        if (fn_TransformGetForward != nullptr && honestDotRay) {
             bool symbolMissing = false;
             float centreHitDist = -1.0f;
-            Pawn *centred = A_FireCrosshairRayPawn(camPos, camForward, items, count, localPawn,
+            Pawn *centred = A_FireCrosshairRayPawn(camPos, dotRayDir, items, count, localPawn,
                                                    &centreHitDist, &symbolMissing);
             d.crosshairHitDist = centreHitDist;
             d.crosshairPawn = (unsigned)(uintptr_t)centred;
             if (symbolMissing && fn_PhysicsRaycastSegment == nullptr) {
                 d.rayUnknown = true;                        // no way at all to trace
             } else if (centred != nullptr && centred != localPawn &&
-                       !IsSameTeamAcceptBots(localPawn, centred) && A_FirePawnAlive(centred) &&
-                       A_FireFilterPass(targetFilter, centred, centreHitDist)) {
-                // A centre-ray pawn the filter refuses simply falls through to
-                // the zone scan below, which applies the same filter and does the
-                // counting.
-                // The shot does not depend on the probe - the centre ray already
-                // proved visibility AND ownership - so this is only the aim point
-                // handed to the spread/lead report.
+                       !IsSameTeamAcceptBots(localPawn, centred) && A_FirePawnAlive(centred)) {
+                // THE NAME IS NOT ENOUGH: a registry-empty hit a few
+                // centimetres off the silhouette (a railing the ray grazes,
+                // unregistered geometry in his component hierarchy - and the
+                // aim-assist / fire volume that bulges out of every silhouette)
+                // can still walk up to the enemy's root transform, and at close
+                // range the ray and his body can belong to that ONE hit. So the
+                // pawn the dot ray NAMED must also be a pawn the dot is ON, and
+                // "on him" is his own BODY as the player sees it:
+                //   * the body axis (feet -> head) is projected, and the dot has
+                //     to sit within the body's own WIDTH of that axis -
+                //     kBodyHalfWidthM, shoulders + gear - plus the dot ray's own
+                //     pixel thickness;
+                //   * px per metre comes from that SAME axis (its projected
+                //     length over its world length), so the bound is physical:
+                //     no field of view, no screen-size guess, no bone offset;
+                //   * what it replaced used HALF THE BODY HEIGHT as a RADIUS
+                //     around the chest. At 5 m a standing enemy is ~260 px tall,
+                //     so it accepted a dot up to ~130 px to his SIDE that "still
+                //     shot" - exactly the beside-the-arm report. A body is tall,
+                //     not round: its WIDTH is what the dot has to be inside.
+                // A dot that cannot be measured against his body does not pass
+                // either: with the axis unprojectable, the dot is still held to
+                // the drawn dot's own radius around his aim point.
                 const A_FireAimPoint ap = A_FireAimPointFor(centred);
-                float bestSq = -1.0f;
+                float bestSq = -1.0f;       // dot -> his projected aim point, px^2
                 if (ap.valid) {
                     Vector3 sc = Vector3::zero();
                     if (w2s(ap.pos, sc) && sc.z > 0.0f) {
@@ -2080,6 +2246,37 @@ namespace NewFeatures
                         bestSq = dx * dx + dy * dy;
                     }
                 }
+
+                // The pixel limit the dot is held to, and the px^2 it is compared
+                // against. A negative limit means his body could not be measured.
+                float limitPx = -1.0f;
+                float testSq  = bestSq;
+                if (ap.valid && ap.headOk && ap.feetOk && focalPx > 0.0f) {
+                    Vector3 scHead = Vector3::zero(), scFeet = Vector3::zero();
+                    if (w2s(ap.head, scHead) && w2s(ap.feet, scFeet) &&
+                        scHead.z > 0.0f && scFeet.z > 0.0f) {
+                        const float axisPx = sqrtf((scHead.x - scFeet.x) * (scHead.x - scFeet.x) +
+                                                   (scHead.y - scFeet.y) * (scHead.y - scFeet.y));
+                        const float axisM  = Vector3::Distance(ap.head, ap.feet);
+                        if (axisPx > 0.5f && axisM > 0.3f) {
+                            limitPx = A_FireTune::kBodyHalfWidthM * (axisPx / axisM) + 2.0f;
+                            testSq  = A_FirePointSegDistSq(cx, cy, scHead.x, scHead.y,
+                                                           scFeet.x, scFeet.y);
+                        }
+                    }
+                }
+                if (limitPx < 0.0f) {
+                    float r = A_FireCrosshairRadiusPx();
+                    if (!(r > 4.0f)) r = 4.0f;
+                    limitPx = r + 2.0f;
+                    testSq  = bestSq;
+                }
+                if (testSq < 0.0f || testSq > limitPx * limitPx) {
+                    // the dot is BESIDE him, not ON him -> no shot
+                    d.dotRayDeclined++;
+                    return FireBlock::NoEnemyInZone;
+                }
+                d.projKeepFrac = sqrtf(testSq) / limitPx;
                 out.pawn      = centred;
                 out.aim       = ap;
                 out.aimPoint  = ap.valid ? ap.pos : camPos;
@@ -2099,6 +2296,21 @@ namespace NewFeatures
                 return FireBlock::Fired;
             }
         }
+
+        // THE ACCURACY GATE - the fix for "the dot is so small, yet it still
+        // shoots the enemy even if the dot isn't really looking at it".
+        // With an honest ray through the dot's pixel the question was already
+        // answered: the ray NAMED the pawn the dot is on, or it did not - which
+        // means THE DOT IS NOT ON AN ENEMY and nothing may fire. The zone scan
+        // below measures "near the dot" and certifies nothing about the aim
+        // (its LOS ray runs camera -> chest, a different line), so when the
+        // dot's own ray decides, only it decides.
+        if (fn_TransformGetForward != nullptr && honestDotRay) {
+            d.dotRayDecided = true;
+            return FireBlock::NoEnemyInZone;
+        }
+        // No honest dot ray (off-centre dot, no projection, no basis/FOV):
+        // fall back to the zone scan, which measures the real dot's zone.
 
         // Team gate hoisted out of the loop: get_TeamId(localPawn) is the same
         // for the whole scan, while IsSameTeamAcceptBots re-validated the LOCAL
@@ -2129,13 +2341,6 @@ namespace NewFeatures
             if (p == localPawn) continue;                        // never shoot yourself
             if (sameTeamGate(p)) continue;                        // team id is the gate
             if (!A_FirePawnAlive(p)) continue;                    // dead / downed / still ragdolling
-            // The user's filter, first pass: a rule that needs no distance
-            // (VisibleOnly) drops this pawn before its three projections.
-            if (!A_FireFilterPass(targetFilter, p, -1.0f)) {
-                d.filteredOut++;
-                continue;
-            }
-
             const A_FireAimPoint ap = A_FireAimPointFor(p);
             if (!ap.valid) continue;                              // the game answered nothing about his body
 
@@ -2171,13 +2376,7 @@ namespace NewFeatures
             const float pxOffset = sqrtf(d2);
             if (n >= MAX_CANDIDATES) continue;
 
-            // Second pass: the rules that only apply once the distance to the
-            // aim point is known.
             const float candDist = Vector3::Distance(camPos, ap.pos);
-            if (!A_FireFilterPass(targetFilter, p, candDist)) {
-                d.filteredOut++;
-                continue;
-            }
 
             cands[n].pawn      = p;
             cands[n].aim       = ap;
@@ -2428,14 +2627,24 @@ namespace NewFeatures
         // ---- 4. trigger key gating (the mode combo) ----------------------
         // 0 = Always  : the trigger fires on its own the moment a target is under
         //               the crosshair (0-delay, no reaction delay).
-        // 1 = ADS only: only while the player is scoping (Pawn.IsAiming 0x519BB10).
+        // 1 = ADS only: only while the LOCAL PLAYER'S OWN HELD WEAPON is aiming.
+        //               Answered by A_FireHeldWeaponAiming(held) - two field reads
+        //               on the weapon validated three paragraphs above. The old
+        //               gate called Pawn.IsAiming() 0x519BB10 here, a native method
+        //               that walks the pawn's own weapon chain internally; that is
+        //               what crashed this mode, and it is not called any more.
         // 2 = Firing only: only while the player's own fire input is active
         //               (Pawn.get_IsFiring 0x51A8A38). Note the trigger's own
         //               press also raises that flag, which is what keeps a burst
         //               going while the crosshair stays on the target - the same
         //               semantics the reference implementation had.
         if (Config.NewFeaturesMenu.TriggerbotMode == 1) {
-            if (fn_PawnIsAiming == nullptr || !fn_PawnIsAiming(localPawn))
+            bool  adsFlag  = false;
+            float adsPct   = 0.0f;
+            const bool aiming = A_FireHeldWeaponAiming((void *)held, &adsFlag, &adsPct);
+            d.adsFlag = adsFlag ? 1 : 0;
+            d.adsPct  = adsPct;
+            if (!aiming)
                 return FireBlock::ModeNotAds;
         } else if (Config.NewFeaturesMenu.TriggerbotMode == 2) {
             if (fn_PawnGetIsFiring == nullptr || !fn_PawnGetIsFiring(localPawn))
@@ -2672,6 +2881,12 @@ namespace NewFeatures
         g_afireHeldWeaponStamp    = -1000.0;
     }
 
+    // Refreshes the held-weapon cache the hooked Weapon::get_DelaySprintFire
+    // compares against (No Sprint Fire Delay). DEFINED with the firing-timing
+    // features (section 3.1) further down; declared here because the pawn-tick
+    // heartbeat below is what feeds it.
+    inline void UpdateNoSprintFireDelayWeapon(void *localPawnInstance);
+
     // ---- Heartbeats -------------------------------------------------------
     // Weapon::Tick / Pawn::Tick are BASE implementations; il2cpp virtual
     // dispatch invokes each subclass's Slot-33 override instead, so neither
@@ -2687,6 +2902,10 @@ namespace NewFeatures
         if (A_FireLocalPawnFast() == (Pawn *)pawnInstance) {
             d.localPawn = pawnInstance;
             d.pawnLocalTicks++;
+            // Refresh the held-weapon cache the hooked Weapon getter compares
+            // against (No Sprint Fire Delay). This is the game ticking this very
+            // pawn, so the pawn is alive and its weapon is live by construction.
+            UpdateNoSprintFireDelayWeapon(pawnInstance);
             A_FireTick(nullptr);        // the local player's own pawn ticked
         }
     }
@@ -2787,6 +3006,15 @@ namespace NewFeatures
         if (Tools::IsPtrValid(w2sAddr))
             fn_WorldToScreen = (Vector3 (*)(void *, Vector3))w2sAddr;
 
+        // Camera.ScreenToWorldPoint 0x5023D34 (dump.cs 157960) - the inverse of
+        // the WorldToScreenPoint above, and the only thing that turns the
+        // crosshair PIXEL into the shot ray (see CrosshairRayDir). It is resolved
+        // independently: when it is missing the camera-basis reconstruction still
+        // honours the dot's offsets, and the panel says which one answered.
+        auto s2wAddr = UnityRva(RVA::Camera_ScreenToWorldPoint);
+        if (Tools::IsPtrValid(s2wAddr))
+            fn_ScreenToWorldPoint = (Vector3 (*)(void *, Vector3))s2wAddr;
+
         // 0x506C1E4 = Physics.Raycast(Vector3, Vector3, out RaycastHit) - the
         // plain 2-arg overload (dump.cs 267239-267240). RaycastHit layout for
         // THIS build: m_Distance @0x1C (V3 read 0x20 - wrong here).
@@ -2819,6 +3047,18 @@ namespace NewFeatures
         auto rayAllAddr = UnityRva(RVA::Physics_RaycastAll);
         if (Tools::IsPtrValid(rayAllAddr))
             fn_PhysicsRaycastAll = (void *(*)(Vector3, Vector3, float))rayAllAddr;
+
+        // The game's collider -> target registry (RVA note above). Both are
+        // plain il2cpp statics/instance methods with this build's standard
+        // call shape; GetAttackableTargetForCollider's dump entry
+        // ([Out] object col) is the same instance-parameter shape every other
+        // getter here is called with.
+        auto atkMapAddr = UnityRva(RVA::GamePlay_get_AttackableColliderMap);
+        if (Tools::IsPtrValid(atkMapAddr))
+            fn_GameGetAttackableColliderMap = (void *(*)())atkMapAddr;
+        auto atkTargetAddr = UnityRva(RVA::AtkColliderMap_GetTargetForCollider);
+        if (Tools::IsPtrValid(atkTargetAddr))
+            fn_AtkMapGetTargetForCollider = (void *(*)(void *, void *))atkTargetAddr;
         else
             LOGE("[NewFeatures] triggerbot: RaycastAll RVA 0x%llX did not resolve -"
                  " LOS falls back to the single-ray + occlusion path",
@@ -2865,9 +3105,10 @@ namespace NewFeatures
         if (Tools::IsPtrValid(camMainAddr))
             fn_CameraGetMain = (void *(*)())camMainAddr;
 
-        auto aimingAddr = UnityRva(RVA::Pawn_IsAiming);
-        if (Tools::IsPtrValid(aimingAddr))
-            fn_PawnIsAiming = (bool (*)(void *))aimingAddr;
+        // Pawn::IsAiming() 0x519BB10 is deliberately NOT resolved any more: the
+        // "ADS only" mode reads Weapon.m_IsAiming / m_AimingPercentage instead
+        // (see A_FireHeldWeaponAiming). Resolving a pointer only to never call it
+        // is how a crash-prone call survives a refactor unnoticed.
 
         auto firingAddr = UnityRva(RVA::Pawn_get_IsFiring);
         if (Tools::IsPtrValid(firingAddr))
@@ -2987,9 +3228,10 @@ namespace NewFeatures
             }
         }
 
-        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p RayAll=%p RayHitOut=%p RaySeg=%p IsTrigger=%p Fwd=%p Parent=%p Raycast=%p CamRight=%p CamUp=%p",
+        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p S2W=%p RayAll=%p RayHitOut=%p RaySeg=%p IsTrigger=%p Fwd=%p Parent=%p Raycast=%p CamRight=%p CamUp=%p",
              (void *)fn_Weapon_StartFire, (void *)fn_Weapon_StopFire,
-             (void *)fn_WorldToScreen, (void *)fn_PhysicsRaycastAll,
+             (void *)fn_WorldToScreen, (void *)fn_ScreenToWorldPoint,
+             (void *)fn_PhysicsRaycastAll,
              (void *)fn_PhysicsRaycastHitOut, (void *)fn_PhysicsRaycastSegment,
              (void *)fn_ColliderIsTrigger, (void *)fn_TransformGetForward,
              (void *)fn_TransformGetParent, (void *)fn_PhysicsRaycastLOS,
@@ -3057,32 +3299,51 @@ namespace NewFeatures
         constexpr uintptr_t LocalPawn_GetCurrentWeapon = 0x518BEA8; // Pawn::get_CurrentWeapon()
     }
 
-    // Is `weaponInstance` the weapon the local player is currently holding?
-    // (keeps every timing override local-player-only)
-    inline bool IsLocalWeapon(void *weaponInstance)
+    // Is `weaponInstance` the local player's own held weapon? The answer is a
+    // CACHE, refreshed from the local player's own pawn tick - because the only
+    // caller is the hooked Weapon::get_DelaySprintFire, which the game runs on
+    // every weapon in the world while those weapons are constructed, ticked and
+    // destroyed.
+    //
+    // WHAT CRASHED THIS OPTION: the old body called IsLocalWeapon(), which
+    // resolved the local pawn and called Pawn::get_CurrentWeapon() on it from
+    // inside that getter, guarded only by Tools::IsPtrValid. A pawn the game has
+    // already destroyed still has its managed wrapper in readable memory, so the
+    // guard passed and the native call walked the cleared m_CachedPtr - the exact
+    // crash class documented above A_FireObjectAlive. There is no safe moment for
+    // a native call inside that getter, so the hook makes none.
+    inline std::atomic<void *> g_noSprintFireDelayWeapon{nullptr};
+
+    // Game thread, once per frame, from the local player's OWN pawn tick
+    // (A_FirePawnTicked) - the one place where "this pawn is alive right now and
+    // its weapon is real" is not a guess, because the game is ticking it.
+    inline void UpdateNoSprintFireDelayWeapon(void *localPawnInstance)
     {
-        if (!IsReadable(weaponInstance)) return false;
-        void *localPawn = LocalPlayer();
-        if (!IsReadable(localPawn)) return false;
-        // `static`: NoSprintFireDelayActive() reaches this from a hooked weapon
-        // getter, i.e. potentially many times per frame - resolve the RVA once.
-        static auto getCurrentWeapon = (void *(*)(void *))UnityRva(FiringTiming::LocalPawn_GetCurrentWeapon);
-        if (getCurrentWeapon == nullptr) return false;
-        return getCurrentWeapon(localPawn) == weaponInstance;
+        void *held = nullptr;
+        if (Config.NewFeaturesMenu.NoSprintToFireDelay &&
+            A_FireObjectAlive(localPawnInstance)) {
+            Weapon *weapon = ((Pawn *)localPawnInstance)->get_CurrentWeapon();
+            if (A_FireObjectAlive((void *)weapon))
+                held = (void *)weapon;
+        }
+        g_noSprintFireDelayWeapon.store(held, std::memory_order_relaxed);
     }
 
-    // Hipfiring == local player alive and NOT scoping / ADS.
-    inline bool LocalPlayerIsHipfiring()
+    // The comparison itself, pure so a host test can drive it directly.
+    inline bool NoSprintFireDelayActiveFor(void *weaponInstance, void *cachedLocalWeapon)
     {
-        void *localPawn = LocalPlayer();
-        if (!IsReadable(localPawn) || !IsPawnAlive(localPawn)) return false;
-        return !IsLocalPlayerScoping();
+        return weaponInstance != nullptr && weaponInstance == cachedLocalWeapon;
     }
 
-    // Consumed by the existing Feats.h hooks (single hook per address).
+    // Consumed by the existing Feats.h hook on Weapon::get_DelaySprintFire
+    // (single hook per address - the template already hooked it for Firerate
+    // Speed). Runs inside game code on every weapon instance of the world, so
+    // nothing here touches the game: no native call, no dereference, no lock.
     inline bool NoSprintFireDelayActive(void *weaponInstance)
     {
-        return Config.NewFeaturesMenu.NoSprintToFireDelay && IsLocalWeapon(weaponInstance);
+        if (!Config.NewFeaturesMenu.NoSprintToFireDelay) return false;
+        return NoSprintFireDelayActiveFor(
+            weaponInstance, g_noSprintFireDelayWeapon.load(std::memory_order_relaxed));
     }
 
     // ---- 3.2 No Hipfire Delay -------------------------------------------
@@ -3097,9 +3358,8 @@ namespace NewFeatures
     // the gate reports "no get-ready time" for every weapon instance.  That is
     // exactly what the option asks for and it matches how the repo's other
     // tiny-function/global patches (NoDrift, NoHitFlinch, NoCrouch, ...) work.
-    // IsLocalWeapon() is still used by the Feats.h timing hooks above;
-    // LocalPlayerIsHipfiring() is now only a helper (kept, no longer on any
-    // hot path since the two getters are patched, not hooked).
+    // NoSprintFireDelayActive() (3.1 above) is the only helper the Feats.h timing
+    // hooks call, and it is now a pure pointer compare.
 
     // =====================================================================
     //  Original function pointers + hook bodies

@@ -195,11 +195,13 @@ sColorsESPBOT sColorsESPBOT{0};
         bool Grapss;
         bool EnhanceFPS;
         bool Spectatex;
-        // Unlock attachments: the weapon blueprints plus the mythic sights and
-        // attachments they carry (System/Hooks/Feats.h answers the game's own
-        // IsUnlocked / IsWeaponAttachmentUnlock). ON by default, and toggled
-        // from the HOME tab.
-        bool UnlockAttachments = true;
+        bool Attachment;
+        // "Mythic Attachments": with an applied weapon skin, the client answers
+        // YES to the skin's own unlock question and to every attachment unlock
+        // question (see System/Hooks/MythicAttachments.h). ON by default - this
+        // is what makes an applied mythic behave as if it were really owned.
+        bool MythicAttachments = true;
+		bool Blueprints;
 		bool ClearDisplay;
 		bool ResetGuest;
 		bool RedWallhack;
@@ -235,12 +237,9 @@ sColorsESPBOT sColorsESPBOT{0};
         bool Triggerbot = false;
         int TriggerbotMode = 0;        // 0 = Always, 1 = ADS only, 2 = Firing only
         int TriggerbotDelay = 0;       // ms (humanized reaction delay)
-        int TriggerbotRadius = 40;     // crosshair zone width in px
-        // Which enemies the trigger may engage. 0 = All (no filter, the
-        // behaviour before this option existed), 1 = only pawns the game itself
-        // reports as visible, 2/3/4 = only inside 25 / 50 / 100 m. The filter can
-        // only remove candidates; it never turns a blocked shot into a fired one.
-        int TriggerbotFilter = 0;         // 0=All, 1=Visible only, 2=<=25m, 3=<=50m, 4=<=100m
+        int TriggerbotRadius = 40;     // LEGACY, unused: the zone IS the dot crosshair now
+                                       // (Crosshair.Size below). Kept only so old
+                                       // config files keep loading.
         bool NoHitFlinch = false;
         bool NoDrift = false;
         bool NoSlideFatigue = false;
@@ -250,17 +249,18 @@ sColorsESPBOT sColorsESPBOT{0};
     };
     sNewFeaturesMenu NewFeaturesMenu{0};
 
-    // Own dot crosshair, drawn over the game. The dot sits at the render centre
-    // plus OffsetX/OffsetY in pixels, so the default (0,0) IS the centre - the
-    // triggerbot measures its crosshair zone from the same point, and with the
-    // defaults its centre ray is byte-for-byte the camera forward it used
-    // before this existed.
+    // The menu's own dot crosshair - and the triggerbot's crosshair. There is
+    // exactly ONE crosshair in this build: the dot sits at the render centre plus
+    // OffsetX/OffsetY in pixels, that pixel is what the trigger aims through, and
+    // the dot's own radius IS the trigger's zone. Nothing else feeds the trigger's
+    // geometry, so shrinking the dot tightens the trigger by exactly the same
+    // amount and the two can never drift apart. On by default: this IS the
+    // crosshair now.
     struct sCrosshair
     {
-        bool Enabled = false;           // draw the dot
-        bool TriggerbotUsesIt = true;   // the triggerbot aims where the dot is
+        bool  Enabled = true;           // draw the dot (the trigger aims here either way)
         float Color[4] = {1.0f, 1.0f, 1.0f, 0.95f};  // RGB + opacity (alpha)
-        float Size = 6.0f;              // dot diameter in px
+        float Size = 6.0f;              // dot diameter in px == the trigger zone diameter
         float OffsetX = 0.0f;           // px right of centre (0 = centre)
         float OffsetY = 0.0f;           // px below centre (0 = centre)
     };

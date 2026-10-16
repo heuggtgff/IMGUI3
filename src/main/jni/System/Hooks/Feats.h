@@ -168,8 +168,13 @@ inline void hook_OnFlashBangExplode(void *instance, int weaponItemID, float whit
 //   get_FireBoltTime    @0x51237F4 (No Fire Delay feature removed per request)
 //   get_FireInterval    @0x5105C74 (No Fire Delay feature removed per request)
 //   get_DelaySprintFire @0x513CBC4 -> No Sprint Fire Delay (sprint-out timer)
-// NewFeatures::NoSprintFireDelayActive() requires the instance to be the local player's
-// current weapon, so nothing is changed for remote players.
+// NewFeatures::NoSprintFireDelayActive() answers "is this the local player's held
+// weapon?" from a CACHE refreshed by the local pawn's own tick, because this body
+// runs inside game code on every weapon of the world: it must not resolve the local
+// pawn or call Pawn::get_CurrentWeapon() itself. That native call from inside the
+// getter is what crashed the option (a pawn the game already destroyed passes a plain
+// readability check), so the body is now a pure pointer compare - nothing is changed
+// for remote players either way.
 inline float (*orig_get_FireBoltTime)(void *) = nullptr;
 inline float get_FireBoltTime(void * instance) {
     if (instance != NULL) {
@@ -589,30 +594,25 @@ inline float DisperseBase(void * instance) {
     return orig_DisperseBase(instance);
 } 
 
-// Unlock Attachments - one switch for both halves of the unlock, ON by default
-// and toggled from the HOME tab (Config.ExtraMenu.UnlockAttachments).
-//
-// BlueprintWeaponInfo.IsUnlocked() is the game's own "do I own this blueprint"
-// test and WeaponPromotionInfo.IsWeaponAttachmentUnlock() the mythic-sight /
-// attachment test; answering yes is what makes the blueprints and the mythic
-// attachments usable. The flag defaults to on, and the JSON config keeps
-// whatever the user picks after that.
-//
-// IsWeaponAttachmentUnlock is declared with the method's real shape
-// (this + the attachment slot). It used to be a one-argument pointer calling a
-// two-argument method, so the old "off" path handed the game whatever the
-// second register happened to hold.
+// Unlock Blueprints (SKINS tab switch). BlueprintWeaponInfo.IsUnlocked()
+// @0x901F988 takes no parameters, so this pointer's shape is the method's own.
 inline bool (*orig_IsUnlocked)(void *instance);
 inline bool IsUnlocked(void *instance) {
-    if (Config.ExtraMenu.UnlockAttachments) return true;
+    if (instance != NULL) {
+        if (Config.ExtraMenu.Blueprints) {
+            return true;
+        }
+    }
     return orig_IsUnlocked(instance);
 }
 
-inline bool (*orig_IsWeaponAttachmentUnlock)(void *instance, int attachment);
-inline bool IsWeaponAttachmentUnlock(void *instance, int attachment) {
-    if (Config.ExtraMenu.UnlockAttachments) return true;
-    return orig_IsWeaponAttachmentUnlock(instance, attachment);
-}
+// Mythic Attachments (unlock-as-if-owned) lives in its own header: the four
+// client-side gates that decide whether an applied skin and the weapon's
+// attachments count as unlocked - WeaponPromotionInfo.IsWeaponAttachmentUnlock
+// 0xA61AA00, WeaponPromotionInfo.IsWeaponSkinUnlock 0xA61AD54,
+// LoadoutWeaponsUIHelper.IsThisAttachmentUnlock 0x5D40528 and
+// WeaponAttr.IsAttachUnlock 0xA188634. See System/Hooks/MythicAttachments.h.
+#include "MythicAttachments.h"
 
 // No Spectate Deelay
 inline bool (*o_NeedDelayProcess)(void *instance, int a, int b);
@@ -944,10 +944,37 @@ inline void InitializeAllHooks() {
   ///Camera Pov
   DobbyHook((void *) getAbsoluteAddress("libunity.so", 0xC347950), (void *)  &InputSettingConfig_Instant_GetMainCameraFov_3p, (void **) &oInputSettingConfig_Instant_GetMainCameraFov_3p); 
 
-    //-- Unlock Blueprints + mythic attachments (HOME tab switch, on by default)
-    // Dump .57: BlueprintWeaponInfo.IsUnlocked() @0x901F988 (no parameters) and
-    // WeaponPromotionInfo.IsWeaponAttachmentUnlock(int attachment) @0xA61AA00.
+    //-- Unlock Blueprints (SKINS tab) at BlueprintWeaponInfo.IsUnlocked()
+    //   @0x901F988 - no parameters.
+    //-- Mythic attachments (HOME tab switch, ON by default) installs its four
+    //   gates itself: see MythicAttachments.h. WeaponPromotionInfo.
+    //   IsWeaponAttachmentUnlock(int attachment) @0xA61AA00 is the first of them.
     HOOK_LIB("libunity.so", "0x901F988", IsUnlocked, orig_IsUnlocked);
 
+    //-- Unlock Attachments / Mythic Attachments (see MythicAttachments.h). The
+    //   RVAs are the dump's, same convention as every hook above.
     HOOK_LIB("libunity.so", "0xA61AA00", IsWeaponAttachmentUnlock, orig_IsWeaponAttachmentUnlock);
+    HOOK_LIB("libunity.so", "0xA61AD54", IsWeaponSkinUnlock, orig_IsWeaponSkinUnlock);
+    HOOK_LIB("libunity.so", "0x5D40528", IsThisAttachmentUnlock, orig_IsThisAttachmentUnlock);
+    HOOK_LIB("libunity.so", "0xA188634", IsAttachUnlock, orig_IsAttachUnlock);
+
+    //-- Mythic Attachments, LAYER 2: the client-side DATA writes that make an
+    //   applied skin behave like really owned (the four answers above were
+    //   never asked on device - they are small enough to be inlined into their
+    //   callers). These three are the builders / SetData of the very screen
+    //   that draws the lock, so the lock is rewritten instead of answered.
+    HOOK_LIB("libunity.so", "0xB6323C0", GetAttachmentList, orig_GetAttachmentList);
+    HOOK_LIB("libunity.so", "0xB83F1C0", AttachmentItemSetData, orig_AttachmentItemSetData);
+    HOOK_LIB("libunity.so", "0xB83D5E0", AttachmentCellSetData, orig_AttachmentCellSetData);
+
+    // Which of those seven addresses actually took the hook? The hooker only
+    // fills the original pointer on success, and the SKINS tab prints these -
+    // a 0 there is the reason that gate's asked/granted counter stays at 0/0.
+    mythic_attachments::NoteLanded(mythic_attachments::GateAttachment, orig_IsWeaponAttachmentUnlock != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateSkin,       orig_IsWeaponSkinUnlock != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateLoadout,    orig_IsThisAttachmentUnlock != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateConfirm,    orig_IsAttachUnlock != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateList,       orig_GetAttachmentList != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateItem,       orig_AttachmentItemSetData != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateCell,       orig_AttachmentCellSetData != nullptr);
 }

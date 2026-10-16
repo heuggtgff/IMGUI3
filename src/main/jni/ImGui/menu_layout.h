@@ -10,8 +10,10 @@
 // The window is drawn in the display's own pixels, and that display is the
 // game's render surface, not the phone's panel: it can be anything from roughly
 // 640 px up. A fixed 900x600 window therefore read as "the menu is so big" on a
-// small surface and as a corner widget on a big one. Everything the layout needs
-// is derived from the display here.
+// small surface and as a corner widget on a big one, and the skin / character
+// lists - the tabs that actually need room - were the ones squeezed. The window
+// follows the display instead: 92% of it, with a 16 px margin all round, a floor
+// for the two-column tabs and a hard ceiling of the surface itself.
 //
 // The tab switcher is a sidebar inside the window (it replaced the floating
 // radial wheel), so the window no longer shares the screen with a second
@@ -29,10 +31,12 @@ inline MenuLayout ComputeMenuLayout(const ImVec2 &display)
     const float availW = ImMax(1.0f, display.x - pad * 2.0f);
     const float availH = ImMax(1.0f, display.y - pad * 2.0f);
 
-    // Never wider than 900 or taller than 600, never narrower/shorter than what
-    // the two-column tabs need, and never bigger than the surface allows.
-    L.menuW = ImMin(900.0f, availW);
-    L.menuH = ImMin(600.0f, ImMax(240.0f, availH));
+    // 92% of the display, but never past the margin, never below the minimum a
+    // two-column tab can render in, and never bigger than the surface itself -
+    // on a surface smaller than the minimum the margin wins, because a window
+    // wider than the screen is worse than a cramped one.
+    L.menuW = ImClamp(display.x * 0.92f, ImMin(360.0f, availW), availW);
+    L.menuH = ImClamp(display.y * 0.92f, ImMin(320.0f, availH), availH);
 
     // Centred, and never hanging off the screen.
     L.menuPos.x = ImClamp((display.x - L.menuW) * 0.5f, 0.0f, ImMax(0.0f, display.x - L.menuW));

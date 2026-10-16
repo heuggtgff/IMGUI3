@@ -1426,7 +1426,7 @@ namespace custom
         }
         popup_open = IsPopupOpen(popup_id, ImGuiPopupFlags_None);
         const float popup_target = (popup_open && it_anim->second.want_open)
-            ? ImClamp(CalcMaxPopupHeightFromItemCount(val) + 6.0f * c::scale, 0.0f, 220.0f * c::scale)
+            ? ImClamp(CalcMaxPopupHeightFromItemCount(val) + 6.0f * c::scale, 0.0f, 300.0f * c::scale)
             : 0.0f;
         it_anim->second.arrow_roll = ImLerp(it_anim->second.arrow_roll, (popup_open && it_anim->second.want_open) ? 1.0f : 0.0f, g.IO.DeltaTime * 12.0f);
         it_anim->second.text = ImLerp(it_anim->second.text, (popup_open && it_anim->second.want_open) ? c::text::text_active : hovered ? c::text::text_hov : c::text::text_active, g.IO.DeltaTime * 10.0f);
@@ -1512,10 +1512,27 @@ namespace custom
 
         if (!popup_open && it_anim->second.combo_size < 2.f && it_anim->second.popup_alpha < 0.04f) return false;
 
-        ImGui::SetNextWindowPos(ImVec2(field_bb.Min.x, field_bb.Max.y + 5.0f * control_scale + it_anim->second.popup_offset));
+        // Keep the popup on the screen. It opens below the field, which for a
+        // list near the bottom of the (now taller) menu - the Target Character
+        // dropdown on the Character tab - used to run straight off the display,
+        // where none of its rows could be reached. It flips ABOVE the field when
+        // the room below is not enough for its full height.
+        const ImVec2 popup_disp = GetIO().DisplaySize;
+        const float popup_h_target = ImMin(ImMax(it_anim->second.combo_size, popup_target),
+                                           ImMax(1.0f, popup_disp.y - 8.0f));
+        ImVec2 popup_pos(field_bb.Min.x, field_bb.Max.y + 5.0f * control_scale + it_anim->second.popup_offset);
+        if (popup_pos.y + popup_h_target > popup_disp.y - 4.0f) {
+            const float above_y = field_bb.Min.y - 5.0f * control_scale - popup_h_target;
+            popup_pos.y = (above_y >= 4.0f) ? above_y : ImMax(4.0f, popup_disp.y - 4.0f - popup_h_target);
+        }
+        ImGui::SetNextWindowPos(popup_pos);
         ImGui::SetNextWindowSize(ImVec2(field_bb.GetWidth(), ImMax(1.0f, it_anim->second.combo_size)));
         ImGui::SetNextWindowBgAlpha(0.90f * ImMax(0.0f, it_anim->second.popup_alpha));
-        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+        // Scrollable. The list is far longer than this panel (hundreds of
+        // characters), and with the scrollbar and the mouse wheel disabled the
+        // rows past the first ~7 were simply unreachable - which is why a target
+        // character that was not near the top of the list could not be picked.
+        ImGuiWindowFlags window_flags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoMove;
 
         PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.0f, 0.0f, 0.0f, 0.90f));
         PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.0f, 0.0f, 0.0f, 0.90f));

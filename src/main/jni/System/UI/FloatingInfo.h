@@ -157,13 +157,13 @@ inline void Render(ImDrawList* draw, float screenWidth, float screenHeight) {
     drawTextWithSpacing("ETHNIR NOIR", ImVec2(textStartX, startY), neonPurple, 1.4f);
     
     float dotRadius = 3.0f * c::scale;
-    float deluxeTextWidth = font::inter_semibold->CalcTextSizeA(11.5f * c::scale, FLT_MAX, 0.0f, "DELUXE").x + (1.4f * 6);
-    ImVec2 dotPos = ImVec2(textEndX - deluxeTextWidth - (8.0f * c::scale), startY + (6.0f * c::scale));
+    float premiumTextWidth = font::inter_semibold->CalcTextSizeA(11.5f * c::scale, FLT_MAX, 0.0f, "PREMIUM").x + (1.4f * 6);
+    ImVec2 dotPos = ImVec2(textEndX - premiumTextWidth - (8.0f * c::scale), startY + (6.0f * c::scale));
     
     draw->AddCircleFilled(dotPos, dotRadius, neonCyan);
     draw->AddCircle(dotPos, dotRadius + (1.5f * c::scale), ImColor(0, 255, 255, 50), 0, 1.0f);
 
-    drawTextWithSpacing("DELUXE", ImVec2(textEndX, startY), neonCyan, 1.4f, true);
+    drawTextWithSpacing("PREMIUM", ImVec2(textEndX, startY), neonCyan, 1.4f, true);
     
     float dividerY = startY + 18.0f * c::scale;
     draw->AddLine(ImVec2(textStartX, dividerY), ImVec2(textEndX, dividerY), borderColor, 1.0f);
@@ -188,7 +188,7 @@ inline void Render(ImDrawList* draw, float screenWidth, float screenHeight) {
     currentY += lineSpacing + 8.0f * c::scale;
     
     draw->AddLine(ImVec2(textStartX, currentY - 3.0f * c::scale), ImVec2(textStartX + 20.0f * c::scale, currentY - 3.0f * c::scale), borderColor, 2.0f);
-    drawTextWithSpacing("DEVELOPER @ThaxxylHax", ImVec2(textStartX, currentY), neonPurple, 2.0f);
+    drawTextWithSpacing("DEVELOPER @Shaiaintshyy", ImVec2(textStartX, currentY), neonPurple, 2.0f);
 }
 
 } // namespace floating_info

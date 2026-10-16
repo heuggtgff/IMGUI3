@@ -53,7 +53,8 @@ void LoadConfig() {
         else if (key == "Aim.Trigger") Config.Aim.Trigger = static_cast<EAimTrigger>(std::stoi(valueStr));
         else if (key == "Aim.By") Config.Aim.By = static_cast<EAim>(std::stoi(valueStr));
         else if (key == "ExtraMenu.Kinetic") Config.ExtraMenu.Kinetic = (valueStr == "1");
-        else if (key == "ExtraMenu.UnlockAttachments") Config.ExtraMenu.UnlockAttachments = (valueStr == "1");
+        else if (key == "ExtraMenu.MythicAttachments") Config.ExtraMenu.MythicAttachments = (valueStr == "1");
+        else if (key == "ExtraMenu.Blueprints") Config.ExtraMenu.Blueprints = (valueStr == "1");
         else if (key == "ExtraMenu.Recoil") Config.ExtraMenu.Recoil = (valueStr == "1");
         else if (key == "ExtraMenu.Spread") Config.ExtraMenu.Spread = (valueStr == "1");
         else if (key == "ExtraMenu.Reload") Config.ExtraMenu.Reload = (valueStr == "1");
@@ -71,7 +72,6 @@ void LoadConfig() {
         else if (key == "NewFeatures.TriggerbotMode") Config.NewFeaturesMenu.TriggerbotMode = std::stoi(valueStr);
         else if (key == "NewFeatures.TriggerbotDelay") Config.NewFeaturesMenu.TriggerbotDelay = std::stoi(valueStr);
         else if (key == "NewFeatures.TriggerbotRadius") Config.NewFeaturesMenu.TriggerbotRadius = std::stoi(valueStr);
-        else if (key == "NewFeatures.TriggerbotFilter") Config.NewFeaturesMenu.TriggerbotFilter = std::stoi(valueStr);
         else if (key == "NewFeatures.NoHitFlinch") Config.NewFeaturesMenu.NoHitFlinch = (valueStr == "1");
         else if (key == "NewFeatures.NoDrift") Config.NewFeaturesMenu.NoDrift = (valueStr == "1");
         else if (key == "NewFeatures.NoSlideFatigue") Config.NewFeaturesMenu.NoSlideFatigue = (valueStr == "1");
@@ -80,7 +80,6 @@ void LoadConfig() {
         // Own dot crosshair. Opacity is the colour's own alpha, so it is stored
         // once (Crosshair.Opacity -> Color[3]) and cannot disagree with the dot.
         else if (key == "Crosshair.Enabled") Config.Crosshair.Enabled = (valueStr == "1");
-        else if (key == "Crosshair.TriggerbotUsesIt") Config.Crosshair.TriggerbotUsesIt = (valueStr == "1");
         else if (key == "Crosshair.Size") Config.Crosshair.Size = std::stof(valueStr);
         else if (key == "Crosshair.OffsetX") Config.Crosshair.OffsetX = std::stof(valueStr);
         else if (key == "Crosshair.OffsetY") Config.Crosshair.OffsetY = std::stof(valueStr);
@@ -123,7 +122,8 @@ void SaveConfig() {
     file << "Aim.Trigger " << Config.Aim.Trigger << "\n";
     file << "Aim.By " << Config.Aim.By << "\n";
     file << "ExtraMenu.Kinetic " << Config.ExtraMenu.Kinetic << "\n";
-    file << "ExtraMenu.UnlockAttachments " << Config.ExtraMenu.UnlockAttachments << "\n";
+    file << "ExtraMenu.MythicAttachments " << Config.ExtraMenu.MythicAttachments << "\n";
+    file << "ExtraMenu.Blueprints " << Config.ExtraMenu.Blueprints << "\n";
     file << "ExtraMenu.Recoil " << Config.ExtraMenu.Recoil << "\n";
     file << "ExtraMenu.Spread " << Config.ExtraMenu.Spread << "\n";
     file << "ExtraMenu.Reload " << Config.ExtraMenu.Reload << "\n";
@@ -141,14 +141,12 @@ void SaveConfig() {
     file << "NewFeatures.TriggerbotMode " << Config.NewFeaturesMenu.TriggerbotMode << "\n";
     file << "NewFeatures.TriggerbotDelay " << Config.NewFeaturesMenu.TriggerbotDelay << "\n";
     file << "NewFeatures.TriggerbotRadius " << Config.NewFeaturesMenu.TriggerbotRadius << "\n";
-    file << "NewFeatures.TriggerbotFilter " << Config.NewFeaturesMenu.TriggerbotFilter << "\n";
     file << "NewFeatures.NoHitFlinch " << Config.NewFeaturesMenu.NoHitFlinch << "\n";
     file << "NewFeatures.NoDrift " << Config.NewFeaturesMenu.NoDrift << "\n";
     file << "NewFeatures.NoSlideFatigue " << Config.NewFeaturesMenu.NoSlideFatigue << "\n";
     file << "NewFeatures.NoSprintToFireDelay " << Config.NewFeaturesMenu.NoSprintToFireDelay << "\n";
     file << "NewFeatures.NoHipfireDelay " << Config.NewFeaturesMenu.NoHipfireDelay << "\n";
     file << "Crosshair.Enabled " << Config.Crosshair.Enabled << "\n";
-    file << "Crosshair.TriggerbotUsesIt " << Config.Crosshair.TriggerbotUsesIt << "\n";
     file << "Crosshair.Size " << Config.Crosshair.Size << "\n";
     file << "Crosshair.OffsetX " << Config.Crosshair.OffsetX << "\n";
     file << "Crosshair.OffsetY " << Config.Crosshair.OffsetY << "\n";

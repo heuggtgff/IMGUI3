@@ -405,14 +405,11 @@ inline void RenderSkinCategoryContent(int categoryIndex, bool drawSubTabs = fals
         charSearchWasActive = charActive;
     }
         
-    if (showKeyboard && !skinActive && (skinSubTab != 0 || (!charSearchWasActive && !charActive && !charHovered)) && ImGui::IsMouseClicked(0)) {
-        ImGuiIO& io = ImGui::GetIO();
-        float screenHeight = io.DisplaySize.y;
-        float keyboardHeight = screenHeight * 0.60f;
-        if (ImGui::GetMousePos().y < screenHeight - keyboardHeight) {
-            showKeyboard = false;
-        }
-    }
+    // (The "tap outside the keyboard closes it" test used to live here. It ran
+    // off the search box's own IsItemActive(), so while the box was active - i.e.
+    // always, while typing - it never fired, and its 0.60f panel height did not
+    // even match the keyboard's 0.56f. RenderVirtualKeyboard owns it now, on the
+    // panel's real rect.)
 
     // ---- Rarity filter (applies to every skin sub-tab; tag-based) -----------
     // Drawn with the menu's own combo widget. The stock ImGui::BeginCombo drew
@@ -997,25 +994,41 @@ case 3:
 
         // --- Every camo in the build, one search field, no filter dropdown ---
         // The list is camoData, filled by LoadCamos() (Skin/Thread.h) from the
-        // game's own WeaponCamosConfig table. Picking a row writes that camo's
-        // id into DefWeaponSkinID on EVERY weapon conf, so a camo a gun already
-        // had equipped (Gold on the KRM, say) is replaced by the pick.
+        // game's own WeaponCamosConfig table - one row per camo the build has,
+        // de-duplicated there (Skin/Fields.h InsertCamo): several table rows for
+        // one camo (one per weapon) are one entry here, not the duplicate list
+        // rows this used to show.
         static std::unordered_map<uint, int> camoOriginals;
+        static std::unordered_map<uint, WeaponSkinCamoOriginal> camoSkinOriginals;
         static int selectedCamoItemID = -1;   // -1 = no override, the tab's OFF
 
         // The ctor hooks push confs from another thread, so take a copy: the
         // apply below then walks a list that cannot move under it.
         std::vector<void *> camoConfs;
+        std::vector<void *> camoSkinConfs;
         {
             std::lock_guard<std::mutex> lock(g_dataMutex);
             camoConfs = weaponConfInstance;
+            camoSkinConfs = weaponSkinConfigInstance;
         }
+
+        // One pick has to be written in TWO places to reach every gun:
+        //   * WeaponConfConfig.DefWeaponSkinID - the default skin of a gun that has
+        //     no camo chosen (ApplyCamoToEveryGun);
+        //   * WeaponSkinConfig.CamoID - the weapon-skin record the equipped camo of
+        //     a gun is read from (ApplyCamoToEveryWeaponSkin). Writing only the
+        //     first lever left every gun that already had a camo on its own camo -
+        //     the "it only changes the guns without camo" report.
+        auto applyCamoEverywhere = [&](int camoItemID) {
+            ApplyCamoToEveryGun(camoItemID, camoConfs, camoOriginals);
+            ApplyCamoToEveryWeaponSkin(camoItemID, camoSkinConfs, camoSkinOriginals);
+        };
 
         bool camoDefault = selectedCamoItemID < 0;
         if (custom::Checkbox("Default / OFF", &camoDefault)) {
             if (camoDefault) {
                 selectedCamoItemID = -1;
-                ApplyCamoToEveryGun(0, camoConfs, camoOriginals);
+                applyCamoEverywhere(0);
             }
         }
 
@@ -1026,9 +1039,10 @@ case 3:
         for (const auto &camo : camoData) {
             if (camo.camoItemID != selectedCamoItemID) continue;
             ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
-                "Selected: %s  id=%08X apply=%08X%s  confs=%d",
+                "Selected: %s  id=%08X apply=%08X%s  confs=%d skins=%d",
                 camo.camoName.c_str(), (unsigned)camo.camoItemID, (unsigned)camo.applyID,
-                camo.applyID == camo.camoItemID ? "" : " (proven)", (int)camoConfs.size());
+                camo.applyID == camo.camoItemID ? "" : " (proven)",
+                (int)camoConfs.size(), (int)camoSkinConfs.size());
             break;
         }
 
@@ -1050,10 +1064,10 @@ case 3:
                 if (DrawTieredSkinCheckbox(camo.camoName.c_str(), &checked)) {
                     if (checked) {
                         selectedCamoItemID = camo.camoItemID;
-                        ApplyCamoToEveryGun(camo.applyID, camoConfs, camoOriginals);
+                        applyCamoEverywhere(camo.applyID);
                     } else {
                         selectedCamoItemID = -1;
-                        ApplyCamoToEveryGun(0, camoConfs, camoOriginals);
+                        applyCamoEverywhere(0);
                     }
                 }
                 ImGui::PopID();

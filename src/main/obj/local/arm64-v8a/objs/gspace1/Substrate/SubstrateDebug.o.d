@@ -1,20 +1,23 @@
-src/main/obj/local/arm64-v8a/objs/gspace1/Substrate/SubstrateDebug.o: \
-  src/main/jni/Substrate/SubstrateDebug.cpp \
-  src/main/jni/Substrate/SubstrateHook.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdlib.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__config \
-  src/main/jni/Substrate/SubstrateDebug.hpp \
-  src/main/jni/Substrate/SubstrateLog.hpp \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdio.h
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/obj/local/arm64-v8a/objs/gspace1/Substrate/SubstrateDebug.o: \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateDebug.cpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateHook.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdlib.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateDebug.hpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateLog.hpp \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdint.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdio.h
 
-src/main/jni/Substrate/SubstrateHook.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateHook.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdlib.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdlib.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__config:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config:
 
-src/main/jni/Substrate/SubstrateDebug.hpp:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateDebug.hpp:
 
-src/main/jni/Substrate/SubstrateLog.hpp:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateLog.hpp:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdio.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdint.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdio.h:

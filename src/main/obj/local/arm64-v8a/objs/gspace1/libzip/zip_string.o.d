@@ -1,30 +1,32 @@
-src/main/obj/local/arm64-v8a/objs/gspace1/libzip/zip_string.o: \
-  src/main/jni/libzip/zip_string.c \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdlib.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__config \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string.h \
-  src/main/jni/libzip/zipint.h src/main/jni/libzip/config.h \
-  src/main/jni/libzip/zip.h src/main/jni/libzip/zipconf.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/inttypes.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdio.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdbool.h
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/obj/local/arm64-v8a/objs/gspace1/libzip/zip_string.o: \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/libzip/zip_string.c \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdlib.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/libzip/zipint.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/libzip/config.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/libzip/zip.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/libzip/zipconf.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/inttypes.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdio.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdbool.h
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdlib.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdlib.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__config:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string.h:
 
-src/main/jni/libzip/zipint.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/libzip/zipint.h:
 
-src/main/jni/libzip/config.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/libzip/config.h:
 
-src/main/jni/libzip/zip.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/libzip/zip.h:
 
-src/main/jni/libzip/zipconf.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/libzip/zipconf.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/inttypes.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/inttypes.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdio.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdio.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdbool.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdbool.h:

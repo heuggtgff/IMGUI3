@@ -217,41 +217,77 @@ inline int KnownCamoIdForName(const std::string &name)
     return 0;
 }
 
-// Add one camo row: ignored when its CamoItemID is already in the list (the
-// table repeats a camo once per weapon), otherwise inserted in case-insensitive
-// name order so the list stays stable while the table fills in. A second row for
-// a known id upgrades what the first one could not answer yet (its real name, its
-// texture asset id, and therefore whether a proven camo id applies).
+// The display name of a camo id this build has PROVEN (the same seven constants
+// KnownCamoIdForName() maps). The game's table names the SAME camo once per
+// weapon - "Gold", "KRM Gold", "AK117 Gold", ... - and every one of those rows
+// writes the SAME proven id, i.e. they are one row as far as the user is
+// concerned. Naming them all canonically is what lets InsertCamo() collapse them
+// into a single entry instead of the duplicate list rows the search used to show.
+inline std::string KnownCamoNameForId(int id)
+{
+    switch ((unsigned)id) {
+        case 0x1D37F755: return "Gold";
+        case 0x1D37F756: return "Platinum";
+        case 0x1D37F757: return "Damascus";
+        case 0x1D37F758: return "Diamond";
+        case 0x1D37F77D: return "Aether Crystal";
+        case 0x1D37F77E: return "Red Sprite";
+        case 0x1D37F77F: return "Glacial Ripple";
+        default:         return std::string();
+    }
+}
+
+// Add one camo row: ignored when it would be a duplicate, otherwise inserted in
+// case-insensitive name order so the list stays stable while the table fills in.
+//
+// Two rows are the SAME row for the user when they would show the same name AND
+// write the same id:
+//   * same CamoItemID      - the table's own repeat (one row per weapon);
+//   * same (name, applyID) - two different table rows of one proven camo family
+//                            ("Gold" + "KRM Gold"), which the canonical name above
+//                            turns into one name so they collide here.
+// Rows that only LOOK similar stay separate: "Golden Emerald" resolves to its own
+// id, so it shares neither name nor id with Gold.
+//
+// A second row for a known id upgrades what the first one could not answer yet
+// (its real name, its texture asset id, and therefore whether a proven id applies).
 inline void InsertCamo(int camoItemID, const std::string &name,
                        int textureAssetID, int belongWeaponID)
 {
     if (camoItemID <= 0 || name.empty())
         return;
 
+    const int known = KnownCamoIdForName(name);
+    const int applyID = known != 0 ? known : camoItemID;
+    // A proven camo always shows its own name (Gold, Diamond, ...), never the
+    // per-weapon spelling the table happens to carry.
+    const std::string displayName = known != 0 ? KnownCamoNameForId(known) : name;
+    const std::string key = CamoNameLower(displayName);
+
     for (auto &existing : camoData) {
-        if (existing.camoItemID != camoItemID)
+        const bool sameRow = existing.camoItemID == camoItemID;
+        const bool sameThing = existing.applyID == applyID &&
+                               CamoNameLower(existing.camoName) == key;
+        if (!sameRow && !sameThing)
             continue;
         if (existing.belongWeaponID != 0 && belongWeaponID == 0)
             existing.belongWeaponID = 0;
         if (existing.textureAssetID == 0 && textureAssetID != 0)
             existing.textureAssetID = textureAssetID;
-        if (IsPlaceholderCamoName(existing.camoName) && !IsPlaceholderCamoName(name)) {
-            existing.camoName = name;
-            const int known = KnownCamoIdForName(name);
-            existing.applyID = known != 0 ? known : camoItemID;
+        if (IsPlaceholderCamoName(existing.camoName) && !IsPlaceholderCamoName(displayName)) {
+            existing.camoName = displayName;
+            existing.applyID = applyID;
         }
         return;
     }
 
     camoInfo entry;
-    entry.camoName = name;
+    entry.camoName = displayName;
     entry.camoItemID = camoItemID;
     entry.textureAssetID = textureAssetID;
     entry.belongWeaponID = belongWeaponID;
-    const int known = KnownCamoIdForName(name);
-    entry.applyID = known != 0 ? known : camoItemID;
+    entry.applyID = applyID;
 
-    const std::string key = CamoNameLower(entry.camoName);
     auto at = camoData.begin();
     while (at != camoData.end() && CamoNameLower(at->camoName) <= key)
         ++at;
@@ -743,6 +779,62 @@ struct WeaponSkinFields
     Array<int> *SkinID3P;
 };
 extern WeaponSkinFields *weaponskinFields;
+
+// ---------------------------------------------------------------------------
+// Camo application - part TWO: the guns that already have a camo equipped.
+//
+// WeaponConfConfig.DefWeaponSkinID (ApplyCamoToEveryGun above) is a weapon's own
+// DEFAULT skin - the value the game falls back to for a gun with no camo chosen.
+// A gun that DID have a camo therefore kept showing its own, which is exactly the
+// report "it puts the camo on every gun WITHOUT camo, not the guns with camo".
+//
+// The record that wins there is the weapon-skin row (WeaponSkinConfig, captured by
+// the WeaponSkin ctor hook): dump 825712 gives ColorID 0x10, GoGetPos 0x11,
+// IsCleanCamo 0x12, SkinType 0x13, BRWeaponID 0x14, BrSkinWeaponID 0x18,
+// CamoID 0x1C, ColorSubID 0x20, ID 0x24, WeaponID 0x28 - one row per weapon skin,
+// each carrying the camo it renders (CamoID). Writing the picked camo there as
+// well as into DefWeaponSkinID is what reaches a gun whose camo is already set.
+//
+//   camoItemID > 0  - remember (CamoID, ColorSubID) ONCE per row, then write the
+//                     pick; switching camo replaces it instead of stacking.
+//   camoItemID <= 0 - put the remembered values back. Rows that were never touched
+//                     are left completely alone.
+struct WeaponSkinCamoOriginal
+{
+    int camoID;      // WeaponSkinConfig.CamoID @0x1C
+    int colorSubID;  // WeaponSkinConfig.ColorSubID @0x20
+};
+
+inline int ApplyCamoToEveryWeaponSkin(int camoItemID,
+                                      const std::vector<void *> &skinConfs,
+                                      std::unordered_map<uint, WeaponSkinCamoOriginal> &originals)
+{
+    int written = 0;
+    for (void *skin : skinConfs) {
+        if (!skin || !Tools::IsPtrValid(skin))
+            continue;
+        auto *sf = (WeaponSkinFields *)((uintptr_t)skin + 0x10);
+        if (!Tools::IsPtrValid(sf) || sf->ID == 0)
+            continue;
+
+        if (camoItemID > 0) {
+            // emplace keeps the FIRST value seen, so after several camo switches
+            // the stored original is still the game's own camo, not the last pick.
+            originals.emplace(sf->ID, WeaponSkinCamoOriginal{sf->CamoID, sf->ColorSubID});
+            sf->CamoID = camoItemID;
+            sf->ColorSubID = 0;
+            written++;
+        } else {
+            auto it = originals.find(sf->ID);
+            if (it == originals.end())
+                continue;
+            sf->CamoID = it->second.camoID;
+            sf->ColorSubID = it->second.colorSubID;
+            written++;
+        }
+    }
+    return written;
+}
 
 struct Item2InventoryFields
 {

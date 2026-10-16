@@ -41,9 +41,13 @@ static void checkDisplay(float w, float h, const char *tag)
     CHECK(L.menuPos.x >= -0.05f && L.menuPos.y >= -0.05f &&
           L.menuPos.x + L.menuW <= w + 0.05f && L.menuPos.y + L.menuH <= h + 0.05f, buf);
 
-    snprintf(buf, sizeof buf, "%s: %gx%g the window keeps its ceiling and a usable size", tag, w, h);
-    CHECK(L.menuW <= 900.0f && L.menuH <= 600.0f &&
-          L.menuW >= 320.0f && L.menuH >= 240.0f, buf);
+    // Auto-resize: 92% of the display, floored for the two-column tabs and
+    // capped by the surface (the 16 px margin).
+    snprintf(buf, sizeof buf, "%s: %gx%g the window follows the display", tag, w, h);
+    CHECK(L.menuW >= ImMin(360.0f, w) - 0.05f && L.menuH >= ImMin(320.0f, h) - 0.05f &&
+          L.menuW <= w + 0.05f && L.menuH <= h + 0.05f, buf);
+    snprintf(buf, sizeof buf, "%s: %gx%g the window uses most of the display", tag, w, h);
+    CHECK(L.menuW >= w * 0.5f && L.menuH >= h * 0.5f, buf);
 
     snprintf(buf, sizeof buf, "%s: %gx%g the window is centred", tag, w, h);
     CHECK(L.menuPos.x > 0.0f && L.menuPos.y >= 0.0f, buf);
@@ -94,14 +98,21 @@ int main()
     checkDisplay(960.0f,  540.0f,  "540p");
     checkDisplay(640.0f,  480.0f,  "480p");
 
-    // The menu grows to its 900x600 ceiling on a big surface but never past it.
+    // The auto-resize rule itself, on a surface where it is not clamped.
     {
         const MenuLayout big = ComputeMenuLayout(ImVec2(1920.0f, 1080.0f));
-        CHECK(big.menuW == 900.0f && big.menuH == 600.0f,
-              "1080p keeps the full 900x600 menu");
+        CHECK(ImAbs(big.menuW - 1920.0f * 0.92f) < 0.05f &&
+              ImAbs(big.menuH - 1080.0f * 0.92f) < 0.05f,
+              "1080p gets the full 92% of the display");
         const MenuLayout small = ComputeMenuLayout(ImVec2(640.0f, 480.0f));
-        CHECK(small.menuW < 900.0f && small.menuH < 600.0f,
-              "... and a small surface gets a smaller one");
+        CHECK(small.menuW < big.menuW && small.menuH < big.menuH,
+              "... and a small surface gets a smaller window");
+        // 92% of a 300 px surface would be under the floor, and the floor is
+        // itself clamped by the margin: the window fills the surface instead of
+        // hanging off it.
+        const MenuLayout floored = ComputeMenuLayout(ImVec2(300.0f, 260.0f));
+        CHECK(floored.menuW == 288.0f && floored.menuH == 248.0f,
+              "a tiny surface gets the margin-clamped window, never a bigger one");
     }
 
     // The inside of the window, i.e. what the sidebar is laid out against:

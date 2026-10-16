@@ -52,7 +52,10 @@ void SaveConfiguration(const std::string& filename) {
     config["ExtraMenu"]["Scope"] = Config.ExtraMenu.Scope;
     config["ExtraMenu"]["Switch"] = Config.ExtraMenu.Switch;
     config["ExtraMenu"]["KineticArmor"] = Config.ExtraMenu.Kinetic;
-    config["ExtraMenu"]["UnlockAttachments"] = Config.ExtraMenu.UnlockAttachments;
+    // Both unlock switches persist: without this they flipped back to their
+    // startup defaults on every launch.
+    config["ExtraMenu"]["MythicAttachments"] = Config.ExtraMenu.MythicAttachments;
+    config["ExtraMenu"]["Blueprints"] = Config.ExtraMenu.Blueprints;
 
     config["isJumpAdjustmentEnabled"] = isJumpAdjustmentEnabled;
     config["jumpHeightMultiplier"] = jumpHeightMultiplier;
@@ -68,13 +71,11 @@ void SaveConfiguration(const std::string& filename) {
     // .contains()), but nothing was ever WRITING them - the new triggerbot
     // options silently reset to defaults on every save/load cycle.
     config["NewFeatures"]["TriggerbotDelay"] = Config.NewFeaturesMenu.TriggerbotDelay;
-    config["NewFeatures"]["TriggerbotFilter"] = Config.NewFeaturesMenu.TriggerbotFilter;
     config["NewFeatures"]["NoCrouch"] = Config.NewFeaturesMenu.NoCrouch;
 
     // Own dot crosshair. Color[3] is the opacity, stored under its own name so
     // the JSON reads like the menu (R/G/B + Opacity).
     config["Crosshair"]["Enabled"] = Config.Crosshair.Enabled;
-    config["Crosshair"]["TriggerbotUsesIt"] = Config.Crosshair.TriggerbotUsesIt;
     config["Crosshair"]["Size"] = Config.Crosshair.Size;
     config["Crosshair"]["OffsetX"] = Config.Crosshair.OffsetX;
     config["Crosshair"]["OffsetY"] = Config.Crosshair.OffsetY;
@@ -145,10 +146,13 @@ bool LoadConfiguration(const std::string& filename) {
             Config.ExtraMenu.Scope = config["ExtraMenu"]["Scope"].get<bool>();
             Config.ExtraMenu.Switch = config["ExtraMenu"]["Switch"].get<bool>();
             Config.ExtraMenu.Kinetic = config["ExtraMenu"]["Kinetic"].get<bool>();
-            // Guarded: a config file written before the switch existed keeps the
-            // default (on) instead of throwing out of the whole load.
-            if (config["ExtraMenu"].contains("UnlockAttachments"))
-                Config.ExtraMenu.UnlockAttachments = config["ExtraMenu"]["UnlockAttachments"].get<bool>();
+            // Guarded: a config file written before a switch existed keeps that
+            // switch's default (Mythic Attachments: on) instead of throwing out
+            // of the whole load.
+            if (config["ExtraMenu"].contains("MythicAttachments"))
+                Config.ExtraMenu.MythicAttachments = config["ExtraMenu"]["MythicAttachments"].get<bool>();
+            if (config["ExtraMenu"].contains("Blueprints"))
+                Config.ExtraMenu.Blueprints = config["ExtraMenu"]["Blueprints"].get<bool>();
     if (config.contains("NewFeatures")) {
         Config.NewFeaturesMenu.NoCrouch = config["NewFeatures"]["NoCrouch"].get<bool>();
         Config.NewFeaturesMenu.Triggerbot = config["NewFeatures"]["Triggerbot"].get<bool>();
@@ -157,8 +161,6 @@ bool LoadConfiguration(const std::string& filename) {
             Config.NewFeaturesMenu.TriggerbotDelay = config["NewFeatures"]["TriggerbotDelay"].get<int>();
         if (config["NewFeatures"].contains("TriggerbotRadius"))
             Config.NewFeaturesMenu.TriggerbotRadius = config["NewFeatures"]["TriggerbotRadius"].get<int>();
-        if (config["NewFeatures"].contains("TriggerbotFilter"))
-            Config.NewFeaturesMenu.TriggerbotFilter = config["NewFeatures"]["TriggerbotFilter"].get<int>();
         Config.NewFeaturesMenu.NoHitFlinch = config["NewFeatures"]["NoHitFlinch"].get<bool>();
         Config.NewFeaturesMenu.NoDrift = config["NewFeatures"]["NoDrift"].get<bool>();
         if (config["NewFeatures"].contains("NoSlideFatigue"))
@@ -170,7 +172,6 @@ bool LoadConfiguration(const std::string& filename) {
 
         if (config.contains("Crosshair")) {
             Config.Crosshair.Enabled = config["Crosshair"]["Enabled"].get<bool>();
-            Config.Crosshair.TriggerbotUsesIt = config["Crosshair"]["TriggerbotUsesIt"].get<bool>();
             Config.Crosshair.Size = config["Crosshair"]["Size"].get<float>();
             Config.Crosshair.OffsetX = config["Crosshair"]["OffsetX"].get<float>();
             Config.Crosshair.OffsetY = config["Crosshair"]["OffsetY"].get<float>();

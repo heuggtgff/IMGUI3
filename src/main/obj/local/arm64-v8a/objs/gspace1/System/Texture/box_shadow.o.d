@@ -1,28 +1,35 @@
-src/main/obj/local/arm64-v8a/objs/gspace1/System/Texture/box_shadow.o: \
-  src/main/jni/System/Texture/box_shadow.cpp \
-  src/main/jni/System/Texture/box_shadow.h src/main/jni/ImGui/imgui.h \
-  src/main/jni/ImGui/imconfig.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/float.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__config \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stddef.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cmath \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/math.h
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/obj/local/arm64-v8a/objs/gspace1/System/Texture/box_shadow.o: \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Texture/box_shadow.cpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Texture/box_shadow.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imconfig.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/float.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stddef.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cmath \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/math.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/version \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/type_traits
 
-src/main/jni/System/Texture/box_shadow.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/System/Texture/box_shadow.h:
 
-src/main/jni/ImGui/imgui.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui.h:
 
-src/main/jni/ImGui/imconfig.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imconfig.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/float.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/float.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__config:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stddef.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stddef.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cmath:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cmath:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/math.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/math.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/version:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/type_traits:

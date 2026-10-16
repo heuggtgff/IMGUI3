@@ -1,26 +1,32 @@
-src/main/obj/local/arm64-v8a/objs/gspace1/Substrate/SubstrateHook.o: \
-  src/main/jni/Substrate/SubstrateHook.cpp \
-  src/main/jni/Substrate/CydiaSubstrate.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdlib.h \
-  src/main/jni/Substrate/And64InlineHook.hpp \
-  src/main/jni/Substrate/SubstrateDebug.hpp \
-  src/main/jni/Substrate/SubstrateLog.hpp \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/errno.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdio.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string.h
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/obj/local/arm64-v8a/objs/gspace1/Substrate/SubstrateHook.o: \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateHook.cpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/CydiaSubstrate.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdlib.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/And64InlineHook.hpp \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdint.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateDebug.hpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateLog.hpp \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/errno.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdio.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string.h
 
-src/main/jni/Substrate/CydiaSubstrate.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/CydiaSubstrate.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdlib.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdlib.h:
 
-src/main/jni/Substrate/And64InlineHook.hpp:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config:
 
-src/main/jni/Substrate/SubstrateDebug.hpp:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/And64InlineHook.hpp:
 
-src/main/jni/Substrate/SubstrateLog.hpp:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdint.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/errno.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateDebug.hpp:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdio.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/Substrate/SubstrateLog.hpp:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/errno.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdio.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string.h:

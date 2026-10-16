@@ -14,6 +14,9 @@
 //   * A_FireRaycastAllNearest - unit checks of the array guards (a bad header
 //                              must be REFUSED, never read as "no hits").
 //   * A_FireCrosshairRayPawn - path A names the enemy past our own body.
+//   * the path A body bound   - the dot has to be ON the enemy's projected
+//                              BODY (its WIDTH, not half its height): a dot
+//                              beside his arm or weapon is refused.
 //   * A_FireScan             - end-to-end: zone candidate + self@0 ray ->
 //                              FireBlock::Fired; self + wall -> NoLineOfSight.
 //
@@ -119,6 +122,18 @@ static Vector3 objGetPos(const FakeObj &o)
     std::memcpy(&v, o.b + 0x100, sizeof v);
     return v;
 }
+// Put the enemy's body exactly under the CENTRE dot (800,450 in the fake world).
+// The fake world has to be self-consistent for path A: a ray through the dot
+// cannot honestly name a body that projects 118 px to the side of it - that IS
+// the beside-the-arm case the bound refuses (X9) - so every check that expects
+// the dot's own ray to fire first puts him where the dot is.
+static void objTargetUnderDot(float dist = 3.3f)
+{
+    objPos(g_targetHead, 0.0f, 1.7f, dist);
+    objPos(g_targetMesh, 0.0f, 0.0f, dist);
+    objPos(g_targetRoot, 0.0f, 0.0f, dist);
+}
+
 static void objSetAlive(FakeObj &pawn, bool alive)
 {
     pawn.b[Class_Pawn_m_IsAlive] = alive ? 1 : 0;
@@ -171,6 +186,25 @@ static Vector3 (*g_w2sImpl)(const Vector3 &) = nullptr;
 static Vector3 fake_w2s(void *, Vector3 w)
 {
     return g_w2sImpl ? g_w2sImpl(w) : Vector3{0.0f, 0.0f, 0.0f};
+}
+
+// Camera.ScreenToWorldPoint(0x5023D34) - the inverse of the projection above.
+// The camera basis is (+Z forward, +X right, +Y up) with the camera at
+// (0, 1.6, 0), and the focal length is the fallback the code itself would use
+// for a 1600x900 screen, so this is a REAL inverse projection: the ray the scan
+// builds from the dot's pixel can be projected back onto that pixel.
+static Vector3 fake_screen_to_world(void *, Vector3 v)
+{
+    const float f = (900.0f * 0.5f) /
+                    tanf(NewFeatures::A_FireTune::kFallbackFov * 0.5f *
+                         NewFeatures::A_FireTune::kDegToRad);
+    const float dx = v.x - 800.0f;
+    const float dy = v.y - 450.0f;
+    Vector3 dir = Vector3{0.0f, 0.0f, 1.0f}
+                + Vector3{1.0f, 0.0f, 0.0f} * (dx / f)
+                - Vector3{0.0f, 1.0f, 0.0f} * (dy / f);
+    dir = Vector3::Normalized(dir);
+    return Vector3{0.0f + dir.x * v.z, 1.6f + dir.y * v.z, 0.0f + dir.z * v.z};
 }
 
 // ---- physics fakes --------------------------------------------------------
@@ -308,12 +342,22 @@ static void installFns()
     fn_PawnLastOccVisible     = fake_lastOccVisible;
     fn_PawnRecentlyRendered   = fake_recentlyRendered;
     fn_WorldToScreen          = fake_w2s;
+    fn_ScreenToWorldPoint     = fake_screen_to_world;
     fn_PawnIsAlive            = nullptr;      // field read already answers
     fn_CameraGetFov           = nullptr;      // -> kFallbackFov, focal still sane
     fn_CameraGetMain          = nullptr;
     fn_WeaponGetAimingTarget  = nullptr;
     fn_WeaponGetAimingTargetDis = nullptr;
     fn_BaseGameGetTeamPawns   = nullptr;      // no teammates in this world
+
+    // The dot crosshair IS the trigger's crosshair now: its pixel is what the
+    // scan measures from and its radius is the zone it accepts. Put it on the
+    // centre with an 80 px dot (a 40 px radius), which is the zone the worlds
+    // below were built around.
+    Config.Crosshair.Enabled = true;
+    Config.Crosshair.OffsetX = 0.0f;
+    Config.Crosshair.OffsetY = 0.0f;
+    Config.Crosshair.Size    = 80.0f;
 }
 
 // ---------------------------------------------------------------------------
@@ -593,6 +637,28 @@ static void testCentreRay()
 static Il2CppArray<Pawn *> g_enemyArr;
 static Il2CppList<Pawn *>  g_enemyList;
 
+// Make the HONEST dot ray unavailable: an off-centre dot that neither the game's
+// projection nor the camera basis can honour -> CrosshairRayDir answers with no
+// flags, so the accuracy gate leaves the zone scan running - the only runner
+// left that can still measure the drawn dot's zone. This is exactly the device
+// condition that needs path A skipped and path B tested on its own.
+static void killHonestDotRay()
+{
+    Config.Crosshair.OffsetX = 30.0f;
+    Config.Crosshair.OffsetY = 0.0f;
+    fn_ScreenToWorldPoint    = nullptr;
+    fn_TransformGetRight     = nullptr;
+    fn_TransformGetUp        = nullptr;
+}
+static void restoreHonestDotRay()
+{
+    Config.Crosshair.OffsetX = 0.0f;
+    Config.Crosshair.OffsetY = 0.0f;
+    fn_ScreenToWorldPoint    = fake_screen_to_world;
+    fn_TransformGetRight     = fake_get_right;
+    fn_TransformGetUp        = fake_get_up;
+}
+
 static void setEnemyList(Pawn **pawns, int n)
 {
     std::memset(&g_enemyArr, 0, 16 + 8 + 4);          // header only (m_Items untouched zeros)
@@ -609,15 +675,35 @@ static void setEnemyList(Pawn **pawns, int n)
 static Vector3 w2sOnCrosshair(const Vector3 &) { return Vector3{820.0f, 450.0f, 1.0f}; }   // 20 px off centre
 static Vector3 w2sAwayFromCrosshair(const Vector3 &) { return Vector3{1400.0f, 450.0f, 1.0f}; }
 
+// The REAL forward projection, the inverse of fake_screen_to_world: the camera
+// at (0,1.6,0) with the basis (+Z forward, +X right, +Y up) and the fallback
+// focal length. Path A's projected-body bound computes the body half-span from
+// head/feet projections - a constant-point fake would make every body a
+// 0-px span and refuse everything, so where path A is expected to fire this
+// projects world positions the way the device camera does.
+static Vector3 w2sTrueProjection(const Vector3 &w)
+{
+    const float f = (900.0f * 0.5f) /
+                    tanf(NewFeatures::A_FireTune::kFallbackFov * 0.5f *
+                         NewFeatures::A_FireTune::kDegToRad);
+    const float dx = w.x - 0.0f;
+    const float dy = w.y - 1.6f;
+    const float dz = w.z - 0.0f;
+    return Vector3{800.0f + (dx / dz) * f, 450.0f - (dy / dz) * f, dz};
+}
+
 static void testScan()
 {
-    // Screen centre is (800, 450) for the 1600x900 fake screen; the zone
-    // defaults to 40 px (2.5 % of width) because Config is zero-initialised.
+    // The dot is on the centre of the 1600x900 fake screen, so the scan measures
+    // from (800, 450) and accepts a 40 px radius (installFns' 80 px dot).
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
 
     // --- S1: enemy in the zone, ray hits OUR body at 0 m first -> FIRES ----
+    // Path B needs a scan with NO honest dot ray: with one, the accuracy gate
+    // would refuse everything the ray does not name before path B even runs.
     resetWorld();
     setEnemyList(enemies, 1);
+    killHonestDotRay();
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
     g_centreHits = { {0.02f, &g_selfCol} };            // nothing centred
@@ -635,10 +721,12 @@ static void testScan()
         CHECK(g_triggerDiag.lastBlock != (int)FireBlock::NoLineOfSight,
               "S1 'wall in the way' was NOT the verdict");
     }
+    restoreHonestDotRay();
 
     // --- S2: same, but a real wall between camera and enemy -> BLOCKED -----
     resetWorld();
     setEnemyList(enemies, 1);
+    killHonestDotRay();
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
     g_centreHits = { {0.02f, &g_selfCol} };
@@ -650,12 +738,17 @@ static void testScan()
         CHECK(!out.visible && out.pawn == nullptr, "S2 no target escapes with the refusal");
         CHECK(g_triggerDiag.losBlockedScan == 1, "S2 the block is reported in the panel counters");
     }
+    restoreHonestDotRay();
 
     // --- S3: centre ray names him -> path A fires --------------------------
+    // Path A now also demands a projected body: the true projection is what
+    // makes head/feet land on real screen positions (the old constant-point
+    // fake turned every body into a 0-px span).
     resetWorld();
+    objTargetUnderDot();
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
-    g_w2sImpl = w2sOnCrosshair;
+    g_w2sImpl = w2sTrueProjection;
     g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
     g_losHits    = {};
     {
@@ -698,94 +791,78 @@ static void testScan()
 }
 
 // ---------------------------------------------------------------------------
-// 6. Target filter (the menu's Filter dropdown)
+// 6. The target filter is GONE (All / Visible Only / Within 25-50-100 m)
+//
+// The option never changed a shot on device, so it was removed from the scan, the
+// UI and the config. These checks pin the removal down: a pawn the game itself
+// reports as occluded, and a pawn far outside every distance the old filter
+// offered, must both remain shootable - the visibility RAY is the only opinion
+// left about whether a shot is possible.
 // ---------------------------------------------------------------------------
-static void testFilter()
+static void testNoTargetFilter()
 {
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
 
-    // --- F1: VisibleOnly, and the GAME says he is occluded -> refused -------
+    // --- F1: the game reports him occluded -> the scan does not care --------
     resetWorld();
     setEnemyList(enemies, 1);
+    killHonestDotRay();
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
-    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::VisibleOnly;
-    g_lastOccVisible = 0; g_recentlyRendered = 0;
+    g_lastOccVisible = 0; g_recentlyRendered = 0;      // what "Visible Only" refused
     g_centreHits = { {0.02f, &g_selfCol} };
     g_losHits    = { {3.3f, &g_targetCol} };
     {
         TriggerTarget out{};
         FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
-        CHECK(b == FireBlock::NoEnemyInZone, "F1 VisibleOnly: game reports him occluded -> refused");
-        CHECK(g_triggerDiag.filteredOut == 1, "F1 the panel counts the filtered pawn");
-        CHECK(g_rayAllCalls == 1, "F1 dropped before any LOS ray (centre ray only)");
+        CHECK(b == FireBlock::Fired,
+              "F1 no filter: an occluded-by-the-game pawn is still fired");
+        CHECK(g_rayAllCalls >= 1,
+              "F1 ... decided by a real visibility ray, not by a getter veto");
     }
+    restoreHonestDotRay();
 
-    // --- F2: same, but the game reports him visible -> FIRES ---------------
+    // --- F2: 40 m away, under the crosshair -> still fired ------------------
     resetWorld();
     setEnemyList(enemies, 1);
+    killHonestDotRay();
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
-    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::VisibleOnly;
-    g_lastOccVisible = 1; g_recentlyRendered = 1;
-    g_centreHits = { {0.02f, &g_selfCol} };
-    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
-    {
-        TriggerTarget out{};
-        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
-        CHECK(b == FireBlock::Fired, "F2 VisibleOnly + visibly drawn pawn -> fires");
-        CHECK(g_triggerDiag.filteredOut == 0, "F2 nothing filtered");
-    }
-
-    // --- F3: a range filter inside its own limit -> fires ------------------
-    resetWorld();
-    setEnemyList(enemies, 1);
-    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
-    g_w2sImpl = w2sOnCrosshair;
-    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::Within25m;
-    g_centreHits = { {0.02f, &g_selfCol} };
-    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
-    {
-        TriggerTarget out{};
-        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
-        CHECK(b == FireBlock::Fired, "F3 Within 25 m: a 3.3 m pawn is inside it");
-        CHECK(g_triggerDiag.filteredOut == 0, "F3 in range -> not filtered");
-    }
-
-    // --- F4: the same enemy at 40 m -> refused by the range filter ---------
-    resetWorld();
-    setEnemyList(enemies, 1);
-    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
-    g_w2sImpl = w2sOnCrosshair;
-    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::Within25m;
-    objPos(g_targetHead, 0.5f, 1.7f, 40.0f);
+    objPos(g_targetHead, 0.5f, 1.7f, 40.0f);           // what "Within 25 m" refused
     objPos(g_targetMesh, 0.5f, 0.0f, 40.0f);
+    objPos(g_targetRoot, 0.5f, 0.0f, 40.0f);
     g_centreHits = { {0.02f, &g_selfCol} };
     g_losHits    = { {0.0f, &g_selfCol}, {38.0f, &g_targetCol} };
     {
         TriggerTarget out{};
         FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
-        CHECK(b == FireBlock::NoEnemyInZone, "F4 Within 25 m: a 40 m pawn is out of range");
-        CHECK(g_triggerDiag.filteredOut == 1, "F4 counted as filtered, not as a wall");
-        CHECK(g_triggerDiag.losBlocked == 0, "F4 the range filter never reports 'no line of sight'");
+        CHECK(b == FireBlock::Fired, "F2 no filter: a 40 m pawn under the dot is fired");
+        CHECK(g_triggerDiag.losBlocked == 0,
+              "F2 ... and it is not reported as a wall either");
     }
+    restoreHonestDotRay();
 
-    // --- F5: All (the default) filters nothing -----------------------------
+    // --- F3: both removed rules at once -------------------------------------
     resetWorld();
     setEnemyList(enemies, 1);
+    killHonestDotRay();
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
-    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::All;
+    g_lastOccVisible = 0; g_recentlyRendered = 0;
+    objPos(g_targetHead, 0.5f, 1.7f, 40.0f);
+    objPos(g_targetMesh, 0.5f, 0.0f, 40.0f);
+    objPos(g_targetRoot, 0.5f, 0.0f, 40.0f);
     g_centreHits = { {0.02f, &g_selfCol} };
-    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
+    g_losHits    = { {0.0f, &g_selfCol}, {38.0f, &g_targetCol} };
     {
         TriggerTarget out{};
         FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
-        CHECK(b == FireBlock::Fired, "F5 Filter=All is the old behaviour");
-        CHECK(g_triggerDiag.filteredOut == 0, "F5 nothing filtered");
+        CHECK(b == FireBlock::Fired,
+              "F3 occluded AND 40 m away: still fired - neither removed rule survives");
+        CHECK(g_triggerDiag.losBlocked == 0, "F3 ... and never reported as a wall");
     }
+    restoreHonestDotRay();
 
-    Config.NewFeaturesMenu.TriggerbotFilter = 0;
     g_w2sImpl = nullptr;
 }
 
@@ -800,107 +877,303 @@ static Pawn *fake_localPawnCounted()
 }
 
 // ---------------------------------------------------------------------------
-// 7. The dot crosshair drives the triggerbot
+// 8. The dot crosshair IS the trigger's crosshair
 //
 // The crosshair_check test proves the geometry; this proves the SCAN obeys it -
-// that moving the dot really moves where the trigger fires, and that the
-// defaults leave the trigger exactly where it always was.
+// that the pixel the trigger measures from and the radius it accepts are both
+// the dot, always, with no switch to disconnect them. This is the behaviour the
+// "even with use-dot-for-triggerbot on, and the dot small, it still shot from
+// the game's centre" report asked for.
 // ---------------------------------------------------------------------------
-static void setCrosshair(float offX, float offY, bool wired)
+static void setCrosshair(float offX, float offY, float sizePx, bool drawn = true)
 {
-    Config.Crosshair.Enabled = true;
-    Config.Crosshair.TriggerbotUsesIt = wired;
+    Config.Crosshair.Enabled = drawn;
     Config.Crosshair.OffsetX = offX;
     Config.Crosshair.OffsetY = offY;
+    Config.Crosshair.Size    = sizePx;
 }
 
-static FireBlock runScanOnCrosshairSetup(TriggerTarget &out)
+static FireBlock runScanOnCrosshairSetup(TriggerTarget &out, bool dotSeesPawn = false)
 {
-    // Same world as S1: one enemy in the zone, the centre ray landing on our own
-    // body (so path A names nothing and the zone decides).
+    // One enemy 20 px right of the 1600x900 centre (820,450). The dot ray's hit
+    // list is separate from the LOS list, so a test can put him under the dot's
+    // ray (path A fires) or leave the ray hitting only our own body - either
+    // way the decision belongs to the ray once an honest dot ray exists.
+    // When path A is expected to FIRE, the projection fake has to be the real
+    // one: the projected-body bound measures the head/feet span on screen, and
+    // a constant-point fake would refuse every accept as a 0-px body.
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+    objTargetUnderDot();          // the dot HAS to be on him when its ray fires
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
-    g_w2sImpl = w2sOnCrosshair;            // the enemy projects 20 px right of centre
-    g_centreHits = { {0.02f, &g_selfCol} };
+    g_w2sImpl = dotSeesPawn ? w2sTrueProjection : w2sOnCrosshair;
+    if (dotSeesPawn)
+        g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };  // the dot NAMES him
+    else
+        g_centreHits = { {0.02f, &g_selfCol} };                       // the dot ray misses
     g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
     return A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
 }
 
 static void testCrosshairAim()
 {
-    // --- X1: the defaults are the old behaviour, exactly -------------------
+    // --- X1: the dot's pixel is what the scan measures from ----------------
     resetWorld();
-    setCrosshair(0.0f, 0.0f, true);
+    setCrosshair(0.0f, 0.0f, 80.0f);
+    {
+        TriggerTarget out{};
+        FireBlock b = runScanOnCrosshairSetup(out, /*dotSeesPawn=*/true);
+        CHECK(b == FireBlock::Fired && out.path == 0,
+              "X1 the enemy under the dot's own ray is fired (path A)");
+        CHECK(g_triggerDiag.crosshairCx == 800.0f && g_triggerDiag.crosshairCy == 450.0f,
+              "X1 the scan reports the dot's pixel as its crosshair (800,450)");
+        CHECK(g_triggerDiag.crosshairRayViaGame == 1,
+              "X1 the shot ray came from the game's own projection of that pixel");
+        CHECK(g_triggerDiag.radiusPx == 40.0f,
+              "X1 the zone is the dot: an 80 px dot is a 40 px radius");
+        CHECK(g_triggerDiag.projKeepFrac >= 0.0f && g_triggerDiag.projKeepFrac <= 1.0f,
+              "X1 ... and the accepted shot is INSIDE his projected body (keep <= 1)");
+    }
+
+    // --- X2: the zone IS the dot - shrink the dot, tighten the trigger -----
+    resetWorld();
+    setCrosshair(0.0f, 0.0f, 10.0f);              // 10 px dot -> 5 px zone
     {
         TriggerTarget out{};
         FireBlock b = runScanOnCrosshairSetup(out);
-        CHECK(b == FireBlock::Fired && out.path == 1,
-              "X1 with the default 0 px offsets the trigger still fires from the centre");
-        CHECK(g_triggerDiag.crosshairCx == 800.0f && g_triggerDiag.crosshairCy == 450.0f,
-              "X1 the scan reports the screen centre as its crosshair (800,450)");
-        CHECK(g_triggerDiag.crosshairOffsetUsed == 0 && g_triggerDiag.crosshairOffsetDropped == 0,
-              "X1 no offset was applied and none was dropped");
+        CHECK(g_triggerDiag.radiusPx == 5.0f, "X2 a 10 px dot is a 5 px zone");
+        CHECK(b == FireBlock::NoEnemyInZone,
+              "X2 the same enemy 20 px off the dot is now OUTSIDE it");
+        CHECK(b != FireBlock::Fired,
+              "X2 ... so shrinking the dot really does tighten the trigger (the old build fired anyway)");
+        CHECK(g_triggerDiag.dotRayDecided,
+              "X2 ... and the refusal came from the dot's own ray, not from the zone");
     }
 
-    // --- X2: moving the dot moves the point the scan measures from ---------
+    // --- X3: moving the dot moves the whole scan ---------------------------
     resetWorld();
-    setCrosshair(40.0f, -25.0f, true);
+    setCrosshair(40.0f, -25.0f, 100.0f);          // dot at (840,425), 50 px radius
     {
         TriggerTarget out{};
         FireBlock b = runScanOnCrosshairSetup(out);
         CHECK(g_triggerDiag.crosshairCx == 840.0f && g_triggerDiag.crosshairCy == 425.0f,
-              "X2 the scan now aims through the dot (800+40, 450-25)");
-        CHECK(g_triggerDiag.crosshairOffsetUsed == 1,
-              "X2 the offset really reached the centre ray (used=1)");
-        CHECK(b == FireBlock::Fired, "X2 the enemy 20 px right of centre is still in the zone");
+              "X3 the scan aims through the dot (800+40, 450-25)");
+        CHECK(g_triggerDiag.crosshairRayViaGame == 1,
+              "X3 ... and the ray is the ray through that pixel");
+        // The enemy (820,450) is ~32 px off the moved dot - inside the drawn
+        // zone but NOT under the dot's ray. The ray decides, so no fire: this
+        // is exactly the over-fire the report complained about.
+        CHECK(b == FireBlock::NoEnemyInZone && g_triggerDiag.dotRayDecided,
+              "X3 near the dot but NOT under its ray -> NO fire (the over-fire fix)");
+    }
+    resetWorld();
+    setCrosshair(40.0f, -25.0f, 100.0f);
+    {
+        TriggerTarget out{};
+        FireBlock b = runScanOnCrosshairSetup(out, /*dotSeesPawn=*/true);
+        CHECK(b == FireBlock::Fired && out.path == 0,
+              "X3 the same dot ON him still fires (the decision follows the dot)");
     }
 
-    // --- X3: the zone follows the dot, so a far-away dot stops firing ------
+    // --- X4: a far-away dot stops firing what is under the old centre ------
     resetWorld();
-    setCrosshair(200.0f, 0.0f, true);
+    setCrosshair(200.0f, 0.0f, 80.0f);
     {
         TriggerTarget out{};
         FireBlock b = runScanOnCrosshairSetup(out);
         CHECK(b == FireBlock::NoEnemyInZone,
-              "X3 with the dot 200 px right the enemy at +20 px is outside the 40 px zone");
-        CHECK(b != FireBlock::Fired, "X3 ... so the trigger does NOT fire him");
+              "X4 with the dot 200 px right the enemy at +20 px is outside it");
+        CHECK(b != FireBlock::Fired, "X4 ... so the trigger does NOT fire him");
     }
 
-    // --- X4: unwired, the dot no longer influences the trigger -------------
+    // --- X5: there is no way to detach the trigger from the dot ------------
+    // The menu option that used to do it is gone: hiding the DRAWING cannot move
+    // the trigger back to the screen centre.
     resetWorld();
-    setCrosshair(200.0f, 0.0f, false);
+    setCrosshair(200.0f, 0.0f, 80.0f, /*drawn=*/false);
     {
         TriggerTarget out{};
         FireBlock b = runScanOnCrosshairSetup(out);
-        CHECK(g_triggerDiag.crosshairCx == 800.0f && g_triggerDiag.crosshairCy == 450.0f,
-              "X4 unwired: the scan is back on the exact screen centre");
-        CHECK(g_triggerDiag.crosshairOffsetUsed == 0, "X4 unwired: no offset reached the ray");
-        CHECK(b == FireBlock::Fired, "X4 unwired: the same shot as before the dot existed");
+        CHECK(g_triggerDiag.crosshairCx == 1000.0f && g_triggerDiag.crosshairCy == 450.0f,
+              "X5 a hidden dot still aims the scan (1000,450) - there is no switch to undo it");
+        CHECK(b == FireBlock::NoEnemyInZone,
+              "X5 ... and the enemy at +20 px stays unfired");
     }
 
-    // --- X5: a missing camera basis degrades to the centre ray, reported ---
+    // --- X6: nothing can honour the offset -> the centre ray, REPORTED -----
     resetWorld();
-    setCrosshair(40.0f, -25.0f, true);
-    fn_TransformGetRight = nullptr;
-    fn_TransformGetUp    = nullptr;
+    setCrosshair(40.0f, -25.0f, 80.0f);
+    fn_TransformGetRight  = nullptr;
+    fn_TransformGetUp     = nullptr;
+    fn_ScreenToWorldPoint = nullptr;
     {
         TriggerTarget out{};
         FireBlock b = runScanOnCrosshairSetup(out);
-        CHECK(g_triggerDiag.crosshairOffsetDropped == 1,
-              "X5 offset asked with no camera basis -> reported as dropped, not silently ignored");
-        CHECK(g_triggerDiag.crosshairOffsetUsed == 0,
-              "X5 ... and the centre ray stays the plain camera forward");
+        CHECK(g_triggerDiag.crosshairRayViaGame == 0 &&
+              g_triggerDiag.crosshairRayFellBack == 0 &&
+              g_triggerDiag.crosshairRayPlain == 0,
+              "X6 nothing can apply the offset -> NO honest dot ray, not a fake plain one");
         CHECK(b == FireBlock::Fired,
-              "X5 the zone path still covers the dot, so the trigger keeps working");
+              "X6 the dot's zone still covers the enemy, so the trigger keeps working");
     }
-    fn_TransformGetRight = fake_get_right;
-    fn_TransformGetUp    = fake_get_up;
 
-    // Leave the config as the rest of the suite expects it (defaults).
+    // --- X7: the game's projection alone is enough (no basis needed) -------
     resetWorld();
-    setCrosshair(0.0f, 0.0f, true);
-    Config.Crosshair.Enabled = false;
+    setCrosshair(40.0f, -25.0f, 80.0f);
+    fn_TransformGetRight  = nullptr;
+    fn_TransformGetUp     = nullptr;
+    fn_ScreenToWorldPoint = fake_screen_to_world;
+    {
+        TriggerTarget out{};
+        FireBlock b = runScanOnCrosshairSetup(out);
+        CHECK(g_triggerDiag.crosshairRayViaGame == 1 && g_triggerDiag.crosshairRayPlain == 0,
+              "X7 the game's projection alone carries the dot's offset");
+        CHECK(b == FireBlock::NoEnemyInZone && g_triggerDiag.dotRayDecided,
+              "X7 ... and the ray's verdict rules: NOT under the dot's ray -> no fire");
+    }
+    fn_TransformGetRight  = fake_get_right;
+    fn_TransformGetUp     = fake_get_up;
+    fn_ScreenToWorldPoint = fake_screen_to_world;
+
+    // --- X8: THE BESIDE-THE-ARM REPORT, pinned ------------------------------
+    // The dot is 200 px right of centre; the dot ray grazes an UNREGISTERED
+    // piece of the enemy's component hierarchy (his "arm", from the trigger's
+    // point of view) a few centimetres off his silhouette - the wall-collider
+    // in the fake, because that is exactly what an unregistered near-arm hit
+    // looks like. The parent walk reaches his root transform, so the ray does
+    // "name" him; but his projected body sits ~190 px LEFT of the dot, so the
+    // projected-body bound refuses: the dot is BESIDE the arm, not on him.
+    // This is the exact over-fire the report describes.
+    resetWorld();
+    // 40 m out: his projected body is ~33 px tall / ~9 px wide, so a dot a
+    // couple hundred px sideways is BESIDE the arm, not inside the silhouette.
+    objPos(g_targetHead, 0.5f, 1.7f, 40.0f);
+    objPos(g_targetMesh, 0.5f, 0.0f, 40.0f);
+    objPos(g_targetRoot, 0.5f, 0.0f, 40.0f);
+    setCrosshair(200.0f, 0.0f, 80.0f);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };  // the ray "names" him
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone,
+              "X8 aimed BESIDE the enemy's arm (200 px off his body) -> no fire");
+        CHECK(g_triggerDiag.dotRayDeclined >= 1,
+              "X8 ... and the panel counts it as a projected-body refusal");
+        CHECK(out.pawn == nullptr, "X8 no target escapes the bound");
+    }
+    // --- X9: THE REPORT, pinned at CLOSE RANGE ------------------------------
+    // The screenshot case: an enemy a few metres away who is NOT under the dot,
+    // with the dot ray grazing an unregistered piece of his hierarchy (his
+    // outstretched arm / weapon, the collider the fake world uses for it) so the
+    // parent walk DOES reach him. The bound that used to run here was HALF HIS
+    // BODY HEIGHT used as a radius around his chest - at 3.3 m that is ~200 px,
+    // so a dot 118 px to his side passed and the trigger fired beside his arm.
+    // The body's own WIDTH is the bound now, and 118 px is not inside it.
+    resetWorld();
+    setCrosshair(0.0f, 0.0f, 80.0f);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };   // the ray "names" him
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);                     // 3.3 m, 118 px to the RIGHT of the dot
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone,
+              "X9 close range, dot 118 px beside his body: NO fire (the report)");
+        CHECK(g_triggerDiag.dotRayDeclined >= 1,
+              "X9 ... counted as a projected-body refusal");
+        CHECK(out.pawn == nullptr, "X9 no target escapes");
+    }
+
+    // --- X9b: the same 40 px offset is ON him at 3 m and BESIDE him at 40 m --
+    // The bound is physical (px per metre comes from his own projected body), so
+    // it tightens with distance instead of being a fixed pixel slack.
+    resetWorld();
+    objTargetUnderDot(3.3f);
+    setCrosshair(40.0f, 0.0f, 80.0f);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::Fired && out.path == 0,
+              "X9b 40 px off a body 3 m away is still ON him -> fires");
+    }
+    resetWorld();
+    objTargetUnderDot(40.0f);
+    setCrosshair(40.0f, 0.0f, 80.0f);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone && out.pawn == nullptr,
+              "X9b the same 40 px at 40 m is 1.4 m to his side -> NO fire");
+    }
+
+    // --- X10: an unmeasurable body is not a free pass -----------------------
+    // With no head the body axis cannot be projected at all. That used to skip
+    // the bound ENTIRELY (the shot fired wherever the ray pointed); now the dot
+    // is held to the drawn dot's own radius around his aim point, so a dot far
+    // off a body that cannot be measured is refused instead of accepted.
+    resetWorld();
+    objSetBone(g_targetPawn, Class_Pawn_m_HeadBone, nullptr);   // no head -> no axis
+    setCrosshair(0.0f, 0.0f, 10.0f);                            // 10 px dot -> 5 px radius
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone && out.pawn == nullptr,
+              "X10 body unmeasurable AND the dot 88 px off his aim point -> NO fire");
+        CHECK(g_triggerDiag.dotRayDeclined >= 1, "X10 ... counted, not silently fired");
+    }
+    // ... and the fallback is not a blanket refusal: with the same unmeasurable
+    // body, a small dot sitting exactly ON his aim point still fires. (The
+    // fallback's reference is that aim point, so this is the case it accepts.)
+    resetWorld();
+    objSetBone(g_targetPawn, Class_Pawn_m_HeadBone, nullptr);
+    objTargetUnderDot();
+    setCrosshair(0.0f, 130.0f, 10.0f);   // dot at (800,580) = his aim point +0 px
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::Fired && out.path == 0,
+              "X10 ... while a small dot ON his aim point still fires");
+    }
+
+    restoreHonestDotRay();
+    g_w2sImpl = nullptr;
+
+    // Leave the config as the rest of the suite expects it.
+    resetWorld();
+    setCrosshair(0.0f, 0.0f, 80.0f);
+    Config.Crosshair.Enabled = true;
 }
 
 static void resetLocalPawnCache()
@@ -959,6 +1232,201 @@ static void testTickHookCost()
     CHECK(g_triggerDiag.lastTickTime > 0.0, "H3 the heartbeat stays alive");
 }
 
+// ---------------------------------------------------------------------------
+// 9. The two options that crashed the client: No Sprint Fire Delay, ADS Only
+//
+// Both called back into the game from a place no guard on this side could cover:
+//
+//   * the hooked Weapon.get_DelaySprintFire body resolved the local pawn and
+//     called Pawn.get_CurrentWeapon() from INSIDE that getter, on a pawn that may
+//     already have been destroyed (its managed wrapper stays readable, so
+//     Tools::IsPtrValid passes and the native call walks the cleared m_CachedPtr);
+//   * the "ADS only" gate called Pawn.IsAiming() 0x519BB10, a native method that
+//     walks the pawn's own weapon / fire-component chain internally.
+//
+// They are now PURE: one pointer compare against a cache refreshed from the local
+// pawn's own tick, and two field reads on the weapon the tree already validated.
+// Every fake below COUNTS, and the counters must stay at zero where it matters -
+// that is what proves the crash is gone rather than moved.
+// ---------------------------------------------------------------------------
+static int g_isAimingCalls      = 0;   // Pawn::IsAiming 0x519BB10 - must stay 0
+static int g_currentWeaponCalls = 0;   // Pawn::get_CurrentWeapon - only our tick may call it
+
+static bool fake_pawnIsAiming(void *)
+{
+    g_isAimingCalls++;                  // the gate must never ask
+    return true;                        // ...so "the pawn says it IS aiming" is a trap
+}
+
+static Weapon *fake_currentWeapon(Pawn *)
+{
+    g_currentWeaponCalls++;
+    return (Weapon *)g_weaponObj.b;
+}
+
+// Weapon.m_IsAiming @0xC21 / m_AimingPercentage @0x460, the two fields the ADS
+// gate reads (Offsets in NewFeatures.h).
+static void setWeaponAiming(bool flag, float percent)
+{
+    *(bool  *)(g_weaponObj.b + Offsets::Weapon_m_IsAiming)         = flag;
+    *(float *)(g_weaponObj.b + Offsets::Weapon_m_AimingPercentage) = percent;
+}
+
+// The same crosshair setup the scan tests use, driven through the whole decision
+// tree (A_FireShouldFire) so the mode gate really runs.
+static FireBlock runTreeOnCrosshairSetup(TriggerTarget &out)
+{
+    Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+    objTargetUnderDot();          // path A fires here, so the dot is ON him
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;   // path A fires here: real body projection
+    // The dot's ray NAMES the enemy (path A fires): the mode gate under test
+    // sits in front of the scan, so the scan's Fired verdict has to be
+    // reachable at all.
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
+    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
+    setCrosshair(0.0f, 0.0f, 80.0f);
+    return A_FireShouldFire(out);
+}
+
+static void testCrashFixes()
+{
+    api12 = (uintptr_t)&fake_localPawnCounted;   // GamePlay::get_LocalPawn
+    api15 = (uintptr_t)&fake_pawnIsAiming;       // Pawn::IsAiming   - must never run
+    api22 = (uintptr_t)&fake_currentWeapon;      // Pawn::get_CurrentWeapon
+    Config.NewFeaturesMenu.Triggerbot = false;
+
+    // --- A1: "ADS Only" + a hipfiring weapon -> blocked, pawn never asked ----
+    resetWorld();
+    setWeaponAiming(false, 0.0f);
+    Config.NewFeaturesMenu.TriggerbotMode = 1;
+    g_isAimingCalls = 0;
+    g_currentWeaponCalls = 0;
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::ModeNotAds,
+              "A1 ADS Only: a weapon that is not aiming blocks the shot");
+        CHECK(g_isAimingCalls == 0,
+              "A1 ... and Pawn.IsAiming() is NEVER called (the ADS crash)");
+        CHECK(g_triggerDiag.adsFlag == 0 && g_triggerDiag.adsPct == 0.0f,
+              "A1 the panel shows the weapon's own aiming fields");
+    }
+
+    // --- A2: the weapon's own m_IsAiming flag -> the mode lets the shot run --
+    resetWorld();
+    setWeaponAiming(true, 0.0f);
+    g_isAimingCalls = 0;
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::Fired,
+              "A2 ADS Only: Weapon.m_IsAiming @0xC21 lets the shot through");
+        CHECK(g_isAimingCalls == 0, "A2 ... still without asking the pawn");
+        CHECK(g_triggerDiag.adsFlag == 1, "A2 ... and the flag is what the panel shows");
+    }
+
+    // --- A3: a half-raised scope counts (m_AimingPercentage) ----------------
+    resetWorld();
+    setWeaponAiming(false, 0.95f);
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::Fired,
+              "A3 ADS Only: m_AimingPercentage @0x460 above half counts as aiming");
+        CHECK(g_triggerDiag.adsPct == 0.95f, "A3 ... and its value is reported");
+    }
+
+    // --- A4: an early transition is NOT aiming ------------------------------
+    resetWorld();
+    setWeaponAiming(false, 0.2f);
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::ModeNotAds,
+              "A4 ADS Only: 0.2 into the ADS animation is still hipfire");
+    }
+
+    // --- A5: garbage in the field is ignored, not read as "aiming" ----------
+    // A wrong offset would hand us an arbitrary float; the gate range-checks it
+    // instead of turning the mode into "Always".
+    resetWorld();
+    setWeaponAiming(false, 7.5f);
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::ModeNotAds,
+              "A5 ADS Only: an out-of-range percentage is not 'always aiming'");
+    }
+
+    // --- A6: a destroyed weapon is refused before the gate ------------------
+    resetWorld();
+    *(void **)(g_weaponObj.b + 0x10) = nullptr;    // m_CachedPtr cleared = Destroy()d
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::NoWeapon,
+              "A6 a destroyed weapon is refused by the liveness check");
+        CHECK(g_isAimingCalls == 0, "A6 ... and nothing native is called on it");
+    }
+    objInit(g_weaponObj);                          // the rest of the suite needs it back
+
+    // --- B1: the sprint-delay gate is pure ----------------------------------
+    // This is the function the hooked Weapon.get_DelaySprintFire calls. The two
+    // counters below are native game calls: the hook body must make NONE.
+    resetWorld();
+    api12 = (uintptr_t)&fake_localPawnCounted;
+    api22 = (uintptr_t)&fake_currentWeapon;
+    Config.NewFeaturesMenu.NoSprintToFireDelay = true;
+    g_noSprintFireDelayWeapon.store((void *)g_weaponObj.b, std::memory_order_relaxed);
+    {
+        g_localPawnLookups = 0;
+        g_currentWeaponCalls = 0;
+        for (int i = 0; i < 200; i++)
+            (void)NoSprintFireDelayActive(g_weaponObj.b);
+        CHECK(g_localPawnLookups == 0 && g_currentWeaponCalls == 0,
+              "B1 200 hooked-getter bodies make ZERO native calls (the sprint-delay crash)");
+        CHECK(NoSprintFireDelayActive(g_weaponObj.b),
+              "B1 ... and still recognise the local player's own weapon");
+    }
+
+    // --- B2: only THAT weapon, and only while the option is on -------------
+    CHECK(!NoSprintFireDelayActive((void *)g_otherPawn.b),
+          "B2 a remote player's weapon is never touched");
+    CHECK(!NoSprintFireDelayActive(nullptr), "B2 a null instance is refused");
+    Config.NewFeaturesMenu.NoSprintToFireDelay = false;
+    CHECK(!NoSprintFireDelayActive(g_weaponObj.b),
+          "B2 with the option off the getter falls through to the game's value");
+    Config.NewFeaturesMenu.NoSprintToFireDelay = true;
+
+    // --- B3: the cache is filled from the local pawn's OWN tick ------------
+    // A_FirePawnTicked is the game ticking this very pawn - the one moment where
+    // "alive with a real weapon" is not a guess, so the native calls are allowed
+    // there (and only there).
+    g_noSprintFireDelayWeapon.store(nullptr, std::memory_order_relaxed);
+    {
+        g_currentWeaponCalls = 0;
+        A_FirePawnTicked((void *)g_localPawn.b);
+        CHECK(g_currentWeaponCalls == 1,
+              "B3 our own pawn tick is one native get_CurrentWeapon call");
+        CHECK(g_noSprintFireDelayWeapon.load() == (void *)g_weaponObj.b,
+              "B3 ... and it caches the held weapon for the hook to compare against");
+    }
+
+    // --- B4: switching the option off empties the cache (hook becomes inert) -
+    Config.NewFeaturesMenu.NoSprintToFireDelay = false;
+    A_FirePawnTicked((void *)g_localPawn.b);
+    CHECK(g_noSprintFireDelayWeapon.load() == nullptr,
+          "B4 with the option off the cache is cleared, so the hook changes nothing");
+
+    // Leave the suite as it was found.
+    Config.NewFeaturesMenu.NoSprintToFireDelay = false;
+    Config.NewFeaturesMenu.TriggerbotMode = 0;
+    objInit(g_weaponObj);
+    resetWorld();
+}
+
 int main()
 {
     installFns();
@@ -968,9 +1436,10 @@ int main()
     testArrayGuards();
     testCentreRay();
     testScan();
-    testFilter();
+    testNoTargetFilter();
     testCrosshairAim();
     testTickHookCost();
+    testCrashFixes();
 
     if (g_failures == 0) {
         printf("\nOK: all LOS gate checks passed\n");

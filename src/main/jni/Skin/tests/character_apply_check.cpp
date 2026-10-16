@@ -12,6 +12,7 @@
 //   g++ -std=c++17 -DIMGUI_DEFINE_MATH_OPERATORS -D'__fastcall=' \
 //       -I src/main/jni/Skin/tests/stubs -I src/main/jni -I src/main/jni/ImGui \
 //       -I src/main/jni/Includes src/main/jni/Skin/tests/character_apply_check.cpp \
+//       src/main/jni/IL2CppSDKGenerator/IL2Cpp/Tools.cpp -lpthread \
 //       -o /tmp/character_apply_check && /tmp/character_apply_check
 // Exits 0 and prints "OK: all character-apply checks passed" on success.
 // Android.mk does not wildcard Skin/tests, so it never reaches the APK.
@@ -28,11 +29,27 @@
 
 #include "IL2CppSDKGenerator/BasicStructs/Vector3.hpp"
 #include "IL2CppSDKGenerator/IL2Cpp/Il2Cpp.h"
-// Fields.h's inline helpers guard their rows with Tools::IsPtrValid, so the
-// declaration has to be visible here. Nothing in this test calls one of those
-// helpers, so Tools.cpp is still not linked.
+// Skin/Fields.h's inline helpers guard their rows with Tools::IsPtrValid, so
+// the declaration has to be visible here; the real Tools.cpp is linked into
+// this test (see the command above) rather than stubbed.
 #include "IL2CppSDKGenerator/IL2Cpp/Tools.h"
 #include "Skin/Fields.h"
+
+// ---------------------------------------------------------------------------
+// Host-only link stubs for the real Tools.cpp: it references the inline-hook
+// engine and OpenSSL's MD5, and this test reaches neither. The check the test
+// does rely on (Tools::IsPtrValid) is the real implementation.
+// ---------------------------------------------------------------------------
+#include <openssl/md5.h>
+
+extern "C" int DobbyHook(void *address, void *replace_call, void **origin_call)
+{
+    (void)address; (void)replace_call; (void)origin_call;
+    return 0;
+}
+extern "C" int MD5_Init(MD5_CTX *) { return 0; }
+extern "C" int MD5_Update(MD5_CTX *, const void *, size_t) { return 0; }
+extern "C" int MD5_Final(unsigned char *, MD5_CTX *) { return 0; }
 
 static int g_checks = 0;
 static int g_failures = 0;

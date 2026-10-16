@@ -17,11 +17,11 @@ using json = nlohmann::json;
 extern JavaVM* jvm;
 std::string g_Token, g_Auth;
 bool bValid = false;
-std::string EXP = " ";
+std::string EXP = "LIFETIME";
 std::string usedKey = " ";
 std::string mod_status = " ";
 std::string max_dev = " ";
-std::string userType = "DELUXE PAID";
+std::string userType = "ETHNIR PREM";
 int keyUserCount = 0;
 time_t expiryTimestamp = 0;
 
@@ -293,9 +293,9 @@ std::string Login(const char *user_key) {
 	usedKey = user_key;  
     
 	if (isVipKey(user_key)) {  
-        userType = "DELUXE PAID";  
+        userType = "ETHNIR PREM";  
     } else {  
-        userType = "DELUXE PAID";  
+        userType = "ETHNIR FREE";  
     }  
 	
     struct MemoryStruct chunk{};
@@ -317,7 +317,7 @@ std::string Login(const char *user_key) {
         
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         char data[4096];
-        sprintf(data, "game=CODMDL&user_key=%s&serial=%s", user_key, UUID.c_str());
+        sprintf(data, "game=CODMGR&user_key=%s&serial=%s", user_key, UUID.c_str());
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) &chunk);
@@ -337,7 +337,7 @@ std::string Login(const char *user_key) {
                     expiryTimestamp = parseExpiryDate(EXP);  
 					
                     if (rng + 30 > time(0)) {
-                        std::string auth = "CODMDL";
+                        std::string auth = "CODMDGR";
                         auth += "-";
                         auth += user_key;
                         auth += "-";

@@ -1,145 +1,185 @@
-src/main/obj/local/arm64-v8a/objs/gspace1/ImGui/custom_widgets.o: \
-  src/main/jni/ImGui/custom_widgets.cpp \
-  src/main/jni/ImGui/custom_widgets.hpp \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__config \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string_view \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__string \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/algorithm \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/initializer_list \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstddef \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstring \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/utility \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__tuple \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdint \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__debug \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/memory \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/typeinfo \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/exception \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdlib \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdlib.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/new \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/limits \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iterator \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iosfwd \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/wchar.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__functional_base \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/tuple \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdexcept \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cassert \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/atomic \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdio \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdio.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cwchar \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cwctype \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cctype \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ctype.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/wctype.h \
-  src/main/jni/ImGui/imgui_internal.h src/main/jni/ImGui/imgui.h \
-  src/main/jni/ImGui/imconfig.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stddef.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/math.h \
-  src/main/jni/ImGui/imstb_textedit.h \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/map \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__tree \
-  /data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/functional \
-  src/main/jni/ImGui/imgui_settings.h \
-  src/main/jni/ImGui/../System/Texture/box_shadow.h \
-  src/main/jni/ImGui/Icon.h
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/obj/local/arm64-v8a/objs/gspace1/ImGui/custom_widgets.o: \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/custom_widgets.cpp \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/custom_widgets.hpp \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string_view \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__string \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/algorithm \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/initializer_list \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstddef \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/version \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/type_traits \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstring \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/utility \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__tuple \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdint \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdint.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__debug \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iosfwd \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/wchar.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/memory \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/typeinfo \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/exception \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdlib \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdlib.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/new \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/limits \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iterator \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__functional_base \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/tuple \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdexcept \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/atomic \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__threading_support \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/chrono \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ctime \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ratio \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/climits \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/limits.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/errno.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/functional \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/bit \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdio \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdio.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cwchar \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cwctype \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cctype \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ctype.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/wctype.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_internal.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imconfig.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/float.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stddef.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/math.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imstb_textedit.h \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/map \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__tree \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__node_handle \
+  /tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/optional \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_settings.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/Texture/box_shadow.h \
+  /workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/Icon.h
 
-src/main/jni/ImGui/custom_widgets.hpp:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/custom_widgets.hpp:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__config:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__config:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string_view:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string_view:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__string:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__string:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/algorithm:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/algorithm:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/initializer_list:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/initializer_list:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstddef:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstddef:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstring:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/version:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/string.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/type_traits:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/utility:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstring:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__tuple:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/string.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdint:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/utility:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__debug:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__tuple:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/memory:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdint:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/typeinfo:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdint.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/exception:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__debug:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdlib:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iosfwd:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdlib.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/wchar.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/new:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/memory:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/limits:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/typeinfo:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iterator:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/exception:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/iosfwd:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdlib:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/wchar.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdlib.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__functional_base:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/new:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/tuple:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/limits:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdexcept:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/iterator:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cassert:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__functional_base:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/atomic:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/tuple:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cstdio:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdexcept:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stdio.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/atomic:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cwchar:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__threading_support:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cwctype:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/chrono:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/cctype:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ctime:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/ctype.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ratio:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/wctype.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/climits:
 
-src/main/jni/ImGui/imgui_internal.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/limits.h:
 
-src/main/jni/ImGui/imgui.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/errno.h:
 
-src/main/jni/ImGui/imconfig.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/functional:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/stddef.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/bit:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/math.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cstdio:
 
-src/main/jni/ImGui/imstb_textedit.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stdio.h:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/map:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cwchar:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/__tree:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cwctype:
 
-/data/user/0/com.aide.plus/no_backup/ndksupport-1710240003/android-ndk-aide/sources/cxx-stl/llvm-libc++/include/functional:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/cctype:
 
-src/main/jni/ImGui/imgui_settings.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/ctype.h:
 
-src/main/jni/ImGui/../System/Texture/box_shadow.h:
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/wctype.h:
 
-src/main/jni/ImGui/Icon.h:
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_internal.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imconfig.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/float.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/stddef.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/math.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imstb_textedit.h:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/map:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__tree:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/__node_handle:
+
+/tmp/ndk/android-ndk-r22b/sources/cxx-stl/llvm-libc++/include/optional:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/imgui_settings.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/../System/Texture/box_shadow.h:
+
+/workspace/chats/d7315f9277bbfe93cb596510/src/main/jni/ImGui/Icon.h:

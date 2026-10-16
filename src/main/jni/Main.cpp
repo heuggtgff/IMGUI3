@@ -950,45 +950,6 @@ int TABG = 1;
 
 EGLBoolean (*old_eglSwapBuffers)(EGLDisplay dpy, EGLSurface surface);
 
-// ---- Pizza outline: single color from the menu hue slider, thicker ----
-static void DrawPizzaOutline(ImDrawList* dl, ImVec2 wMin, ImVec2 wMax, float time)
-{
-    const int perSide = 22;
-    const int total = perSide * 4;
-    ImVec2 pts[total + 1];
-    float w = wMax.x - wMin.x, h = wMax.y - wMin.y;
-    int idx = 0;
-    for (int i = 0; i < perSide; i++) { float t = (float)i / perSide; pts[idx++] = {wMin.x + t * w, wMin.y}; }
-    for (int i = 0; i < perSide; i++) { float t = (float)i / perSide; pts[idx++] = {wMax.x, wMin.y + t * h}; }
-    for (int i = 0; i < perSide; i++) { float t = (float)i / perSide; pts[idx++] = {wMax.x - t * w, wMax.y}; }
-    for (int i = 0; i < perSide; i++) { float t = (float)i / perSide; pts[idx++] = {wMin.x, wMax.y - t * h}; }
-    pts[total] = pts[0];
-
-    const float wobAmp  = 2.5f;
-    const float wobFreq = 0.55f;
-
-    ImU32 accent = main_runtime_theme::GetAccentU32();
-    int ar = (accent >> IM_COL32_R_SHIFT) & 0xFF;
-    int ag = (accent >> IM_COL32_G_SHIFT) & 0xFF;
-    int ab = (accent >> IM_COL32_B_SHIFT) & 0xFF;
-    ImU32 glow = IM_COL32(ar, ag, ab, 70);
-
-    for (int i = 0; i < total; i++) {
-        ImVec2 a = pts[i], b = pts[i + 1];
-        ImVec2 dir(b.x - a.x, b.y - a.y);
-        float len = sqrtf(dir.x * dir.x + dir.y * dir.y);
-        if (len < 0.001f) continue;
-        ImVec2 perp(-dir.y / len, dir.x / len);
-        float wob = sinf(time * 3.0f + i * wobFreq) * wobAmp;
-        ImVec2 mid((a.x + b.x) * 0.5f + perp.x * wob, (a.y + b.y) * 0.5f + perp.y * wob);
-
-        dl->AddLine(a,   mid, glow,   22.0f);
-        dl->AddLine(mid, b,   glow,   22.0f);
-        dl->AddLine(a,   mid, accent, 7.0f);
-        dl->AddLine(mid, b,   accent, 7.0f);
-    }
-}
-
 static void DrawEspPreview(ImDrawList* draw, ImVec2 pos, float width, float height) {
     draw->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height), IM_COL32(10, 12, 18, 245));
     draw->AddRect(pos, ImVec2(pos.x + width, pos.y + height), IM_COL32(70, 70, 82, 180), 8.0f, 0, 1.0f);
@@ -1375,6 +1336,13 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
         Config.sColorsESPBOT.SkeletonBOT = CREATE_COLOR(0, 255, 0, 180);
         Config.sColorsESPOTHERS.PovOTHERS = CREATE_COLOR(225, 0, 0, 180);
         Config.ExtraMenu.NoGravityScale = 1.0f;
+        // Mythic Attachments is ON by default: an applied skin behaves as if it
+        // were really owned, so the weapon's attachments (the mythic's own ones
+        // included) are not locked. Every other ExtraMenu option stays off; the
+        // checkbox that turns this one off is in the HOME tab, directly
+        // above No Slide Fatigue; its live counters are in the SKINS tab, next to
+        // Unlock Blueprints. See System/Hooks/MythicAttachments.h.
+        Config.ExtraMenu.MythicAttachments = true;
         Config.Aim.AimAssistSize = 0.0f;
         Config.Aim.Cross = 45.0f;
         Config.Aim.Target = EAimTarget::Heads;
@@ -1635,20 +1603,13 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
             ImGui::SetNextWindowSize(ImVec2(menuW, menuH), ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(0.0f);
 
-            ImGui::Begin("@ThaxxylHax", nullptr,
+            ImGui::Begin("@Shaiaintshyy", nullptr,
                 ImGuiWindowFlags_NoTitleBar |
                 ImGuiWindowFlags_NoBringToFrontOnFocus |
                 ImGuiWindowFlags_NoScrollbar |
                 ImGuiWindowFlags_NoSavedSettings |
                 ImGuiWindowFlags_NoBackground);
             {
-                {
-                    ImVec2 wp2 = ImGui::GetWindowPos();
-                    ImVec2 ws2 = ImGui::GetWindowSize();
-                    ImDrawList* wdl = ImGui::GetWindowDrawList();
-                    DrawPizzaOutline(wdl, wp2, ImVec2(wp2.x + ws2.x, wp2.y + ws2.y), (float)ImGui::GetTime());
-                }
-
                 runtime_preview_menu::StateRefs runtimeState{
                     dark, tabAlpha, tabAdd, page, activeTab,
                     windowCollapsed, isMenuVisible,
@@ -1666,6 +1627,20 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                     const ImVec2 runtimeWindowSize = ImGui::GetWindowSize();
                     const ImVec2 runtimeWindowPos = ImGui::GetWindowPos();
                     ImDrawList *runtimeDrawList = ImGui::GetWindowDrawList();
+
+                    // Flat body panel. The wobbling 22px glow that used to outline
+                    // this window is gone, so the window draws one plain rounded
+                    // rectangle with the same 1px accent border the header uses -
+                    // no wobble, no halo, no animation.
+                    {
+                        const ImVec2 bodyMin = runtimeWindowPos;
+                        const ImVec2 bodyMax(runtimeWindowPos.x + runtimeWindowSize.x,
+                                             runtimeWindowPos.y + runtimeWindowSize.y);
+                        runtimeDrawList->AddRectFilled(bodyMin, bodyMax, IM_COL32(7, 10, 20, 236), 16.0f);
+                        runtimeDrawList->AddRect(bodyMin, bodyMax,
+                                                 main_runtime_theme::GetAccentTintU32(0.70f, 0.70f),
+                                                 16.0f, 0, 1.0f);
+                    }
 
                     const float outerPad = 14.0f;
                     const float layoutGap = 8.0f;
@@ -1697,7 +1672,8 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                     runtimeDrawList->AddRect(headerMin, headerMax, main_runtime_theme::GetAccentTintU32(0.70f, 0.70f), 11.0f, 0, 1.0f);
 
                     const ImVec2 flameCenter(headerMin.x + 28.0f, headerMin.y + headerHeight * 0.5f);
-                    runtimeDrawList->AddCircleFilled(flameCenter, 18.0f, main_runtime_theme::GetAccentTintU32(0.25f, 0.55f), 28);
+                    // No glow halo behind the icon any more - the accent circle used
+                    // to be a soft light spill ("neon"); the icon itself stays.
                     {
                         ImFont *iconFont = custom::shell::GetIconFont();
                         const char *logoIcon = ICON_FA_FIRE;
@@ -1796,12 +1772,15 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                         runtimeDrawList->AddRect(sidebarMin, sidebarMax,
                             main_runtime_theme::GetAccentTintU32(0.22f, 0.35f), 9.0f, 0, 1.0f);
 
-                        // The six entries the radial wheel had: the same ids, the
-                        // same icons and labels, listed instead of ringed.
-                        static const char *sbIcons[] = { ICON_FA_HOME, ICON_FA_EYE, ICON_FA_SLIDERS_H,
-                                                         ICON_FA_STAR, ICON_FA_MICROCHIP, ICON_FA_COG };
-                        static const char *sbNames[] = { "HOME", "ESP", "EXTRA", "SKINS", "AIM", "SETTINGS" };
-                        static const int   sbIds[]   = { 2, 1, 5, 4, 3, 6 };
+                        // Six pages, labelled with what they really draw: the
+                        // tab the wheel called HOME is the switch page (2), and
+                        // the one it called EXTRA is the changelog (5). Same
+                        // order the tab strip on main used, plus the HOME entry
+                        // the user asks for by name.
+                        static const char *sbIcons[] = { ICON_FA_HOME, ICON_FA_EYE, ICON_FA_MICROCHIP,
+                                                         ICON_FA_STAR, ICON_FA_SLIDERS_H, ICON_FA_COG };
+                        static const char *sbNames[] = { "HOME", "ESP", "AIM", "SKINS", "MISC", "SETTINGS" };
+                        static const int   sbIds[]   = { 2, 1, 3, 4, 5, 6 };
 
                         ImFont *sbIconFont = custom::shell::GetIconFont();
                         ImFont *sbTextFont = font::inter_semibold ? font::inter_semibold : ImGui::GetFont();
@@ -1891,9 +1870,12 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 // No Slide Fatigue: remove the slide limit/fatigue system
                                 // (SlideTackleComponent::get_UseSlideTackleLimit -> false,
                                 // local pawn only). Unlimited slides, no idle-time decay.
-                                // Unlock attachments (blueprints + mythic sights),
-                                // on by default: the HOME tab owns it now.
-                                custom::Checkbox("Unlock Attachments", &Config.ExtraMenu.UnlockAttachments);
+                                // Mythic Attachments: an applied weapon skin behaves as
+                                // if it were really owned, so its attachments (the
+                                // mythic's own included) stop reading as locked.
+                                // ON by default; the live counters sit in the SKINS
+                                // tab next to Unlock Blueprints.
+                                custom::Checkbox("Mythic Attachments", &Config.ExtraMenu.MythicAttachments);
                                 custom::Checkbox("No Slide Fatigue", &Config.NewFeaturesMenu.NoSlideFatigue);
                                 custom::Separator();
                                 custom::Separator();
@@ -1908,6 +1890,19 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 // === NEW FEATURES: Firing timing ===
                                 // (No Fire Delay and Stable Scope removed per request.)
                                 custom::Checkbox("No Sprint Fire Delay", &Config.NewFeaturesMenu.NoSprintToFireDelay);
+                                if (Config.NewFeaturesMenu.NoSprintToFireDelay) {
+                                    // The option is applied inside the game's own
+                                    // Weapon.get_DelaySprintFire, and that hook body only
+                                    // compares the instance against a cache (it may not
+                                    // call into the game - the native call it used to
+                                    // make is what crashed this option). This line is
+                                    // that cache: an empty one means the local player's
+                                    // pawn tick has not run yet, so nothing is overridden.
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "  %s",
+                                        NewFeatures::g_noSprintFireDelayWeapon.load() != nullptr
+                                            ? "armed: local weapon cached"
+                                            : "waiting for the local pawn tick");
+                                }
                                 custom::Checkbox("No Hipfire Delay", &Config.NewFeaturesMenu.NoHipfireDelay);
                                 custom::Separator();
                                 // Dev / Debug options
@@ -1999,9 +1994,44 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 if (runtimeState.activeTab == 4) {
     const ChildFrame skinChild = BeginContentChild("SKINS", ImVec2(contentRegion.x, childHeight));
 
-    // No "Unlock Blueprints" / "Unlock Mythic Attachments" checkbox: both
-    // unlocks are unconditional (System/Hooks/Feats.h answers true and there is
-    // no flag behind them any more). The row only ate list height here.
+    custom::Checkbox("Unlock Blueprints", &Config.ExtraMenu.Blueprints);
+    // Attachments counted as unlocked for the weapon wearing an applied skin -
+    // the mythic's own set included - so the loadout stops drawing them locked.
+    // Client-side answers only; the server still knows the real inventory.
+    // The "Mythic Attachments" switch itself lives in the HOME tab, directly
+    // above No Slide Fatigue; its live counters stay here next to Unlock
+    // Blueprints, which is the tab that owns the weapon skins.
+    // Live instrument: how often the loadout / skin UI asked each of the four
+    // unlock questions and how often this feature answered YES. That UI asks them
+    // by itself, so non-zero counters are the on-device proof that the hooks are
+    // installed at the dump's addresses (see System/Hooks/MythicAttachments.h).
+    {
+        namespace ma = mythic_attachments;
+        ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+            "Unlock gates asked/granted: att %d/%d  skin %d/%d  loadout %d/%d  confirm %d/%d",
+            ma::g_diag.asked[ma::GateAttachment], ma::g_diag.granted[ma::GateAttachment],
+            ma::g_diag.asked[ma::GateSkin],       ma::g_diag.granted[ma::GateSkin],
+            ma::g_diag.asked[ma::GateLoadout],    ma::g_diag.granted[ma::GateLoadout],
+            ma::g_diag.asked[ma::GateConfirm],    ma::g_diag.granted[ma::GateConfirm]);
+        // The three DATA-side writes (the part that behaves like the skin: the
+        // client's own objects are rewritten, no answer function has to be asked
+        // for the lock to disappear).
+        ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+            "Client-side writes: list %d/%d  item %d/%d  cell %d/%d",
+            ma::g_diag.asked[ma::GateList], ma::g_diag.granted[ma::GateList],
+            ma::g_diag.asked[ma::GateItem], ma::g_diag.granted[ma::GateItem],
+            ma::g_diag.asked[ma::GateCell], ma::g_diag.granted[ma::GateCell]);
+        // Did the hook itself land? A 0 here means the address never took the
+        // hook (bad dump / failed install), which is why the counters above stay
+        // at 0/0 - it is the first thing to check on a game update.
+        ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+            "Hooks landed: att %d skin %d loadout %d confirm %d | list %d item %d cell %d",
+            ma::g_landed[ma::GateAttachment] ? 1 : 0, ma::g_landed[ma::GateSkin] ? 1 : 0,
+            ma::g_landed[ma::GateLoadout] ? 1 : 0,    ma::g_landed[ma::GateConfirm] ? 1 : 0,
+            ma::g_landed[ma::GateList] ? 1 : 0,       ma::g_landed[ma::GateItem] ? 1 : 0,
+            ma::g_landed[ma::GateCell] ? 1 : 0);
+    }
+
     RenderSkinCategoryContent(skinSubTab, true);
     EndContentChild(skinChild);
 }
@@ -2025,7 +2055,14 @@ if (runtimeState.activeTab == 4) {
                                     // RealFireInterval), not a configured ms value. The
                                     // TriggerbotDelay field is kept only so old config
                                     // files keep loading.
-                                    custom::SliderInt("Radius", &Config.NewFeaturesMenu.TriggerbotRadius, 4, 240, "%d px");
+                                    // The crosshair zone is not a number of its own any
+                                    // more: it IS the dot crosshair's own size (see the
+                                    // Dot Crosshair section below), so what the user sees
+                                    // drawn is exactly what the trigger covers. The
+                                    // TriggerbotRadius field is kept only so old config
+                                    // files keep loading.
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                                       "Zone = the dot crosshair below");
                                     
                                     // No Hitbox pick: Head/Chest/Limbs/Any needed a
                                     // raw bone FIELD offset (m_HeadBone 0x308 /
@@ -2036,35 +2073,34 @@ if (runtimeState.activeTab == 4) {
                                     // Pawn.get_HeadPosition getter and the root
                                     // transform, measured against the crosshair
                                     // segment and confirmed by the visibility ray.
-                                    // Target filter. Applied AFTER every hard gate
-                                    // (alive / not us / not a teammate / under the
-                                    // crosshair), so it can only narrow the list:
-                                    // "All" is exactly the old behaviour.
-                                    static const char* triggerFilters[] = {
-                                        "All", "Visible Only", "Within 25 m", "Within 50 m", "Within 100 m"
-                                    };
-                                    custom::Combo("Filter", &Config.NewFeaturesMenu.TriggerbotFilter, triggerFilters, IM_ARRAYSIZE(triggerFilters));
-                                    // The advisory options that used to sit here (Lead Target,
-                                    // Check Spread, Require Ready) could not change a
-                                    // shot, so they are gone; so is the debug Test Fire
-                                    // button. Everything the trigger actually obeys is above
-                                    // (Mode, Radius, Filter) plus StartFire itself.
+                                    // No target filter any more (Visible Only / the
+                                    // 25-50-100 m limits): it never changed a shot and
+                                    // it silently dropped candidates the rest of the
+                                    // gate accepts. The advisory options that used to sit
+                                    // here (Lead Target, Check Spread, Require Ready)
+                                    // could not change a shot either, and the debug Test
+                                    // Fire button is gone too. Everything the trigger
+                                    // obeys is above (Mode) plus StartFire itself - and
+                                    // its crosshair zone, which is the dot below.
                                 }
-                                // ---- Own dot crosshair ------------------------------------
-                                // Drawn over the game and, by default, the point the
-                                // triggerbot aims through: with both offsets at 0 the
-                                // dot and the trigger sit on the exact render centre,
-                                // which is what the trigger used before this existed.
+                                // ---- The dot crosshair (the trigger's crosshair) --------
+                                // There is ONE crosshair now: this dot. The triggerbot
+                                // aims through its pixel and its zone IS the dot's own
+                                // radius, always - there is no separate trigger crosshair
+                                // and no switch to connect the two. The checkbox decides
+                                // whether the dot is DRAWN; the trigger uses its position
+                                // either way.
                                 custom::Separator();
                                 custom::Checkbox("Dot Crosshair", &Config.Crosshair.Enabled);
-                                if (Config.Crosshair.Enabled) {
+                                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                                                   "The triggerbot aims through this dot");
+                                {
                                     // Opacity is the colour's own alpha: one value, so a
                                     // fade can never disagree with what is drawn.
                                     custom::SliderFloat("Opacity", &Config.Crosshair.Color[3], 0.0f, 1.0f, "%.2f");
-                                    custom::SliderFloat("Size", &Config.Crosshair.Size, 1.0f, 40.0f, "%.0f px");
+                                    custom::SliderFloat("Size (trigger zone)", &Config.Crosshair.Size, 1.0f, 40.0f, "%.0f px");
                                     custom::SliderFloat("Offset X", &Config.Crosshair.OffsetX, -400.0f, 400.0f, "%.0f px");
                                     custom::SliderFloat("Offset Y", &Config.Crosshair.OffsetY, -400.0f, 400.0f, "%.0f px");
-                                    custom::Checkbox("Triggerbot Uses It", &Config.Crosshair.TriggerbotUsesIt);
                                     ImGui::TextUnformatted("Crosshair Color");
                                     custom::ColorEdit4("##crosshair_color", Config.Crosshair.Color,
                                                        ImGuiColorEditFlags_NoInputs |
@@ -2073,6 +2109,15 @@ if (runtimeState.activeTab == 4) {
                                                        ImVec2(ImMax(1.0f, ImGui::GetContentRegionAvail().x), 50.0f))) {
                                         Config.Crosshair.OffsetX = 0.0f;
                                         Config.Crosshair.OffsetY = 0.0f;
+                                    }
+                                    // These settings stay visible while the dot is hidden:
+                                    // the trigger aims at these offsets regardless, so
+                                    // hiding the dot must never hide the only way to see
+                                    // and fix them.
+                                    if (!Config.Crosshair.Enabled &&
+                                        (Config.Crosshair.OffsetX != 0.0f || Config.Crosshair.OffsetY != 0.0f)) {
+                                        ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
+                                                           "Dot hidden - the trigger still aims at these offsets");
                                     }
                                 }
                                 // Debug status (shows in-game). Every number below is
@@ -2110,29 +2155,43 @@ if (runtimeState.activeTab == 4) {
                                     ImGui::TextColored(dim, "HB %s  wTick=%d held=%d pawn=%d",
                                         hbAlive ? "OK" : "DEAD",
                                         td.weaponTicks, td.weaponHeldTicks, td.pawnLocalTicks);
-                                    ImGui::TextColored(dim, "Crosshair=%.0f,%.0f dot=%s offset=%s",
+                                    ImGui::TextColored(dim, "Dot=%.0f,%.0f %s zone=%.1fpx ray=%s",
                                         td.crosshairCx, td.crosshairCy,
-                                        Config.Crosshair.Enabled ? "on" : "off",
-                                        td.crosshairOffsetDropped ? "DROPPED (no camera basis)"
-                                                                  : td.crosshairOffsetUsed ? "applied" : "centre");
+                                        Config.Crosshair.Enabled ? "shown" : "hidden",
+                                        td.radiusPx,
+                                        td.crosshairRayViaGame ? "game-projection"
+                                            : td.crosshairRayFellBack ? "basis-rebuilt"
+                                            : "centre-ray");
                                     ImGui::TextColored(dim, "Scan=%d Enemy=%d Cand=%d Ray=%d Tgt=%d Fire=%d",
                                         td.scans, td.enemyCount, td.candidates,
                                         td.losChecked, td.targets, td.fires);
-                                    ImGui::TextColored(dim, "R=%.0f Closest=%.0fpx LOSblk=%d Friend=%d Filt=%d",
+                                    // Ads= is the "ADS only" gate's own input: the held
+                                    // weapon's m_IsAiming flag and its 0..1 aiming
+                                    // percentage. Both are field reads - Pawn.IsAiming()
+                                    // is not called any more, which is what crashed the
+                                    // option.
+                                    ImGui::TextColored(dim, "R=%.0f Closest=%.0fpx LOSblk=%d Friend=%d Ads=%d/%.2f",
                                         td.radiusPx,
                                         td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx),
-                                        td.losBlocked, td.friendsInLine, td.filteredOut);
+                                        td.losBlocked, td.friendsInLine, td.adsFlag, td.adsPct);
                                     // Which path accepted (or would accept) the shot, and
                                     // what the visibility ray actually hit. "Rays=id/blk"
                                     // is the anti-wall gate: id = the nearest thing on the
                                     // shot line WAS the enemy, blk = something else (a wall,
                                     // however thin) stopped it.
                                     ImGui::TextColored(dim, "Path=%s Centre=%s@%.1fm Rays=%d/%d%s",
-                                        td.aimPath == 0 ? "centre-ray" : "zone",
+                                        td.aimPath == 0 ? "dot-ray" : "dot-zone",
                                         td.crosshairPawn ? "pawn" : "none",
                                         td.crosshairHitDist,
                                         td.raysIdentified, td.raysBlocked,
                                         td.rayUnknown ? " NO-RAY-SYMBOL" : "");
+                                    // PATH A's BODY BOUND, live: Keep is how far into
+                                    // the enemy's projected body the accepted shot sat
+                                    // (<= 1 means the dot was ON him), and Declined is
+                                    // every shot the dot ray named but the dot was BESIDE
+                                    // - the beside-the-arm refusal, counted.
+                                    ImGui::TextColored(dim, "Keep=%.2f Declined=%d",
+                                        td.projKeepFrac, td.dotRayDeclined);
                                     ImGui::TextColored(dim, "LOShit=%.2fm LeadBlk=%d SprWarn=%d Sw=%d Int=%.3f",
                                         td.lastLosHitDist,
                                         (int)td.leadPathBlocked, (int)td.spreadWarn,

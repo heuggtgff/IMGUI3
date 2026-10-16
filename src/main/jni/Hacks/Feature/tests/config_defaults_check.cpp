@@ -1,6 +1,6 @@
 // Host test for the feature defaults in the real Config object.
 //
-// The unlock switch (HOME tab, "Unlock Attachments") has to be ON out of the box:
+// The unlock switch (HOME tab, "Mythic Attachments") has to be ON out of the box:
 // the whole sConfig global is aggregate-initialised as `sConfig Config{0}`, so a
 // member's default only survives if its default member initialiser really is
 // applied to the members the {0} does not cover. This test builds the REAL
@@ -63,8 +63,8 @@ static int g_failures = 0;
 
 int main()
 {
-    CHECK(Config.ExtraMenu.UnlockAttachments == true,
-          "Unlock Attachments is ON by default (HOME tab switch)");
+    CHECK(Config.ExtraMenu.MythicAttachments == true,
+          "Mythic Attachments is ON by default (the HOME tab switch)");
     CHECK(Config.ExtraMenu.Kinetic == false && Config.ExtraMenu.Recoil == false,
           "the other ExtraMenu switches still default off");
 
@@ -74,7 +74,7 @@ int main()
     CHECK(Config.NewFeaturesMenu.TriggerbotMode == 0 &&
           Config.NewFeaturesMenu.NoSlideFatigue == false,
           "the NewFeatures switches still default off");
-    CHECK(Config.Crosshair.Size == 6.0f && Config.Crosshair.TriggerbotUsesIt == true,
+    CHECK(Config.Crosshair.Size == 6.0f && Config.Crosshair.Enabled == true,
           "the crosshair defaults still come from their initialisers");
 
     printf("\n");
