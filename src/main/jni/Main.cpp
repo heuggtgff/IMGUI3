@@ -947,49 +947,7 @@ static bool isMenuVisible = true;
 
 int TABG = 1;
 
-static ImVec2 g_WheelPos = ImVec2(-1.0f, -1.0f);
-static bool   g_WheelPosInit = false;
-
 EGLBoolean (*old_eglSwapBuffers)(EGLDisplay dpy, EGLSurface surface);
-
-// ---- Pizza outline: single color from the menu hue slider, thicker ----
-static void DrawPizzaOutline(ImDrawList* dl, ImVec2 wMin, ImVec2 wMax, float time)
-{
-    const int perSide = 22;
-    const int total = perSide * 4;
-    ImVec2 pts[total + 1];
-    float w = wMax.x - wMin.x, h = wMax.y - wMin.y;
-    int idx = 0;
-    for (int i = 0; i < perSide; i++) { float t = (float)i / perSide; pts[idx++] = {wMin.x + t * w, wMin.y}; }
-    for (int i = 0; i < perSide; i++) { float t = (float)i / perSide; pts[idx++] = {wMax.x, wMin.y + t * h}; }
-    for (int i = 0; i < perSide; i++) { float t = (float)i / perSide; pts[idx++] = {wMax.x - t * w, wMax.y}; }
-    for (int i = 0; i < perSide; i++) { float t = (float)i / perSide; pts[idx++] = {wMin.x, wMax.y - t * h}; }
-    pts[total] = pts[0];
-
-    const float wobAmp  = 2.5f;
-    const float wobFreq = 0.55f;
-
-    ImU32 accent = main_runtime_theme::GetAccentU32();
-    int ar = (accent >> IM_COL32_R_SHIFT) & 0xFF;
-    int ag = (accent >> IM_COL32_G_SHIFT) & 0xFF;
-    int ab = (accent >> IM_COL32_B_SHIFT) & 0xFF;
-    ImU32 glow = IM_COL32(ar, ag, ab, 70);
-
-    for (int i = 0; i < total; i++) {
-        ImVec2 a = pts[i], b = pts[i + 1];
-        ImVec2 dir(b.x - a.x, b.y - a.y);
-        float len = sqrtf(dir.x * dir.x + dir.y * dir.y);
-        if (len < 0.001f) continue;
-        ImVec2 perp(-dir.y / len, dir.x / len);
-        float wob = sinf(time * 3.0f + i * wobFreq) * wobAmp;
-        ImVec2 mid((a.x + b.x) * 0.5f + perp.x * wob, (a.y + b.y) * 0.5f + perp.y * wob);
-
-        dl->AddLine(a,   mid, glow,   22.0f);
-        dl->AddLine(mid, b,   glow,   22.0f);
-        dl->AddLine(a,   mid, accent, 7.0f);
-        dl->AddLine(mid, b,   accent, 7.0f);
-    }
-}
 
 static void DrawEspPreview(ImDrawList* draw, ImVec2 pos, float width, float height) {
     draw->AddRectFilled(pos, ImVec2(pos.x + width, pos.y + height), IM_COL32(10, 12, 18, 245));
@@ -1632,18 +1590,16 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
             float openAlpha = 0.2f + 0.8f * openEase;
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, openAlpha);
 
-            const float menuW = ImMin(900.0f, ioDisplaySize.x * 0.72f);
-            const float menuH = ImMin(600.0f, ioDisplaySize.y * 0.88f);
-            const float wheelW = 320.0f;
-            const float totalW = menuW + wheelW + 24.0f;
-            ImVec2 menuPos;
-            if (totalW < ioDisplaySize.x) {
-                menuPos = ImVec2((ioDisplaySize.x - totalW) * 0.5f,
+            // Auto-resize, always centred. The pizza wheel that used to sit next
+            // to the menu is gone, so nothing shifts the window off centre any more,
+            // and the size follows the display instead of a fixed 900x600 box - the
+            // character / skin lists below get every pixel the phone has.
+            const float menuW = ImClamp(ioDisplaySize.x * 0.92f, 360.0f,
+                                        ImMax(1.0f, ioDisplaySize.x - 16.0f));
+            const float menuH = ImClamp(ioDisplaySize.y * 0.92f, 320.0f,
+                                        ImMax(1.0f, ioDisplaySize.y - 16.0f));
+            const ImVec2 menuPos((ioDisplaySize.x - menuW) * 0.5f,
                                  (ioDisplaySize.y - menuH) * 0.5f);
-            } else {
-                menuPos = ImVec2((ioDisplaySize.x - menuW) * 0.5f,
-                                 (ioDisplaySize.y - menuH) * 0.5f);
-            }
 
             ImGui::SetNextWindowPos(menuPos, ImGuiCond_Always, ImVec2(0.0f, 0.0f));
             ImGui::SetNextWindowSize(ImVec2(menuW, menuH), ImGuiCond_Always);
@@ -1656,13 +1612,6 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                 ImGuiWindowFlags_NoSavedSettings |
                 ImGuiWindowFlags_NoBackground);
             {
-                {
-                    ImVec2 wp2 = ImGui::GetWindowPos();
-                    ImVec2 ws2 = ImGui::GetWindowSize();
-                    ImDrawList* wdl = ImGui::GetWindowDrawList();
-                    DrawPizzaOutline(wdl, wp2, ImVec2(wp2.x + ws2.x, wp2.y + ws2.y), (float)ImGui::GetTime());
-                }
-
                 runtime_preview_menu::StateRefs runtimeState{
                     dark, tabAlpha, tabAdd, page, activeTab,
                     windowCollapsed, isMenuVisible,
@@ -1681,12 +1630,27 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                     const ImVec2 runtimeWindowPos = ImGui::GetWindowPos();
                     ImDrawList *runtimeDrawList = ImGui::GetWindowDrawList();
 
+                    // Flat body panel. The wobbling 22px glow that used to outline
+                    // this window is gone, so the window draws one plain rounded
+                    // rectangle with the same 1px accent border the header uses -
+                    // no wobble, no halo, no animation.
+                    {
+                        const ImVec2 bodyMin = runtimeWindowPos;
+                        const ImVec2 bodyMax(runtimeWindowPos.x + runtimeWindowSize.x,
+                                             runtimeWindowPos.y + runtimeWindowSize.y);
+                        runtimeDrawList->AddRectFilled(bodyMin, bodyMax, IM_COL32(7, 10, 20, 236), 16.0f);
+                        runtimeDrawList->AddRect(bodyMin, bodyMax,
+                                                 main_runtime_theme::GetAccentTintU32(0.70f, 0.70f),
+                                                 16.0f, 0, 1.0f);
+                    }
+
                     const float outerPad = 14.0f;
                     const float layoutGap = 8.0f;
                     const float contentPadding = 10.0f;
                     const float columnGap = 10.0f;
                     const float headerHeight = 64.0f;
                     const float closeHeaderWidth = 72.0f;
+                    const float tabStripHeight = 44.0f;
 
                     const float contentLeft = runtimeWindowPos.x + outerPad;
                     const float contentRight = runtimeWindowPos.x + runtimeWindowSize.x - outerPad;
@@ -1698,7 +1662,10 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                     const ImVec2 closeCardMin(headerMax.x + layoutGap, headerTop);
                     const ImVec2 closeCardSize(closeHeaderWidth, headerHeight);
 
-                    const ImVec2 hostMin(contentLeft, headerTop + headerHeight + layoutGap);
+                    const ImVec2 tabStripMin(contentLeft, headerTop + headerHeight + layoutGap);
+                    const ImVec2 tabStripMax(contentRight, tabStripMin.y + tabStripHeight);
+
+                    const ImVec2 hostMin(contentLeft, tabStripMax.y + layoutGap);
                     const ImVec2 hostMax(contentRight, runtimeWindowPos.y + runtimeWindowSize.y - outerPad);
                     const ImVec2 contentInnerMin(hostMin.x + contentPadding, hostMin.y + contentPadding);
                     const ImVec2 contentInnerSize(
@@ -1712,7 +1679,8 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                     runtimeDrawList->AddRect(headerMin, headerMax, main_runtime_theme::GetAccentTintU32(0.70f, 0.70f), 11.0f, 0, 1.0f);
 
                     const ImVec2 flameCenter(headerMin.x + 28.0f, headerMin.y + headerHeight * 0.5f);
-                    runtimeDrawList->AddCircleFilled(flameCenter, 18.0f, main_runtime_theme::GetAccentTintU32(0.25f, 0.55f), 28);
+                    // No glow halo behind the icon any more - the accent circle used
+                    // to be a soft light spill ("neon"); the icon itself stays.
                     {
                         ImFont *iconFont = custom::shell::GetIconFont();
                         const char *logoIcon = ICON_FA_FIRE;
@@ -1765,6 +1733,39 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 
                     if (custom::shell::DrawCloseCard(closeCardMin, closeCardSize)) {
                         runtime_preview_menu::CollapseMenu(runtimeState);
+                    }
+
+                    // ---- Tab strip: the floating pizza wheel is gone -------------
+                    // The tabs live in the menu now, as a strip right under the
+                    // header: same six pages the wheel could reach, nothing floats
+                    // over the game any more. Clicking one only sets `page`: the
+                    // content still cross-fades through the tabAlpha / activeTab
+                    // swap further down.
+                    {
+                        // id -> the page that tab really draws (see the activeTab
+                        // blocks below): the old wheel labelled 2 "HOME" and 5
+                        // "EXTRA" while those pages actually show the EXTRA switches
+                        // and the changelog. The labels now say what the page is.
+                        static const char *tabNames[] = {"ESP", "EXTRA", "AIM", "SKINS", "MISC", "SETTINGS"};
+                        static const int   tabIds[]   = {1, 2, 3, 4, 5, 6};
+                        const int   tabCount = 6;
+                        const float tabGap = 8.0f;
+                        const float tabW = ImMax(1.0f, (tabStripMax.x - tabStripMin.x - tabGap * (tabCount - 1)) / (float)tabCount);
+
+                        ImGui::SetCursorScreenPos(tabStripMin);
+                        ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(tabGap, 0.0f));
+                        ImFont *tabFont = font::inter_semibold ? font::inter_semibold : ImGui::GetFont();
+                        ImGui::PushFont(tabFont);
+                        for (int i = 0; i < tabCount; ++i) {
+                            if (i > 0) ImGui::SameLine();
+                            if (custom::Page(runtimeState.page == tabIds[i], tabNames[i],
+                                             ImVec2(tabW, tabStripHeight), false, false)) {
+                                runtimeState.page = tabIds[i];
+                                g_LogoPreviewMode = false;
+                            }
+                        }
+                        ImGui::PopFont();
+                        ImGui::PopStyleVar();
                     }
 
                     runtimeState.tabAlpha = ImClamp(runtimeState.tabAlpha + (4.0f * ImGui::GetIO().DeltaTime * (runtimeState.page == runtimeState.activeTab ? 1.0f : -1.0f)), 0.0f, 1.0f);
@@ -1940,6 +1941,23 @@ if (runtimeState.activeTab == 4) {
             ma::g_diag.asked[ma::GateSkin],       ma::g_diag.granted[ma::GateSkin],
             ma::g_diag.asked[ma::GateLoadout],    ma::g_diag.granted[ma::GateLoadout],
             ma::g_diag.asked[ma::GateConfirm],    ma::g_diag.granted[ma::GateConfirm]);
+        // The three DATA-side writes (the part that behaves like the skin: the
+        // client's own objects are rewritten, no answer function has to be asked
+        // for the lock to disappear).
+        ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+            "Client-side writes: list %d/%d  item %d/%d  cell %d/%d",
+            ma::g_diag.asked[ma::GateList], ma::g_diag.granted[ma::GateList],
+            ma::g_diag.asked[ma::GateItem], ma::g_diag.granted[ma::GateItem],
+            ma::g_diag.asked[ma::GateCell], ma::g_diag.granted[ma::GateCell]);
+        // Did the hook itself land? A 0 here means the address never took the
+        // hook (bad dump / failed install), which is why the counters above stay
+        // at 0/0 - it is the first thing to check on a game update.
+        ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+            "Hooks landed: att %d skin %d loadout %d confirm %d | list %d item %d cell %d",
+            ma::g_landed[ma::GateAttachment] ? 1 : 0, ma::g_landed[ma::GateSkin] ? 1 : 0,
+            ma::g_landed[ma::GateLoadout] ? 1 : 0,    ma::g_landed[ma::GateConfirm] ? 1 : 0,
+            ma::g_landed[ma::GateList] ? 1 : 0,       ma::g_landed[ma::GateItem] ? 1 : 0,
+            ma::g_landed[ma::GateCell] ? 1 : 0);
     }
 
     RenderSkinCategoryContent(skinSubTab, true);
@@ -2317,206 +2335,6 @@ if (runtimeState.activeTab == 4) {
         }
 
         ImGui::PopStyleVar();
-    }
-
-    if (isLogin && isMenuVisible && !windowCollapsed) {
-        const float WW = 320.0f;
-        const float WH = 320.0f;
-        const float cx = WW * 0.5f;
-        const float cy = WH * 0.5f;
-        const float outerR  = 130.0f;
-        const float itemR   = 92.0f;
-        const float centerR = 50.0f;
-
-        if (!g_WheelPosInit) {
-            const float menuW = ImMin(900.0f, ioDisplaySize.x * 0.72f);
-            const float menuH = ImMin(600.0f, ioDisplaySize.y * 0.88f);
-            const float totalW = menuW + WW + 24.0f;
-            if (totalW < ioDisplaySize.x) {
-                g_WheelPos = ImVec2((ioDisplaySize.x - totalW) * 0.5f + menuW + 24.0f,
-                                    (ioDisplaySize.y - WH) * 0.5f);
-            } else {
-                g_WheelPos = ImVec2((ioDisplaySize.x - WW) * 0.5f,
-                                    ioDisplaySize.y - WH - 20.0f);
-            }
-            g_WheelPosInit = true;
-        }
-
-        g_WheelPos.x = ImClamp(g_WheelPos.x, 0.0f, ImMax(0.0f, ioDisplaySize.x - WW));
-        g_WheelPos.y = ImClamp(g_WheelPos.y, 0.0f, ImMax(0.0f, ioDisplaySize.y - WH));
-
-        ImGui::SetNextWindowPos(g_WheelPos, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(WW, WH), ImGuiCond_Always);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_Border,  ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-
-        if (ImGui::Begin("##RadialWheel", nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground)) {
-
-            ImDrawList* wdl = ImGui::GetWindowDrawList();
-            ImVec2 wp2 = ImGui::GetWindowPos();
-            const float cx2 = wp2.x + cx;
-            const float cy2 = wp2.y + cy;
-
-            static float t = 0.0f;
-            t += ImGui::GetIO().DeltaTime * 0.6f;
-
-            auto RainbowU32 = [](float hue, int alpha) -> ImU32 {
-                float r, g, b;
-                ImGui::ColorConvertHSVtoRGB(hue - floorf(hue), 0.95f, 1.0f, r, g, b);
-                return IM_COL32((int)(r * 255), (int)(g * 255), (int)(b * 255), alpha);
-            };
-
-            {
-                ImVec2 mouse = ImGui::GetIO().MousePos;
-                float dx = mouse.x - cx2;
-                float dy = mouse.y - cy2;
-                float dist = sqrtf(dx * dx + dy * dy);
-
-                bool overTile = false;
-                for (int i = 0; i < 6; ++i) {
-                    float a = -IM_PI * 0.5f + (2.0f * IM_PI / 6.0f) * i;
-                    ImVec2 ic(cx2 + cosf(a) * itemR, cy2 + sinf(a) * itemR);
-                    float ddx = mouse.x - ic.x;
-                    float ddy = mouse.y - ic.y;
-                    if (ddx * ddx + ddy * ddy < 42.0f * 42.0f) { overTile = true; break; }
-                }
-
-                static bool s_dragActive = false;
-                static ImVec2 s_dragAnchor, s_wheelAnchor;
-
-                bool insideRing = (dist < outerR + 22.0f) && (dist > 0.0f);
-                if (insideRing && !overTile && ImGui::IsMouseClicked(0)) {
-                    s_dragActive = true;
-                    s_dragAnchor = mouse;
-                    s_wheelAnchor = g_WheelPos;
-                }
-                if (!ImGui::IsMouseDown(0)) s_dragActive = false;
-                if (s_dragActive) {
-                    g_WheelPos.x = s_wheelAnchor.x + (mouse.x - s_dragAnchor.x);
-                    g_WheelPos.y = s_wheelAnchor.y + (mouse.y - s_dragAnchor.y);
-                }
-            }
-
-            const int   slices    = 12;
-            const float sliceStep = (2.0f * IM_PI) / (float)slices;
-            for (int i = 0; i < slices; ++i) {
-                float a0 = -IM_PI * 0.5f + sliceStep * i + 0.02f;
-                float a1 = -IM_PI * 0.5f + sliceStep * (i + 1) - 0.02f;
-                float hue = t + (float)i / (float)slices;
-                wdl->PathClear();
-                wdl->PathArcTo(ImVec2(cx2, cy2), outerR + 3.0f, a0, a1, 24);
-                wdl->PathStroke(RainbowU32(hue, 230), false, 6.0f);
-                wdl->PathClear();
-                wdl->PathArcTo(ImVec2(cx2, cy2), outerR + 8.0f, a0, a1, 24);
-                wdl->PathStroke(RainbowU32(hue, 70), false, 3.0f);
-            }
-
-            wdl->AddCircleFilled(ImVec2(cx2, cy2), outerR + 1.0f, IM_COL32(10, 4, 22, 200), 96);
-            wdl->AddCircle(ImVec2(cx2, cy2), outerR - 18.0f, IM_COL32(160, 80, 255, 25), 96, 0.8f);
-            wdl->AddCircle(ImVec2(cx2, cy2), outerR - 38.0f, IM_COL32(160, 80, 255, 18), 96, 0.6f);
-
-            for (int i = 0; i < slices; ++i) {
-                float a = -IM_PI * 0.5f + sliceStep * i;
-                float hue = t + (float)i / (float)slices;
-                ImVec2 p0(cx2 + cosf(a) * (centerR + 4.0f), cy2 + sinf(a) * (centerR + 4.0f));
-                ImVec2 p1(cx2 + cosf(a) * (outerR + 1.0f),  cy2 + sinf(a) * (outerR + 1.0f));
-                wdl->AddLine(p0, p1, RainbowU32(hue, 90), 1.0f);
-            }
-
-            const char* radialIcons[] = { ICON_FA_HOME, ICON_FA_EYE, ICON_FA_SLIDERS_H, ICON_FA_STAR, ICON_FA_MICROCHIP, ICON_FA_COG };
-            const char* radialNames[] = { "HOME", "ESP", "EXTRA", "SKINS", "AIM", "SETTINGS" };
-            const int   radialIds[]   = { 2, 1, 5, 4, 3, 6 };
-
-            auto DrawHex = [&](ImVec2 center, float radius, ImU32 fillCol, ImU32 borderCol, float thick) {
-                ImVec2 pts[6];
-                for (int j = 0; j < 6; j++) {
-                    float angle = IM_PI / 6.0f + j * (IM_PI / 3.0f);
-                    pts[j] = ImVec2(center.x + cosf(angle) * radius, center.y + sinf(angle) * radius);
-                }
-                wdl->AddConvexPolyFilled(pts, 6, fillCol);
-                if (thick > 0.0f)
-                    for (int j = 0; j < 6; j++)
-                        wdl->AddLine(pts[j], pts[(j+1)%6], borderCol, thick);
-            };
-
-            for (int i = 0; i < 6; ++i) {
-                float a = -IM_PI * 0.5f + (2.0f * IM_PI / 6.0f) * i;
-                const ImVec2 itemCenter(cx2 + cosf(a) * itemR, cy2 + sinf(a) * itemR);
-                const bool active = (page == radialIds[i]);
-                const float hexR = active ? 34.0f : 30.0f;
-                float hue = t + (float)i / 6.0f;
-                ImU32 scU32 = RainbowU32(hue, 255);
-
-                if (active) {
-                    DrawHex(itemCenter, hexR + 12.0f, RainbowU32(hue, 25), IM_COL32(0,0,0,0), 0.0f);
-                    DrawHex(itemCenter, hexR + 7.0f,  RainbowU32(hue, 60), IM_COL32(0,0,0,0), 0.0f);
-                }
-
-                ImU32 hexFill;
-                if (active) {
-                    float r, g, b;
-                    ImGui::ColorConvertHSVtoRGB(hue - floorf(hue), 0.85f, 0.55f, r, g, b);
-                    hexFill = IM_COL32((int)(r*255), (int)(g*255), (int)(b*255), 230);
-                } else hexFill = IM_COL32(16, 8, 32, 245);
-
-                ImU32 hexBorder = active ? scU32 : IM_COL32(120, 80, 180, 180);
-                DrawHex(itemCenter, hexR, hexFill, hexBorder, active ? 2.5f : 1.2f);
-
-                if (active)
-                    DrawHex(ImVec2(itemCenter.x - 2.0f, itemCenter.y - 4.0f), hexR * 0.48f, IM_COL32(255,255,255,40), IM_COL32(0,0,0,0), 0.0f);
-                else
-                    DrawHex(itemCenter, hexR - 5.0f, IM_COL32(0,0,0,0), IM_COL32(140, 100, 200, 70), 0.7f);
-
-                ImFont* font = ImGui::GetFont();
-                const float iconScale = 0.82f, textScale = 0.58f;
-                const ImVec2 iconSz = font->CalcTextSizeA(ImGui::GetFontSize() * iconScale, FLT_MAX, 0.0f, radialIcons[i]);
-                const ImVec2 nameSz = font->CalcTextSizeA(ImGui::GetFontSize() * textScale, FLT_MAX, 0.0f, radialNames[i]);
-
-                ImU32 iconCol = active ? IM_COL32(255,255,255,255) : IM_COL32(153,153,184,255);
-                ImU32 nameCol = active ? scU32 : IM_COL32(97,97,122,255);
-
-                wdl->AddText(font, ImGui::GetFontSize() * iconScale,
-                    ImVec2(itemCenter.x - iconSz.x * 0.5f, itemCenter.y - 15.0f), iconCol, radialIcons[i]);
-                wdl->AddText(font, ImGui::GetFontSize() * textScale,
-                    ImVec2(itemCenter.x - nameSz.x * 0.5f, itemCenter.y + 6.0f), nameCol, radialNames[i]);
-
-                ImGui::SetCursorScreenPos(ImVec2(itemCenter.x - 38.0f, itemCenter.y - 38.0f));
-                char tabId[64]; snprintf(tabId, sizeof(tabId), "##Radial_%d", radialIds[i]);
-                if (ImGui::InvisibleButton(tabId, ImVec2(76.0f, 76.0f))) {
-                    page = radialIds[i];
-                    activeTab = radialIds[i];
-                    g_LogoPreviewMode = false;
-                }
-            }
-
-            {
-                ImVec2 octPts[8];
-                for (int j = 0; j < 8; j++) {
-                    float ang = j * (IM_PI / 4.0f) + IM_PI / 8.0f;
-                    octPts[j] = ImVec2(cx2 + cosf(ang) * centerR, cy2 + sinf(ang) * centerR);
-                }
-                wdl->AddConvexPolyFilled(octPts, 8, IM_COL32(6, 2, 14, 255));
-                for (int j = 0; j < 8; j++) {
-                    float hue = t + (float)j / 8.0f;
-                    wdl->AddLine(octPts[j], octPts[(j+1)%8], RainbowU32(hue, 230), 2.2f);
-                }
-            }
-
-            {
-                const char* centerText = "ETHNIR NOIR";
-                ImFont* cf = font::inter_semibold ? font::inter_semibold : ImGui::GetFont();
-                ImVec2 ts = cf->CalcTextSizeA(15.0f, FLT_MAX, 0.0f, centerText);
-                wdl->AddText(cf, 15.0f, ImVec2(cx2 - ts.x * 0.5f, cy2 - ts.y * 0.5f), RainbowU32(t, 255), centerText);
-            }
-        }
-        ImGui::End();
-        ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(2);
     }
 
     auto Input_get_touchCount = (int (*)())(Class_Input_get_touchCount);

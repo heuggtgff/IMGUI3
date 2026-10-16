@@ -33,6 +33,7 @@
 // under System/Hooks is ever compiled into the APK.
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -149,6 +150,76 @@ static void setFlags(bool mythic, bool legacyAttachment)
     Config.ExtraMenu.Attachment        = legacyAttachment;
 }
 
+// -- helpers: a List<AttachmentGroupNew> and its rows, at the offsets the
+// dump documents (absolute from the object pointer, IL2CPP's 16-byte header
+// included - kAttachGroupNew_OwnState / kList_* / kArray_*).
+static char *make_group(int ownState)
+{
+    char *g = (char *)calloc(1, 0x40);
+    *(int *)(g + kAttachGroupNew_OwnState) = ownState;
+    return g;
+}
+static char *make_list(char **groups, int count, int backingCapacity)
+{
+    char *list = (char *)calloc(1, 0x28);
+    char *arr  = (char *)calloc(1, kArray_Data + sizeof(void *) * (size_t)backingCapacity);
+    *(uint64_t *)(arr + kArray_MaxLen) = (uint64_t)backingCapacity;
+    for (int i = 0; i < count && i < backingCapacity; i++)
+        *(void **)(arr + kArray_Data + i * sizeof(void *)) = groups[i];
+    *(void **)(list + kList_Items) = arr;
+    *(int *)(list + kList_Size) = count;
+    return list;
+}
+static void free_list(char *list)
+{
+    if (!list) return;
+    free(*(void **)(list + kList_Items));
+    free(list);
+}
+static int own_state(char *group) { return *(int *)(group + kAttachGroupNew_OwnState); }
+
+// -- fake originals -------------------------------------------------------
+static void  *g_fakeList = nullptr;
+static int    g_listCalls = 0;
+static int    g_listType  = -1;
+static void  *fake_origGetAttachmentList(void *, int attachmentType)
+{
+    g_listCalls++;
+    g_listType = attachmentType;
+    return g_fakeList;
+}
+
+static int    g_itemCalls = 0;
+static void  *g_itemInstance = nullptr, *g_itemGroup = nullptr, *g_itemPanel = nullptr;
+static void   fake_origItemSetData(void *instance, void *group, void *panel)
+{
+    g_itemCalls++;
+    g_itemInstance = instance; g_itemGroup = group; g_itemPanel = panel;
+}
+
+static int    g_cellCalls = 0;
+static int32_t g_cellWeapon = -1, g_cellType = -1, g_cellState = -1;
+static void   *g_cellAttachItem = nullptr, *g_cellCallback = nullptr;
+static void   *g_cellConflict = nullptr, *g_cellPosName = nullptr;
+static bool   g_cellTransmog = false, g_cellReddot = false, g_cellGuar = false;
+static void   fake_origCellSetData(void *, uint32_t weaponID, int32_t attachmentType,
+                                   void *attachItem, void *callback, int32_t cellState,
+                                   void *conflict, void *posName, bool transmog,
+                                   bool reddot, bool guar)
+{
+    g_cellCalls++;
+    g_cellWeapon = (int32_t)weaponID; g_cellType = attachmentType; g_cellState = cellState;
+    g_cellAttachItem = attachItem; g_cellCallback = callback;
+    g_cellConflict = conflict; g_cellPosName = posName;
+    g_cellTransmog = transmog; g_cellReddot = reddot; g_cellGuar = guar;
+}
+static void installLayer2Fakes()
+{
+    orig_GetAttachmentList     = fake_origGetAttachmentList;
+    orig_AttachmentItemSetData = fake_origItemSetData;
+    orig_AttachmentCellSetData = fake_origCellSetData;
+}
+
 int main()
 {
     // ---- M1: the documented default ---------------------------------------
@@ -257,6 +328,203 @@ int main()
               !IsAttachUnlock(&g_instance, 0x555, 0x1234),
               "M6 with no original installed the pass-through answers false, it does not dereference null");
     }
+
+    // ==== Layer 2: the client-side DATA writes ==============================
+    // These three hooks do not answer a question, they rewrite the client's own
+    // objects (dump field layout) exactly the way the Skin tab writes config rows
+    // when it applies a mythic - so the lock disappears without any of the four
+    // answer functions above ever being asked.
+
+    // The helpers and fake originals for these hooks live at file scope,
+    // above main() - C++ does not allow nested function definitions.
+
+    installLayer2Fakes();
+
+    // ---- M7: ON rewrites the rows the popup is about to draw ---------------
+    setFlags(true, false);
+    memset(&g_diag, 0, sizeof(g_diag));
+    g_listCalls = 0; g_listType = -1;
+    {
+        char *groups[5] = {make_group(kOwnStateELock), make_group(3 /*EEquip*/),
+                           make_group(2 /*EDefault*/), make_group(kOwnStateEUnlock),
+                           make_group(kOwnStateELock)};
+        g_fakeList = make_list(groups, 5, 5);
+
+        void *ret = GetAttachmentList(&g_instance, 7);
+        CHECK(ret == g_fakeList,
+              "M7 ON: the game's own list comes back untouched (same pointer)");
+        CHECK(own_state(groups[0]) == kOwnStateEUnlock && own_state(groups[4]) == kOwnStateEUnlock,
+              "M7 ON: every ELock row is rewritten to EUnlock in place");
+        CHECK(own_state(groups[1]) == 3 && own_state(groups[2]) == 2 && own_state(groups[3]) == kOwnStateEUnlock,
+              "M7 ON: equipped / default / already-unlocked rows keep the state the game gave them");
+        CHECK(g_listCalls == 1 && g_listType == 7,
+              "M7 ON: the real builder was called exactly once, with the attachment type intact");
+        CHECK(g_diag.asked[GateList] == 1 && g_diag.granted[GateList] == 1,
+              "M7 ON: list gate counts one ask and one grant");
+
+        free_list((char *)g_fakeList);
+        for (int i = 0; i < 5; i++) free(groups[i]);
+        g_fakeList = nullptr;
+    }
+
+    // ---- M8: OFF leaves the rows exactly as the game made them -------------
+    setFlags(false, false);
+    memset(&g_diag, 0, sizeof(g_diag));
+    g_listCalls = 0;
+    {
+        char *groups[2] = {make_group(kOwnStateELock), make_group(kOwnStateELock)};
+        g_fakeList = make_list(groups, 2, 2);
+
+        GetAttachmentList(&g_instance, 3);
+        CHECK(own_state(groups[0]) == kOwnStateELock && own_state(groups[1]) == kOwnStateELock,
+              "M8 OFF: nothing is rewritten - the game's own ownership stands");
+        CHECK(g_listCalls == 1 && g_listType == 3,
+              "M8 OFF: ... and the real builder still ran once with its argument");
+        CHECK(g_diag.asked[GateList] == 1 && g_diag.granted[GateList] == 0,
+              "M8 OFF: asked, not granted");
+
+        free_list((char *)g_fakeList);
+        for (int i = 0; i < 2; i++) free(groups[i]);
+        g_fakeList = nullptr;
+    }
+
+    // ---- M9/M10: the row handed to its view -------------------------------
+    setFlags(true, false);
+    memset(&g_diag, 0, sizeof(g_diag));
+    g_itemCalls = 0;
+    {
+        char *locked = make_group(kOwnStateELock);
+        char *equipped = make_group(3);
+        int panel = 0;
+
+        AttachmentItemSetData(&g_instance, locked, &panel);
+        CHECK(own_state(locked) == kOwnStateEUnlock,
+              "M9 ON: the row is unlocked BEFORE the view reads it");
+        CHECK(g_itemCalls == 1 && g_itemInstance == &g_instance &&
+              g_itemGroup == locked && g_itemPanel == &panel,
+              "M9 ON: the real SetData still gets all three arguments unchanged");
+        CHECK(g_diag.asked[GateItem] == 1 && g_diag.granted[GateItem] == 1,
+              "M9 ON: item gate counts one ask and one grant");
+
+        AttachmentItemSetData(&g_instance, equipped, &panel);
+        CHECK(own_state(equipped) == 3,
+              "M9 ON: an equipped row is left alone (only ELock is rewritten)");
+        CHECK(g_diag.granted[GateItem] == 1,
+              "M9 ON: ... so nothing is double counted as granted");
+
+        setFlags(false, false);
+        memset(&g_diag, 0, sizeof(g_diag));
+        g_itemCalls = 0;
+        char *locked2 = make_group(kOwnStateELock);
+        AttachmentItemSetData(&g_instance, locked2, &panel);
+        CHECK(own_state(locked2) == kOwnStateELock && g_itemCalls == 1,
+              "M10 OFF: the row keeps the game's lock and the real SetData runs");
+        CHECK(g_diag.asked[GateItem] == 1 && g_diag.granted[GateItem] == 0,
+              "M10 OFF: asked, not granted");
+
+        free(locked); free(equipped); free(locked2);
+    }
+
+    // ---- M11/M12: the gunsmith's cell state --------------------------------
+    setFlags(true, false);
+    memset(&g_diag, 0, sizeof(g_diag));
+    g_cellCalls = 0;
+    {
+        int attachItem = 0, callback = 0, conflict = 0, posName = 0;
+        AttachmentCellSetData(&g_instance, 0x1122u, 4, &attachItem, &callback,
+                              kCellStateELocked, &conflict, &posName,
+                              /*transmog=*/true, /*reddot=*/false, /*guar=*/true);
+        CHECK(g_cellCalls == 1 && g_cellState == kCellStateENone,
+              "M11 ON: a locked slot reaches the game as unlocked");
+        CHECK(g_cellWeapon == 0x1122 && g_cellType == 4 &&
+              g_cellAttachItem == &attachItem && g_cellCallback == &callback &&
+              g_cellConflict == &conflict && g_cellPosName == &posName,
+              "M11 ON: every argument before cellState arrives unchanged");
+        CHECK(g_cellTransmog && !g_cellReddot && g_cellGuar,
+              "M11 ON: the two defaulted bools at the end arrive unchanged too");
+        CHECK(g_diag.asked[GateCell] == 1 && g_diag.granted[GateCell] == 1,
+              "M11 ON: cell gate counts one ask and one grant");
+
+        AttachmentCellSetData(&g_instance, 0x1122u, 4, &attachItem, &callback,
+                              1 /*EConflict*/, &conflict, &posName, false, true, false);
+        CHECK(g_cellState == 1,
+              "M11 ON: a conflicting slot keeps its state - only ELocked is rewritten");
+        AttachmentCellSetData(&g_instance, 0x1122u, 4, &attachItem, &callback,
+                              2 /*EInvalid*/, &conflict, &posName, false, true, false);
+        CHECK(g_cellState == 2,
+              "M11 ON: an invalid slot keeps its state too");
+
+        setFlags(false, false);
+        memset(&g_diag, 0, sizeof(g_diag));
+        g_cellCalls = 0;
+        AttachmentCellSetData(&g_instance, 0x1122u, 4, &attachItem, &callback,
+                              kCellStateELocked, &conflict, &posName, false, true, false);
+        CHECK(g_cellState == kCellStateELocked && g_cellCalls == 1,
+              "M12 OFF: the locked state reaches the game unchanged");
+        CHECK(g_diag.asked[GateCell] == 1 && g_diag.granted[GateCell] == 0,
+              "M12 OFF: asked, not granted");
+    }
+
+    // ---- M13: a malformed list stops instead of walking off the heap -------
+    setFlags(true, false);
+    memset(&g_diag, 0, sizeof(g_diag));
+    {
+        CHECK(UnlockOwnStateInGroupList(nullptr) == 0,
+              "M13 a null list rewrites nothing and does not crash");
+        CHECK(UnlockOwnStateGroup(nullptr) == false,
+              "M13 a null row is never written");
+        CHECK(g_diag.granted[GateList] == 0 && g_diag.granted[GateItem] == 0,
+              "M13 ... and nothing is counted as granted");
+
+        // size larger than the backing array's own length -> refused outright.
+        char *group = make_group(kOwnStateELock);
+        char *bad[1] = {group};
+        char *list = make_list(bad, /*count=*/5, /*backingCapacity=*/2);
+        CHECK(UnlockOwnStateInGroupList(list) == 0 && own_state(group) == kOwnStateELock,
+              "M13 a size the backing array cannot hold is refused before any write");
+        free_list(list);
+
+        // an absurd capacity is refused too.
+        char *list2 = make_list(bad, 1, 1);
+        *(uint64_t *)((char *)*(void **)((char *)list2 + kList_Items) + kArray_MaxLen) = 100000;
+        CHECK(UnlockOwnStateInGroupList(list2) == 0 && own_state(group) == kOwnStateELock,
+              "M13 ... and so is a capacity no attachment list can have");
+        free_list(list2);
+        free(group);
+    }
+
+    // ---- M14: before the hooks install, layer 2 must not dereference null ---
+    orig_GetAttachmentList     = nullptr;
+    orig_AttachmentItemSetData = nullptr;
+    orig_AttachmentCellSetData = nullptr;
+    setFlags(true, false);
+    {
+        g_listCalls = 0; g_itemCalls = 0; g_cellCalls = 0;
+        CHECK(GetAttachmentList(&g_instance, 1) == nullptr && g_listCalls == 0,
+              "M14 with no original the list hook returns null instead of crashing");
+        char *group = make_group(kOwnStateELock);
+        int panel = 0, attach = 0, cb = 0;
+        AttachmentItemSetData(&g_instance, group, &panel);
+        CHECK(g_itemCalls == 0, "M14 ... the item hook calls nothing");
+        AttachmentCellSetData(&g_instance, 1u, 1, &attach, &cb, kCellStateELocked,
+                              nullptr, nullptr, false, false, false);
+        CHECK(g_cellCalls == 0, "M14 ... and the cell hook calls nothing");
+        free(group);
+    }
+    installLayer2Fakes();
+
+    // ---- M15: the landed flags the SKINS tab prints -------------------------
+    memset(g_landed, 0, sizeof(g_landed));
+    NoteLanded(GateList, true);
+    NoteLanded(GateCell, false);
+    NoteLanded((Gate)99, true);          // out of range is ignored, not written
+    bool otherFlagSet = false;
+    for (int gi = 0; gi < GateCount; gi++)
+        if (gi != GateList && g_landed[gi]) otherFlagSet = true;
+    CHECK(g_landed[GateList] && !g_landed[GateCell],
+          "M15 a landed hook is reported, a failed one is not");
+    CHECK(!otherFlagSet,
+          "M15 an out-of-range gate leaves every other flag clear");
 
     // Leave the global config as the rest of the session would find it.
     setFlags(true, false);

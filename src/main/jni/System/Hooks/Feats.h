@@ -952,4 +952,24 @@ inline void InitializeAllHooks() {
     HOOK_LIB("libunity.so", "0xA61AD54", IsWeaponSkinUnlock, orig_IsWeaponSkinUnlock);
     HOOK_LIB("libunity.so", "0x5D40528", IsThisAttachmentUnlock, orig_IsThisAttachmentUnlock);
     HOOK_LIB("libunity.so", "0xA188634", IsAttachUnlock, orig_IsAttachUnlock);
+
+    //-- Mythic Attachments, LAYER 2: the client-side DATA writes that make an
+    //   applied skin behave like really owned (the four answers above were
+    //   never asked on device - they are small enough to be inlined into their
+    //   callers). These three are the builders / SetData of the very screen
+    //   that draws the lock, so the lock is rewritten instead of answered.
+    HOOK_LIB("libunity.so", "0xB6323C0", GetAttachmentList, orig_GetAttachmentList);
+    HOOK_LIB("libunity.so", "0xB83F1C0", AttachmentItemSetData, orig_AttachmentItemSetData);
+    HOOK_LIB("libunity.so", "0xB83D5E0", AttachmentCellSetData, orig_AttachmentCellSetData);
+
+    // Which of those seven addresses actually took the hook? The hooker only
+    // fills the original pointer on success, and the SKINS tab prints these -
+    // a 0 there is the reason that gate's asked/granted counter stays at 0/0.
+    mythic_attachments::NoteLanded(mythic_attachments::GateAttachment, orig_IsWeaponAttachmentUnlock != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateSkin,       orig_IsWeaponSkinUnlock != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateLoadout,    orig_IsThisAttachmentUnlock != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateConfirm,    orig_IsAttachUnlock != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateList,       orig_GetAttachmentList != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateItem,       orig_AttachmentItemSetData != nullptr);
+    mythic_attachments::NoteLanded(mythic_attachments::GateCell,       orig_AttachmentCellSetData != nullptr);
 }
