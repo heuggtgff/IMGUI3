@@ -1377,6 +1377,12 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
         Config.sColorsESPBOT.SkeletonBOT = CREATE_COLOR(0, 255, 0, 180);
         Config.sColorsESPOTHERS.PovOTHERS = CREATE_COLOR(225, 0, 0, 180);
         Config.ExtraMenu.NoGravityScale = 1.0f;
+        // Mythic Attachments is ON by default: an applied skin behaves as if it
+        // were really owned, so the weapon's attachments (the mythic's own ones
+        // included) are not locked. Every other ExtraMenu option stays off; the
+        // checkbox that turns this one off lives in the SKINS tab, next to
+        // Unlock Blueprints. See System/Hooks/MythicAttachments.h.
+        Config.ExtraMenu.MythicAttachments = true;
         Config.Aim.AimAssistSize = 0.0f;
         Config.Aim.Cross = 45.0f;
         Config.Aim.Target = EAimTarget::Heads;
@@ -1918,6 +1924,23 @@ if (runtimeState.activeTab == 4) {
     const ChildFrame skinChild = BeginContentChild("SKINS", ImVec2(contentRegion.x, childHeight));
 
     custom::Checkbox("Unlock Blueprints", &Config.ExtraMenu.Blueprints);
+    // Attachments counted as unlocked for the weapon wearing an applied skin -
+    // the mythic's own set included - so the loadout stops drawing them locked.
+    // Client-side answers only; the server still knows the real inventory.
+    custom::Checkbox("Mythic Attachments", &Config.ExtraMenu.MythicAttachments);
+    // Live instrument: how often the loadout / skin UI asked each of the four
+    // unlock questions and how often this feature answered YES. That UI asks them
+    // by itself, so non-zero counters are the on-device proof that the hooks are
+    // installed at the dump's addresses (see System/Hooks/MythicAttachments.h).
+    {
+        namespace ma = mythic_attachments;
+        ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+            "Unlock gates asked/granted: att %d/%d  skin %d/%d  loadout %d/%d  confirm %d/%d",
+            ma::g_diag.asked[ma::GateAttachment], ma::g_diag.granted[ma::GateAttachment],
+            ma::g_diag.asked[ma::GateSkin],       ma::g_diag.granted[ma::GateSkin],
+            ma::g_diag.asked[ma::GateLoadout],    ma::g_diag.granted[ma::GateLoadout],
+            ma::g_diag.asked[ma::GateConfirm],    ma::g_diag.granted[ma::GateConfirm]);
+    }
 
     RenderSkinCategoryContent(skinSubTab, true);
     EndContentChild(skinChild);

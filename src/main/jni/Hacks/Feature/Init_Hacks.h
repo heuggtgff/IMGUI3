@@ -196,6 +196,11 @@ sColorsESPBOT sColorsESPBOT{0};
         bool EnhanceFPS;
         bool Spectatex;
         bool Attachment;
+        // "Mythic Attachments": with an applied weapon skin, the client answers
+        // YES to the skin's own unlock question and to every attachment unlock
+        // question (see System/Hooks/MythicAttachments.h). ON by default - this
+        // is what makes an applied mythic behave as if it were really owned.
+        bool MythicAttachments = true;
 		bool Blueprints;
 		bool ClearDisplay;
 		bool ResetGuest;

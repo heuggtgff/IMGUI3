@@ -605,15 +605,13 @@ inline bool IsUnlocked(void *instance) {
     return orig_IsUnlocked(instance);
 }
 
-inline bool (*orig_IsWeaponAttachmentUnlock)(void *instance);
-inline bool IsWeaponAttachmentUnlock(void *instance) {
-    if (instance != NULL) {
-        if (Config.ExtraMenu.Attachment) {
-            return true;
-        }
-    }
-    return orig_IsWeaponAttachmentUnlock(instance);
-}
+// Mythic Attachments (unlock-as-if-owned) lives in its own header: the four
+// client-side gates that decide whether an applied skin and the weapon's
+// attachments count as unlocked - WeaponPromotionInfo.IsWeaponAttachmentUnlock
+// 0xA61AA00, WeaponPromotionInfo.IsWeaponSkinUnlock 0xA61AD54,
+// LoadoutWeaponsUIHelper.IsThisAttachmentUnlock 0x5D40528 and
+// WeaponAttr.IsAttachUnlock 0xA188634. See System/Hooks/MythicAttachments.h.
+#include "MythicAttachments.h"
 
 // No Spectate Deelay
 inline bool (*o_NeedDelayProcess)(void *instance, int a, int b);
@@ -947,6 +945,11 @@ inline void InitializeAllHooks() {
 
     //-- Unlock Blueprints
     HOOK_LIB("libunity.so", "0x901F988", IsUnlocked, orig_IsUnlocked);
-    
+
+    //-- Unlock Attachments / Mythic Attachments (see MythicAttachments.h). The
+    //   RVAs are the dump's, same convention as every hook above.
     HOOK_LIB("libunity.so", "0xA61AA00", IsWeaponAttachmentUnlock, orig_IsWeaponAttachmentUnlock);
+    HOOK_LIB("libunity.so", "0xA61AD54", IsWeaponSkinUnlock, orig_IsWeaponSkinUnlock);
+    HOOK_LIB("libunity.so", "0x5D40528", IsThisAttachmentUnlock, orig_IsThisAttachmentUnlock);
+    HOOK_LIB("libunity.so", "0xA188634", IsAttachUnlock, orig_IsAttachUnlock);
 }
