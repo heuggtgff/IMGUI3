@@ -293,9 +293,9 @@ std::string Login(const char *user_key) {
 	usedKey = user_key;  
     
 	if (isVipKey(user_key)) {  
-        userType = "DELUXE PAID";  
+        userType = "ETHNIR PREM";  
     } else {  
-        userType = "DELUXE PAID";  
+        userType = "ETHNIR FREE";  
     }  
 	
     struct MemoryStruct chunk{};
@@ -317,7 +317,7 @@ std::string Login(const char *user_key) {
         
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
         char data[4096];
-        sprintf(data, "game=CODMDL&user_key=%s&serial=%s", user_key, UUID.c_str());
+        sprintf(data, "game=CODMGR&user_key=%s&serial=%s", user_key, UUID.c_str());
         curl_easy_setopt(curl, CURLOPT_POSTFIELDS, data);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *) &chunk);
@@ -337,7 +337,7 @@ std::string Login(const char *user_key) {
                     expiryTimestamp = parseExpiryDate(EXP);  
 					
                     if (rng + 30 > time(0)) {
-                        std::string auth = "CODMDL";
+                        std::string auth = "CODMDGR";
                         auth += "-";
                         auth += user_key;
                         auth += "-";
