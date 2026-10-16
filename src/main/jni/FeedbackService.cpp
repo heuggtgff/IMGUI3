@@ -316,7 +316,7 @@ std::string BuildFeedbackPayload(const FeedbackState& snapshot) {
     oss << "<b>🔧 Version:</b> <code>1.6.57</code>\n"; 
     oss << "<b>🛡️ Status:</b> <code>Safe</code>\n\n"; 
     
-    oss << "<b>🛒 BUY KEY TO:</b> @ThaxxylHax"; 
+    oss << "<b>🛒 BUY KEY TO:</b> @Shaiaintshyy"; 
     if (snapshot.note[0] != '\0') { 
         oss << "\n<b>📝 Logs:</b> " << snapshot.note; 
     } 

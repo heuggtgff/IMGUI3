@@ -375,8 +375,11 @@ static void testRay()
         Vector3 out{9.0f, 9.0f, 9.0f};
         bool g = true, f = true, pl = false;
         CrosshairRayDir(nullptr, nullptr, CAM_POS, out, g, f, pl);
-        CHECK(pl && !g && !f && SameVec(out, CAM_FORWARD),
-              "R6 an off-centre dot nobody can apply -> the centre ray + plain=1");
+        // The plain centre ray is NOT an honest stand-in any more: pretending it
+        // is the dot's ray fires the trigger at a line the user is not aiming
+        // down. All flags stay false, so the scan treats this as NO dot ray.
+        CHECK(!g && !f && !pl && SameVec(out, CAM_FORWARD),
+              "R6 an off-centre dot nobody can apply -> NO honest dot ray (all flags false)");
 
         fn_TransformGetRight = fake_get_right;
         fn_TransformGetUp    = fake_get_up;
@@ -413,8 +416,8 @@ static void testRay()
         Vector3 out{9.0f, 9.0f, 9.0f};
         bool g = false, f = true, pl = false;
         CrosshairRayDir(nullptr, nullptr, CAM_POS, out, g, f, pl);
-        CHECK(!g && !f && pl && SameVec(out, CAM_FORWARD),
-              "R8 a 0-height screen drops the offset instead of dividing by 0");
+        CHECK(!g && !f && !pl && SameVec(out, CAM_FORWARD),
+              "R8 a 0-height screen drops the offset (no honest dot ray, no 1/0)");
         CHECK(get_height() == 0, "R8 control: the fake screen really reports 0 height");
 
         api5 = (uintptr_t)&fake_screen_h;

@@ -1643,7 +1643,7 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
             ImGui::SetNextWindowSize(ImVec2(menuW, menuH), ImGuiCond_Always);
             ImGui::SetNextWindowBgAlpha(0.0f);
 
-            ImGui::Begin("@ThaxxylHax", nullptr,
+            ImGui::Begin("@Shaiaintshyy", nullptr,
                 ImGuiWindowFlags_NoTitleBar |
                 ImGuiWindowFlags_NoBringToFrontOnFocus |
                 ImGuiWindowFlags_NoScrollbar |

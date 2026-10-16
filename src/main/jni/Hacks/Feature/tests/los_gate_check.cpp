@@ -622,6 +622,28 @@ static void testCentreRay()
 static Il2CppArray<Pawn *> g_enemyArr;
 static Il2CppList<Pawn *>  g_enemyList;
 
+// Make the HONEST dot ray unavailable: an off-centre dot that neither the game's
+// projection nor the camera basis can honour -> CrosshairRayDir answers with no
+// flags, so the accuracy gate leaves the zone scan running - the only runner
+// left that can still measure the drawn dot's zone. This is exactly the device
+// condition that needs path A skipped and path B tested on its own.
+static void killHonestDotRay()
+{
+    Config.Crosshair.OffsetX = 30.0f;
+    Config.Crosshair.OffsetY = 0.0f;
+    fn_ScreenToWorldPoint    = nullptr;
+    fn_TransformGetRight     = nullptr;
+    fn_TransformGetUp        = nullptr;
+}
+static void restoreHonestDotRay()
+{
+    Config.Crosshair.OffsetX = 0.0f;
+    Config.Crosshair.OffsetY = 0.0f;
+    fn_ScreenToWorldPoint    = fake_screen_to_world;
+    fn_TransformGetRight     = fake_get_right;
+    fn_TransformGetUp        = fake_get_up;
+}
+
 static void setEnemyList(Pawn **pawns, int n)
 {
     std::memset(&g_enemyArr, 0, 16 + 8 + 4);          // header only (m_Items untouched zeros)
@@ -645,8 +667,11 @@ static void testScan()
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
 
     // --- S1: enemy in the zone, ray hits OUR body at 0 m first -> FIRES ----
+    // Path B needs a scan with NO honest dot ray: with one, the accuracy gate
+    // would refuse everything the ray does not name before path B even runs.
     resetWorld();
     setEnemyList(enemies, 1);
+    killHonestDotRay();
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
     g_centreHits = { {0.02f, &g_selfCol} };            // nothing centred
@@ -664,10 +689,12 @@ static void testScan()
         CHECK(g_triggerDiag.lastBlock != (int)FireBlock::NoLineOfSight,
               "S1 'wall in the way' was NOT the verdict");
     }
+    restoreHonestDotRay();
 
     // --- S2: same, but a real wall between camera and enemy -> BLOCKED -----
     resetWorld();
     setEnemyList(enemies, 1);
+    killHonestDotRay();
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
     g_centreHits = { {0.02f, &g_selfCol} };
@@ -679,6 +706,7 @@ static void testScan()
         CHECK(!out.visible && out.pawn == nullptr, "S2 no target escapes with the refusal");
         CHECK(g_triggerDiag.losBlockedScan == 1, "S2 the block is reported in the panel counters");
     }
+    restoreHonestDotRay();
 
     // --- S3: centre ray names him -> path A fires --------------------------
     resetWorld();
@@ -742,6 +770,7 @@ static void testNoTargetFilter()
     // --- F1: the game reports him occluded -> the scan does not care --------
     resetWorld();
     setEnemyList(enemies, 1);
+    killHonestDotRay();
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
     g_lastOccVisible = 0; g_recentlyRendered = 0;      // what "Visible Only" refused
@@ -755,10 +784,12 @@ static void testNoTargetFilter()
         CHECK(g_rayAllCalls >= 1,
               "F1 ... decided by a real visibility ray, not by a getter veto");
     }
+    restoreHonestDotRay();
 
     // --- F2: 40 m away, under the crosshair -> still fired ------------------
     resetWorld();
     setEnemyList(enemies, 1);
+    killHonestDotRay();
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
     objPos(g_targetHead, 0.5f, 1.7f, 40.0f);           // what "Within 25 m" refused
@@ -773,10 +804,12 @@ static void testNoTargetFilter()
         CHECK(g_triggerDiag.losBlocked == 0,
               "F2 ... and it is not reported as a wall either");
     }
+    restoreHonestDotRay();
 
     // --- F3: both removed rules at once -------------------------------------
     resetWorld();
     setEnemyList(enemies, 1);
+    killHonestDotRay();
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
     g_lastOccVisible = 0; g_recentlyRendered = 0;
@@ -792,6 +825,7 @@ static void testNoTargetFilter()
               "F3 occluded AND 40 m away: still fired - neither removed rule survives");
         CHECK(g_triggerDiag.losBlocked == 0, "F3 ... and never reported as a wall");
     }
+    restoreHonestDotRay();
 
     g_w2sImpl = nullptr;
 }
@@ -823,15 +857,20 @@ static void setCrosshair(float offX, float offY, float sizePx, bool drawn = true
     Config.Crosshair.Size    = sizePx;
 }
 
-static FireBlock runScanOnCrosshairSetup(TriggerTarget &out)
+static FireBlock runScanOnCrosshairSetup(TriggerTarget &out, bool dotSeesPawn = false)
 {
-    // One enemy 20 px right of the 1600x900 centre (820,450), and the centre ray
-    // landing on our own body - so path A names nothing and the ZONE decides.
+    // One enemy 20 px right of the 1600x900 centre (820,450). The dot ray's hit
+    // list is separate from the LOS list, so a test can put him under the dot's
+    // ray (path A fires) or leave the ray hitting only our own body - either
+    // way the decision belongs to the ray once an honest dot ray exists.
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
-    g_centreHits = { {0.02f, &g_selfCol} };
+    if (dotSeesPawn)
+        g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };  // the dot NAMES him
+    else
+        g_centreHits = { {0.02f, &g_selfCol} };                       // the dot ray misses
     g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
     return A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
 }
@@ -843,9 +882,9 @@ static void testCrosshairAim()
     setCrosshair(0.0f, 0.0f, 80.0f);
     {
         TriggerTarget out{};
-        FireBlock b = runScanOnCrosshairSetup(out);
-        CHECK(b == FireBlock::Fired && out.path == 1,
-              "X1 the enemy inside the dot's own radius is fired");
+        FireBlock b = runScanOnCrosshairSetup(out, /*dotSeesPawn=*/true);
+        CHECK(b == FireBlock::Fired && out.path == 0,
+              "X1 the enemy under the dot's own ray is fired (path A)");
         CHECK(g_triggerDiag.crosshairCx == 800.0f && g_triggerDiag.crosshairCy == 450.0f,
               "X1 the scan reports the dot's pixel as its crosshair (800,450)");
         CHECK(g_triggerDiag.crosshairRayViaGame == 1,
@@ -865,6 +904,8 @@ static void testCrosshairAim()
               "X2 the same enemy 20 px off the dot is now OUTSIDE it");
         CHECK(b != FireBlock::Fired,
               "X2 ... so shrinking the dot really does tighten the trigger (the old build fired anyway)");
+        CHECK(g_triggerDiag.dotRayDecided,
+              "X2 ... and the refusal came from the dot's own ray, not from the zone");
     }
 
     // --- X3: moving the dot moves the whole scan ---------------------------
@@ -877,7 +918,19 @@ static void testCrosshairAim()
               "X3 the scan aims through the dot (800+40, 450-25)");
         CHECK(g_triggerDiag.crosshairRayViaGame == 1,
               "X3 ... and the ray is the ray through that pixel");
-        CHECK(b == FireBlock::Fired, "X3 the enemy is still inside the moved dot");
+        // The enemy (820,450) is ~32 px off the moved dot - inside the drawn
+        // zone but NOT under the dot's ray. The ray decides, so no fire: this
+        // is exactly the over-fire the report complained about.
+        CHECK(b == FireBlock::NoEnemyInZone && g_triggerDiag.dotRayDecided,
+              "X3 near the dot but NOT under its ray -> NO fire (the over-fire fix)");
+    }
+    resetWorld();
+    setCrosshair(40.0f, -25.0f, 100.0f);
+    {
+        TriggerTarget out{};
+        FireBlock b = runScanOnCrosshairSetup(out, /*dotSeesPawn=*/true);
+        CHECK(b == FireBlock::Fired && out.path == 0,
+              "X3 the same dot ON him still fires (the decision follows the dot)");
     }
 
     // --- X4: a far-away dot stops firing what is under the old centre ------
@@ -914,11 +967,10 @@ static void testCrosshairAim()
     {
         TriggerTarget out{};
         FireBlock b = runScanOnCrosshairSetup(out);
-        CHECK(g_triggerDiag.crosshairRayPlain == 1,
-              "X6 nothing can apply the offset -> reported as plain, not silently ignored");
         CHECK(g_triggerDiag.crosshairRayViaGame == 0 &&
-              g_triggerDiag.crosshairRayFellBack == 0,
-              "X6 ... neither the projection nor the camera basis answered");
+              g_triggerDiag.crosshairRayFellBack == 0 &&
+              g_triggerDiag.crosshairRayPlain == 0,
+              "X6 nothing can apply the offset -> NO honest dot ray, not a fake plain one");
         CHECK(b == FireBlock::Fired,
               "X6 the dot's zone still covers the enemy, so the trigger keeps working");
     }
@@ -934,7 +986,8 @@ static void testCrosshairAim()
         FireBlock b = runScanOnCrosshairSetup(out);
         CHECK(g_triggerDiag.crosshairRayViaGame == 1 && g_triggerDiag.crosshairRayPlain == 0,
               "X7 the game's projection alone carries the dot's offset");
-        CHECK(b == FireBlock::Fired, "X7 ... and the scan still fires");
+        CHECK(b == FireBlock::NoEnemyInZone && g_triggerDiag.dotRayDecided,
+              "X7 ... and the ray's verdict rules: NOT under the dot's ray -> no fire");
     }
     fn_TransformGetRight  = fake_get_right;
     fn_TransformGetUp     = fake_get_up;
@@ -1050,7 +1103,10 @@ static FireBlock runTreeOnCrosshairSetup(TriggerTarget &out)
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
-    g_centreHits = { {0.02f, &g_selfCol} };
+    // The dot's ray NAMES the enemy (path A fires): the mode gate under test
+    // sits in front of the scan, so the scan's Fired verdict has to be
+    // reachable at all.
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
     g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
     setCrosshair(0.0f, 0.0f, 80.0f);
     return A_FireShouldFire(out);

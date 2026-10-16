@@ -1277,6 +1277,8 @@ namespace NewFeatures
         int    crosshairRayViaGame;  // 1 = the game's own projection gave the ray
         int    crosshairRayFellBack; // 1 = camera basis + focal rebuilt the ray
         int    crosshairRayPlain;    // 1 = the plain camera forward did
+        bool   dotRayHonest;         // 1 = this scan had a ray through the dot
+        bool   dotRayDecided;        // 1 = the shot was decided by the dot ray
         int    raysIdentified;  // last scan: rays whose nearest hit WAS the target
         int    raysBlocked;     // last scan: rays stopped by something else
         bool   rayUnknown;      // last scan: a ray symbol did not resolve (fail closed)
@@ -1426,9 +1428,15 @@ namespace NewFeatures
             }
         }
 
-        // 4. Nothing can honour an off-centre dot here: the plain centre ray
-        //    stands in, and the panel prints that it did.
-        plainCentre = true;
+        // 4. Nothing can honour an off-centre dot here (no projection and no
+        //    basis/FOV). Handing back the plain centre ray as the "dot's ray"
+        //    would be a lie in the other direction - the dot sits at (cx,cy)
+        //    but the ray is the camera's own forward - and that lie is exactly
+        //    the over-fire report: what the trigger scanned and what the user
+        //    aimed with were two different lines. All three flags stay false,
+        //    so the scan treats this as NO honest dot ray and keeps to the
+        //    zone scan below, which measures the real dot's zone and its own
+        //    line of sight.
     }
 
     // The trigger's crosshair zone radius, in pixels: the dot's own radius - the
@@ -1903,9 +1911,12 @@ namespace NewFeatures
         return nullptr;
     }
 
-    // ---- PATH A: the enemy under the exact centre of the screen -----------
-    // One ray from the camera along the camera's own forward
-    // (Transform.get_forward 0x509C650). Whatever it hits FIRST that is not
+    // ---- PATH A: the enemy under the dot (the menu's dot crosshair) -----------
+    // One ray from the camera THROUGH THE DOT'S PIXEL - CrosshairRayDir()
+    // turns the dot's pixel into the game-projected world ray, honouring the
+    // X/Y offsets; the camera's own forward (Transform.get_forward
+    // 0x509C650) stands in only when the dot IS the screen centre. Whatever it
+    // hits FIRST that is not
     // our own body and not an invisible trigger volume is what the crosshair is
     // really on, so:
     //   - the hit names an enemy pawn -> that pawn is centred AND unoccluded. A
@@ -1919,15 +1930,15 @@ namespace NewFeatures
     // It needs no bones and no projection math, so it keeps working even if the
     // Pawn bone offsets drift between game builds - the failure mode that turns
     // path B into "sometimes it does not shoot" with no visible reason.
-    inline Pawn *A_FireCrosshairRayPawn(const Vector3 &camPos, const Vector3 &camForward,
+    inline Pawn *A_FireCrosshairRayPawn(const Vector3 &camPos, const Vector3 &rayDir,
                                         Pawn **items, int count, Pawn *localPawn,
                                         float *hitDistOut, bool *symbolMissing)
     {
         if (hitDistOut != nullptr) *hitDistOut = -1.0f;
         if (symbolMissing != nullptr) *symbolMissing = false;
-        const float len = Vector3::Magnitude(camForward);
-        if (!(len > 0.0001f)) return nullptr;
-        const Vector3 dir(camForward.x / len, camForward.y / len, camForward.z / len);
+        const float len = Vector3::Magnitude(rayDir);
+        if (!(len > 0.0001f)) return nullptr;                 // no dot ray -> no path A
+        const Vector3 dir(rayDir.x / len, rayDir.y / len, rayDir.z / len);
 
         // Preferred: RaycastAll, walking past our own geometry and triggers.
         if (fn_PhysicsRaycastAll != nullptr) {
@@ -1977,11 +1988,14 @@ namespace NewFeatures
     //  can see, at any range and on any ping.
     //
     //  Two paths, in this order:
-    //    A. the camera's own forward ray - "enemy exactly in the centre of the
-    //       screen". Bone-free, and unoccluded by construction.
+    //    A. the RAY THROUGH THE DOT'S PIXEL - whatever that ray hits first is
+    //       the answer ("is the dot on an enemy", bone-free, unoccluded).
     //    B. the crosshair zone - any enemy whose hitbox projects inside the
     //       configured px radius, with the nearest-hit ray naming the first thing
     //       on the shot line.
+    //  THE ACCURACY GATE between them: with an honest dot ray, path A IS the
+    //  whole answer and the gate refuses everything the dot ray did not name,
+    //  so path B only runs when no honest dot ray could be produced at all.
     //  Returns FireBlock::Fired with `out` filled, or the one reason the shot was
     //  refused. Candidates are checked nearest-to-crosshair first, so the pawn
     //  under the crosshair is the one that gets the ray budget.
@@ -2014,6 +2028,8 @@ namespace NewFeatures
         d.lastTravel = 0.0f;
         d.lastWorldDist = 0.0f;
         d.lastBulletSpeed = 0.0f;
+        d.dotRayHonest = false;
+        d.dotRayDecided = false;
 
         BaseGame *game = (BaseGame *)fn_GameGetMatchGame();
         if (!Tools::IsPtrValid((void *)game)) return FireBlock::NoMatch;
@@ -2078,6 +2094,12 @@ namespace NewFeatures
         // trigger volumes - is what the dot is on, which is what makes this path
         // incapable of shooting through anything and independent of bone offsets
         // and of any projection radius.
+        // Is there an HONEST ray through the dot's own pixel at all? The
+        // game's own projection (viaGame), the rebuilt camera-basis ray
+        // (fellBack) and an exactly-centred dot (rayPlain) all ARE the dot's
+        // line. Anything else is NOT, and may not decide a shot.
+        bool honestDotRay = false;
+        Vector3 dotRayDir = Vector3::zero();
         if (fn_TransformGetForward != nullptr) {
             bool rayViaGame = false, rayFellBack = false, rayPlain = false;
             Vector3 camForward;
@@ -2086,9 +2108,13 @@ namespace NewFeatures
             d.crosshairRayViaGame  = rayViaGame  ? 1 : 0;
             d.crosshairRayFellBack = rayFellBack ? 1 : 0;
             d.crosshairRayPlain    = rayPlain    ? 1 : 0;
+            d.dotRayHonest = honestDotRay = rayViaGame || rayFellBack || rayPlain;
+            dotRayDir = camForward;
+        }
+        if (fn_TransformGetForward != nullptr && honestDotRay) {
             bool symbolMissing = false;
             float centreHitDist = -1.0f;
-            Pawn *centred = A_FireCrosshairRayPawn(camPos, camForward, items, count, localPawn,
+            Pawn *centred = A_FireCrosshairRayPawn(camPos, dotRayDir, items, count, localPawn,
                                                    &centreHitDist, &symbolMissing);
             d.crosshairHitDist = centreHitDist;
             d.crosshairPawn = (unsigned)(uintptr_t)centred;
@@ -2130,6 +2156,21 @@ namespace NewFeatures
                 return FireBlock::Fired;
             }
         }
+
+        // THE ACCURACY GATE - the fix for "the dot is so small, yet it still
+        // shoots the enemy even if the dot isn't really looking at it".
+        // With an honest ray through the dot's pixel the question was already
+        // answered: the ray NAMED the pawn the dot is on, or it did not - which
+        // means THE DOT IS NOT ON AN ENEMY and nothing may fire. The zone scan
+        // below measures "near the dot" and certifies nothing about the aim
+        // (its LOS ray runs camera -> chest, a different line), so when the
+        // dot's own ray decides, only it decides.
+        if (fn_TransformGetForward != nullptr && honestDotRay) {
+            d.dotRayDecided = true;
+            return FireBlock::NoEnemyInZone;
+        }
+        // No honest dot ray (off-centre dot, no projection, no basis/FOV):
+        // fall back to the zone scan, which measures the real dot's zone.
 
         // Team gate hoisted out of the loop: get_TeamId(localPawn) is the same
         // for the whole scan, while IsSameTeamAcceptBots re-validated the LOCAL

@@ -513,7 +513,7 @@ inline void RenderInfoPopupModal() {
                 ImGui::TableSetColumnIndex(1);
                 ImGui::TextColored(ImVec4(0.88f, 0.82f, 0.72f, 0.94f), "%s", value);
             };
-            drawInfoRow(ICON_FA_USER, "Developer", "Astral Premium");
+            drawInfoRow(ICON_FA_USER, "Developer", "Shaiaintshyy");
             drawInfoRow(ICON_FA_GAMEPAD, "Game", "Call of Duty: Mobile");
             drawInfoRow(ICON_FA_MICROCHIP, "Architecture", "arm64-v8a");
             drawInfoRow(ICON_FA_UNLOCK_ALT, "Access", "Non-root");
