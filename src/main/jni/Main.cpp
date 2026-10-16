@@ -2072,6 +2072,13 @@ if (runtimeState.activeTab == 4) {
                                         td.crosshairHitDist,
                                         td.raysIdentified, td.raysBlocked,
                                         td.rayUnknown ? " NO-RAY-SYMBOL" : "");
+                                    // PATH A's BODY BOUND, live: Keep is how far into
+                                    // the enemy's projected body the accepted shot sat
+                                    // (<= 1 means the dot was ON him), and Declined is
+                                    // every shot the dot ray named but the dot was BESIDE
+                                    // - the beside-the-arm refusal, counted.
+                                    ImGui::TextColored(dim, "Keep=%.2f Declined=%d",
+                                        td.projKeepFrac, td.dotRayDeclined);
                                     ImGui::TextColored(dim, "LOShit=%.2fm LeadBlk=%d SprWarn=%d Sw=%d Int=%.3f",
                                         td.lastLosHitDist,
                                         (int)td.leadPathBlocked, (int)td.spreadWarn,

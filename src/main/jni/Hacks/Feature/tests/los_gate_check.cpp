@@ -14,6 +14,9 @@
 //   * A_FireRaycastAllNearest - unit checks of the array guards (a bad header
 //                              must be REFUSED, never read as "no hits").
 //   * A_FireCrosshairRayPawn - path A names the enemy past our own body.
+//   * the path A body bound   - the dot has to be ON the enemy's projected
+//                              BODY (its WIDTH, not half its height): a dot
+//                              beside his arm or weapon is refused.
 //   * A_FireScan             - end-to-end: zone candidate + self@0 ray ->
 //                              FireBlock::Fired; self + wall -> NoLineOfSight.
 //
@@ -119,6 +122,18 @@ static Vector3 objGetPos(const FakeObj &o)
     std::memcpy(&v, o.b + 0x100, sizeof v);
     return v;
 }
+// Put the enemy's body exactly under the CENTRE dot (800,450 in the fake world).
+// The fake world has to be self-consistent for path A: a ray through the dot
+// cannot honestly name a body that projects 118 px to the side of it - that IS
+// the beside-the-arm case the bound refuses (X9) - so every check that expects
+// the dot's own ray to fire first puts him where the dot is.
+static void objTargetUnderDot(float dist = 3.3f)
+{
+    objPos(g_targetHead, 0.0f, 1.7f, dist);
+    objPos(g_targetMesh, 0.0f, 0.0f, dist);
+    objPos(g_targetRoot, 0.0f, 0.0f, dist);
+}
+
 static void objSetAlive(FakeObj &pawn, bool alive)
 {
     pawn.b[Class_Pawn_m_IsAlive] = alive ? 1 : 0;
@@ -730,6 +745,7 @@ static void testScan()
     // makes head/feet land on real screen positions (the old constant-point
     // fake turned every body into a 0-px span).
     resetWorld();
+    objTargetUnderDot();
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sTrueProjection;
@@ -887,6 +903,7 @@ static FireBlock runScanOnCrosshairSetup(TriggerTarget &out, bool dotSeesPawn = 
     // one: the projected-body bound measures the head/feet span on screen, and
     // a constant-point fake would refuse every accept as a 0-px body.
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+    objTargetUnderDot();          // the dot HAS to be on him when its ray fires
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = dotSeesPawn ? w2sTrueProjection : w2sOnCrosshair;
@@ -914,6 +931,8 @@ static void testCrosshairAim()
               "X1 the shot ray came from the game's own projection of that pixel");
         CHECK(g_triggerDiag.radiusPx == 40.0f,
               "X1 the zone is the dot: an 80 px dot is a 40 px radius");
+        CHECK(g_triggerDiag.projKeepFrac >= 0.0f && g_triggerDiag.projKeepFrac <= 1.0f,
+              "X1 ... and the accepted shot is INSIDE his projected body (keep <= 1)");
     }
 
     // --- X2: the zone IS the dot - shrink the dot, tighten the trigger -----
@@ -1047,6 +1066,107 @@ static void testCrosshairAim()
               "X8 ... and the panel counts it as a projected-body refusal");
         CHECK(out.pawn == nullptr, "X8 no target escapes the bound");
     }
+    // --- X9: THE REPORT, pinned at CLOSE RANGE ------------------------------
+    // The screenshot case: an enemy a few metres away who is NOT under the dot,
+    // with the dot ray grazing an unregistered piece of his hierarchy (his
+    // outstretched arm / weapon, the collider the fake world uses for it) so the
+    // parent walk DOES reach him. The bound that used to run here was HALF HIS
+    // BODY HEIGHT used as a radius around his chest - at 3.3 m that is ~200 px,
+    // so a dot 118 px to his side passed and the trigger fired beside his arm.
+    // The body's own WIDTH is the bound now, and 118 px is not inside it.
+    resetWorld();
+    setCrosshair(0.0f, 0.0f, 80.0f);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };   // the ray "names" him
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);                     // 3.3 m, 118 px to the RIGHT of the dot
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone,
+              "X9 close range, dot 118 px beside his body: NO fire (the report)");
+        CHECK(g_triggerDiag.dotRayDeclined >= 1,
+              "X9 ... counted as a projected-body refusal");
+        CHECK(out.pawn == nullptr, "X9 no target escapes");
+    }
+
+    // --- X9b: the same 40 px offset is ON him at 3 m and BESIDE him at 40 m --
+    // The bound is physical (px per metre comes from his own projected body), so
+    // it tightens with distance instead of being a fixed pixel slack.
+    resetWorld();
+    objTargetUnderDot(3.3f);
+    setCrosshair(40.0f, 0.0f, 80.0f);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::Fired && out.path == 0,
+              "X9b 40 px off a body 3 m away is still ON him -> fires");
+    }
+    resetWorld();
+    objTargetUnderDot(40.0f);
+    setCrosshair(40.0f, 0.0f, 80.0f);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone && out.pawn == nullptr,
+              "X9b the same 40 px at 40 m is 1.4 m to his side -> NO fire");
+    }
+
+    // --- X10: an unmeasurable body is not a free pass -----------------------
+    // With no head the body axis cannot be projected at all. That used to skip
+    // the bound ENTIRELY (the shot fired wherever the ray pointed); now the dot
+    // is held to the drawn dot's own radius around his aim point, so a dot far
+    // off a body that cannot be measured is refused instead of accepted.
+    resetWorld();
+    objSetBone(g_targetPawn, Class_Pawn_m_HeadBone, nullptr);   // no head -> no axis
+    setCrosshair(0.0f, 0.0f, 10.0f);                            // 10 px dot -> 5 px radius
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::NoEnemyInZone && out.pawn == nullptr,
+              "X10 body unmeasurable AND the dot 88 px off his aim point -> NO fire");
+        CHECK(g_triggerDiag.dotRayDeclined >= 1, "X10 ... counted, not silently fired");
+    }
+    // ... and the fallback is not a blanket refusal: with the same unmeasurable
+    // body, a small dot sitting exactly ON his aim point still fires. (The
+    // fallback's reference is that aim point, so this is the case it accepts.)
+    resetWorld();
+    objSetBone(g_targetPawn, Class_Pawn_m_HeadBone, nullptr);
+    objTargetUnderDot();
+    setCrosshair(0.0f, 130.0f, 10.0f);   // dot at (800,580) = his aim point +0 px
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sTrueProjection;
+    g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
+    g_losHits    = {};
+    {
+        TriggerTarget out{};
+        Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+        setEnemyList(enemies, 1);
+        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
+        CHECK(b == FireBlock::Fired && out.path == 0,
+              "X10 ... while a small dot ON his aim point still fires");
+    }
+
     restoreHonestDotRay();
     g_w2sImpl = nullptr;
 
@@ -1157,6 +1277,7 @@ static void setWeaponAiming(bool flag, float percent)
 static FireBlock runTreeOnCrosshairSetup(TriggerTarget &out)
 {
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+    objTargetUnderDot();          // path A fires here, so the dot is ON him
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sTrueProjection;   // path A fires here: real body projection

@@ -405,14 +405,11 @@ inline void RenderSkinCategoryContent(int categoryIndex, bool drawSubTabs = fals
         charSearchWasActive = charActive;
     }
         
-    if (showKeyboard && !skinActive && (skinSubTab != 0 || (!charSearchWasActive && !charActive && !charHovered)) && ImGui::IsMouseClicked(0)) {
-        ImGuiIO& io = ImGui::GetIO();
-        float screenHeight = io.DisplaySize.y;
-        float keyboardHeight = screenHeight * 0.60f;
-        if (ImGui::GetMousePos().y < screenHeight - keyboardHeight) {
-            showKeyboard = false;
-        }
-    }
+    // (The "tap outside the keyboard closes it" test used to live here. It ran
+    // off the search box's own IsItemActive(), so while the box was active - i.e.
+    // always, while typing - it never fired, and its 0.60f panel height did not
+    // even match the keyboard's 0.56f. RenderVirtualKeyboard owns it now, on the
+    // panel's real rect.)
 
     // ---- Rarity filter (applies to every skin sub-tab; tag-based) -----------
     // Drawn with the menu's own combo widget. The stock ImGui::BeginCombo drew

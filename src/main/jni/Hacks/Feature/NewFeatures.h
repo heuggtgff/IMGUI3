@@ -31,16 +31,25 @@
 //                           teammate within 0.35 m of the bullet line and closer
 //                           than the target blocks the shot
 //
-//   PATH A - "enemy exactly in the centre of the screen":
-//     ONE ray from the camera along the camera's own forward
-//     (Transform.get_forward 0x509C650), bounded by Physics.Raycast
-//     (origin, direction, out RaycastHit, maxDistance) 0x506C188. Whichever pawn
-//     the first hit belongs to (Transform.get_parent 0x507BDEC walks the hit's
-//     parent chain against every candidate's transform) is the enemy under the
-//     crosshair - centred AND unobstructed by construction, because a wall in
-//     front of him would have been the first hit. This path needs no bones and
-//     no projection, so it keeps working even if the Pawn bone offsets drift
-//     between game builds.
+//   PATH A - "the enemy the DOT is on" (the menu's dot crosshair):
+//     ONE ray from the camera THROUGH THE DOT'S OWN PIXEL, turned into the world
+//     ray by the game's own projection (Camera.ScreenToWorldPoint 0x5023D34, the
+//     exact inverse of the WorldToScreenPoint 0x5023B54 this repo projects
+//     with), traced by Physics.RaycastAll 0x506CBB0. Whichever pawn the first
+//     meaningful hit belongs to is the enemy the dot is on - centred AND
+//     unobstructed by construction, because a wall in front of him would have
+//     been the first hit. The hit's identity comes from the game's own collider
+//     registry (GamePlay.get_AttackableColliderMap 0x856A020 ->
+//     AttackableColliderMap.GetAttackableTargetForCollider 0x773FA68) with the
+//     parent-chain walk (Transform.get_parent 0x507BDEC) behind it.
+//     THE NAME IS NOT ENOUGH - the dot must also PROJECT ONTO him: the
+//     feet->head body axis is projected and the dot has to sit within the body's
+//     own WIDTH of it (0.32 m half width in pixels, from that same axis), plus
+//     the dot ray's own pixel thickness. Aim-assist / fire volumes bulge out of
+//     every silhouette, and a ray that grazes one walks up into HIS hierarchy,
+//     so without the bound the trigger fired with the dot BESIDE the enemy.
+//     A dot whose body cannot be measured that way is refused unless it is on
+//     the enemy's aim point inside the drawn dot's own radius.
 //
 //   PATH B - the crosshair zone, for a crosshair that is near but not exactly on
 //     the enemy: BaseGame::EnemyPawns @0x178 -> team id (Pawn.get_TeamId
@@ -744,6 +753,12 @@ namespace NewFeatures
         static constexpr float kMinStemGap      = 0.05f;   // m - floor for that stem (never fires a 0-length ray)
         static constexpr float kHeadRadius      = 0.14f;   // m - head hitbox half width
         static constexpr float kBodyRadius      = 0.30f;   // m - torso/limb hitbox half width
+        // m - the half WIDTH of a body, which is what "the dot is ON him" is
+        // measured with in path A: the projected feet->head axis is the body's
+        // centre line, and this is how far to the SIDE of it a dot may sit and
+        // still be on the enemy (shoulders + gear). Deliberately NOT the half
+        // HEIGHT - a body is tall, not round (see the path A bound below).
+        static constexpr float kBodyHalfWidthM  = 0.32f;
         static constexpr float kFriendlyRadius  = 0.35f;   // m - teammate capsule half width
         static constexpr float kSelfExclusion    = 0.15f;   // m - a blocker this close to the
                                                            // camera only proves the camera is
@@ -2200,20 +2215,29 @@ namespace NewFeatures
                        !IsSameTeamAcceptBots(localPawn, centred) && A_FirePawnAlive(centred)) {
                 // THE NAME IS NOT ENOUGH: a registry-empty hit a few
                 // centimetres off the silhouette (a railing the ray grazes,
-                // unregistered geometry in his component hierarchy) can still
-                // walk up to the enemy's root transform, and at close range the
-                // ray and his body can belong to that ONE hit. So the pawn the
-                // dot ray NAMED must also be a pawn the dot PROJECTS ON:
-                // project the pawn's head/feet body axis and demand the dot's
-                // pixel sit within the projected BODY HALF-SPAN, plus the ray's
-                // own pixel thickness (the dot is never thinner than itself).
-                //   * This is physical: pixels-of-body measured with the camera
-                //     focal length, never a screen-size guess.
-                //   * A hit the registry DID name him passes automatically -
-                //     nothing narrows there.
-                //   * One outside the projection = the dot is BESIDE him.
+                // unregistered geometry in his component hierarchy - and the
+                // aim-assist / fire volume that bulges out of every silhouette)
+                // can still walk up to the enemy's root transform, and at close
+                // range the ray and his body can belong to that ONE hit. So the
+                // pawn the dot ray NAMED must also be a pawn the dot is ON, and
+                // "on him" is his own BODY as the player sees it:
+                //   * the body axis (feet -> head) is projected, and the dot has
+                //     to sit within the body's own WIDTH of that axis -
+                //     kBodyHalfWidthM, shoulders + gear - plus the dot ray's own
+                //     pixel thickness;
+                //   * px per metre comes from that SAME axis (its projected
+                //     length over its world length), so the bound is physical:
+                //     no field of view, no screen-size guess, no bone offset;
+                //   * what it replaced used HALF THE BODY HEIGHT as a RADIUS
+                //     around the chest. At 5 m a standing enemy is ~260 px tall,
+                //     so it accepted a dot up to ~130 px to his SIDE that "still
+                //     shot" - exactly the beside-the-arm report. A body is tall,
+                //     not round: its WIDTH is what the dot has to be inside.
+                // A dot that cannot be measured against his body does not pass
+                // either: with the axis unprojectable, the dot is still held to
+                // the drawn dot's own radius around his aim point.
                 const A_FireAimPoint ap = A_FireAimPointFor(centred);
-                float bestSq = -1.0f;
+                float bestSq = -1.0f;       // dot -> his projected aim point, px^2
                 if (ap.valid) {
                     Vector3 sc = Vector3::zero();
                     if (w2s(ap.pos, sc) && sc.z > 0.0f) {
@@ -2222,22 +2246,37 @@ namespace NewFeatures
                         bestSq = dx * dx + dy * dy;
                     }
                 }
-                float bodyRadiusPx = -1.0f;
+
+                // The pixel limit the dot is held to, and the px^2 it is compared
+                // against. A negative limit means his body could not be measured.
+                float limitPx = -1.0f;
+                float testSq  = bestSq;
                 if (ap.valid && ap.headOk && ap.feetOk && focalPx > 0.0f) {
                     Vector3 scHead = Vector3::zero(), scFeet = Vector3::zero();
                     if (w2s(ap.head, scHead) && w2s(ap.feet, scFeet) &&
                         scHead.z > 0.0f && scFeet.z > 0.0f) {
-                        const float halfSpan = 0.5f * sqrtf((scHead.x - scFeet.x) * (scHead.x - scFeet.x) +
-                                                            (scHead.y - scFeet.y) * (scHead.y - scFeet.y));
-                        bodyRadiusPx = halfSpan + 2.0f;     // + the dot ray's own pixel thickness
-                        if (bestSq < 0.0f || bestSq > bodyRadiusPx * bodyRadiusPx) {
-                            // the dot is BESIDE him, not ON him -> no shot
-                            d.dotRayDeclined++;
-                            return FireBlock::NoEnemyInZone;
+                        const float axisPx = sqrtf((scHead.x - scFeet.x) * (scHead.x - scFeet.x) +
+                                                   (scHead.y - scFeet.y) * (scHead.y - scFeet.y));
+                        const float axisM  = Vector3::Distance(ap.head, ap.feet);
+                        if (axisPx > 0.5f && axisM > 0.3f) {
+                            limitPx = A_FireTune::kBodyHalfWidthM * (axisPx / axisM) + 2.0f;
+                            testSq  = A_FirePointSegDistSq(cx, cy, scHead.x, scHead.y,
+                                                           scFeet.x, scFeet.y);
                         }
-                        d.projKeepFrac = bestSq >= 0.0f ? sqrtf(bestSq) / bodyRadiusPx : -1.0f;
                     }
                 }
+                if (limitPx < 0.0f) {
+                    float r = A_FireCrosshairRadiusPx();
+                    if (!(r > 4.0f)) r = 4.0f;
+                    limitPx = r + 2.0f;
+                    testSq  = bestSq;
+                }
+                if (testSq < 0.0f || testSq > limitPx * limitPx) {
+                    // the dot is BESIDE him, not ON him -> no shot
+                    d.dotRayDeclined++;
+                    return FireBlock::NoEnemyInZone;
+                }
+                d.projKeepFrac = sqrtf(testSq) / limitPx;
                 out.pawn      = centred;
                 out.aim       = ap;
                 out.aimPoint  = ap.valid ? ap.pos : camPos;

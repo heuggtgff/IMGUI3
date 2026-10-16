@@ -1,5 +1,16 @@
 #pragma once
 
+// ============================================================================
+//  Keyboard.h  -  the menu's on-screen keyboard (the search fields)
+//
+//  Seven rows: digits, TWO rows of punctuation (so '-' and the rest of the
+//  ASCII symbols can actually be typed - the field is used to search skin and
+//  camo names, which contain both), the three letter rows, and the action row.
+//  Tapping anywhere that is NOT the panel closes it (see the bottom of
+//  RenderVirtualKeyboard); the tap that opened it, and a tap on the search box
+//  itself, do not - the search box sets the flag in the same frame.
+// ============================================================================
+
 #include "../../ImGui/imgui.h"
 
 #include <algorithm>
@@ -209,17 +220,28 @@ inline void RenderVirtualKeyboard(const char* id, char* searchQuery, size_t quer
     );
 
     ImDrawList* draw = ImGui::GetWindowDrawList();
+    // The panel's own screen rect: the "inside" of the tap-outside test after
+    // ImGui::End() below.
+    const ImVec2 kb_min  = ImGui::GetWindowPos();
+    const ImVec2 kb_size = ImGui::GetWindowSize();
+    const ImVec2 kb_max(kb_min.x + kb_size.x, kb_min.y + kb_size.y);
     const ImVec2 origin = ImGui::GetCursorScreenPos();
     const float content_w = ImGui::GetContentRegionAvail().x;
     const float content_h = ImGui::GetContentRegionAvail().y;
 
     const float key_spacing_x = 8.0f;
     const float key_spacing_y = 10.0f;
-    const int row_count = 5;
+    // digits + 2 punctuation rows + 3 letter rows + the action row
+    const int row_count = 7;
     const float key_w = (content_w - key_spacing_x * 9.0f) / 10.0f;
     const float max_key_h = 60.0f;
-    const float min_key_h = 34.0f;
+    float min_key_h = 34.0f;
     const float auto_key_h = (content_h - key_spacing_y * (row_count - 1)) / row_count;
+    // A row drawn OUTSIDE the panel is worse than a short one: on a short screen
+    // the 34 px floor has to give way to the panel itself, so seven rows fit on
+    // every screen. On a normal phone (720p and up) the keys stay 40-60 px tall,
+    // above the floor anyway.
+    if (auto_key_h < min_key_h) min_key_h = auto_key_h;
     const float key_h = ImClamp(auto_key_h, min_key_h, max_key_h);
     const float bottom_key_h = key_h;
 
@@ -250,6 +272,10 @@ inline void RenderVirtualKeyboard(const char* id, char* searchQuery, size_t quer
     float y = origin.y;
 
     y = draw_char_row("1234567890", y);
+    // Punctuation: '-' and the rest of what a search field needs (the skin and
+    // camo names in this menu contain both '-' and '.'), then the second tier.
+    y = draw_char_row("-_.@#!?&+/", y);
+    y = draw_char_row(":$%'\"(),=*", y);
     y = draw_char_row("QWERTYUIOP", y);
     y = draw_char_row("ASDFGHJKL", y);
 
@@ -323,4 +349,28 @@ inline void RenderVirtualKeyboard(const char* id, char* searchQuery, size_t quer
     ImGui::End();
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(3);
+
+    // ---- TAP OUTSIDE CLOSES ------------------------------------------------
+    // Any tap that does not land on this panel ends the typing session, which is
+    // what the search box's fields expect: no Close button to hunt for, and the
+    // keyboard cannot be left covering half the menu.
+    //
+    // Two taps are deliberately NOT outside-taps:
+    //   * the one that OPENED it - allow_clicks is only true 100 ms after the
+    //     panel appeared, so the opening tap cannot close what it opened;
+    //   * a tap another live widget claimed - the search box that owns this
+    //     keyboard sets its flag in THIS frame (it is drawn before us), so
+    //     without this the box would open the keyboard and we would close it
+    //     again on the same tap.
+    // The old test lived in the skin tab, above the list, and keyed off the
+    // search box's own IsItemActive(): while the box was active - i.e. always,
+    // while typing - it never closed, which is why the panel looked stuck.
+    if (kb_state.allow_clicks && ImGui::IsMouseClicked(0) &&
+        !ImGui::IsMouseHoveringRect(kb_min, kb_max, false) &&
+        !ImGui::IsAnyItemActive()) {
+        *showKeyboard = false;
+        kb_state.is_visible = false;
+        kb_state.open_progress = 0.0f;
+        kb_state.allow_clicks = false;
+    }
 }
