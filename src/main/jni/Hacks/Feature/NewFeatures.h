@@ -142,12 +142,20 @@
 //     Camera::get_main()          RVA 0x5024010
 //     Camera::WorldToScreenPoint  RVA 0x5023B54   (the 1-arg overload - see the
 //                                 note above A_FireScan's candidate loop)
-//     Pawn::IsAiming()            RVA 0x519BB10   NOT CALLED any more - it is a
-//                                 native method that walks the pawn's own
-//                                 weapon chain, and it is what crashed the
-//                                 "ADS only" mode. That mode now reads the
-//                                 held weapon's own fields (m_IsAiming @0xC21,
-//                                 m_AimingPercentage @0x460) instead.
+//     Pawn::IsAiming()            RVA 0x519BB10   the "ADS only" mode's primary
+//                                 source - called again, but ONLY on a pawn that
+//                                 passed the same m_CachedPtr liveness check every
+//                                 other native call in this file goes through.
+//                                 (The crash that removed this call was a GUARD
+//                                 bug: the old gate validated the pawn with
+//                                 Tools::IsPtrValid() alone, which passes for a
+//                                 pawn the game already Destroyed.) A second,
+//                                 independent source
+//                                 - WeaponFireComponent_Instant::get_IsAiming
+//                                 0xC9AF4E0 on the held weapon's fire component -
+//                                 is asked as well, and when NEITHER can answer the
+//                                 mode FAILS OPEN and says so in the panel instead
+//                                 of silently blocking every shot. See A_FireAdsGate.
 //     Pawn::get_IsFiring()        RVA 0x51A8A38   ("Firing only" mode)
 //
 //   The LOS rays used by the tree (dump.cs line -> RVA):
@@ -266,15 +274,16 @@ namespace NewFeatures
 
         constexpr uintptr_t WeaponShake_Owner               = 0x78;  // WeaponShakeController::m_Pawn
 
-        // Weapon aiming state, read as FIELDS by the triggerbot's "ADS only"
-        // gate. Both offsets come straight from the Weapon class in dump.cs:
-        //   m_IsAiming          @0xC21  private bool  (behind get_IsAiming 0x516699C)
-        //   m_AimingPercentage  @0x460  private float (0..1 ADS transition)
-        // A field read on a weapon A_FireObjectAlive accepted cannot walk into
-        // unrelated code, which is exactly what calling Pawn.IsAiming() 0x519BB10
-        // could do (that call is gone).
-        constexpr uintptr_t Weapon_m_IsAiming               = 0xC21; // bool
-        constexpr uintptr_t Weapon_m_AimingPercentage       = 0x460; // float
+        // Weapon aiming state as raw FIELDS. These two offsets are NOT confirmed
+        // by any dump this repo still has: they arrived together with the attempt
+        // to make "ADS only" work without calling the game, and they are the prime
+        // suspect for that mode never firing - a wrong offset hands the gate an
+        // arbitrary byte, which makes the mode either block every shot or fire at
+        // random. They are DISPLAY-ONLY now (the panel prints them so they can be
+        // watched on device); the ADS verdict comes from the game's own getters
+        // (A_FireAdsGate).
+        constexpr uintptr_t Weapon_m_IsAiming               = 0xC21; // bool  (unverified)
+        constexpr uintptr_t Weapon_m_AimingPercentage       = 0x460; // float (unverified)
     }
 
     // ---------------------------------------------------------------------
@@ -491,9 +500,11 @@ namespace NewFeatures
         return A_FireObjectAlive(obj);
     }
 
-    // NOTE: IsLocalPlayerScoping() (Pawn.IsAiming on the local pawn) is gone with
-    // the ADS gate that used to need it - see A_FireHeldWeaponAiming for why the
-    // pawn-level native call was replaced by two weapon fields.
+    // NOTE: IsLocalPlayerScoping() lived here and was removed with the ADS gate
+    // that first needed it. Pawn::IsAiming IS used again - by A_FireAdsGate, which
+    // resolves it into fn_PawnIsAiming and calls it only through
+    // A_FirePawnCallable() (the m_CachedPtr liveness check the version that
+    // crashed was missing).
 
     inline bool IsPawnAlive(void *pawn)
     {
@@ -505,6 +516,25 @@ namespace NewFeatures
         return *(bool *)((uintptr_t)pawn + Class_Pawn_m_IsAlive);
     }
 
+    // ---- ADS detection entry points (resolved ONCE in InstallTriggerbotHooks) --
+    // Three getters answer one question - "is the LOCAL PLAYER scoping right now?".
+    // They are globals so the hot path never pays a getAbsoluteAddress() (which
+    // re-opens and regex-scans the whole /proc/self/maps text), so a missing
+    // symbol can be seen and reported, and so a host test can install fakes:
+    //   fn_PawnIsAiming                   Pawn::IsAiming()                  0x519BB10
+    //   fn_WeaponGetCurrentFireComponent  Weapon.get_CurrentFireComponent() 0x50EB1E4
+    //   fn_FireComponentGetIsAiming       WeaponFireComponent_Instant::
+    //                                       get_IsAiming()                  0xC9AF4E0
+    // 0x519BB10 and 0xC9AF4E0 are both in the .57 dump block every other address
+    // in this file comes from. 0x519BB10 is the symbol the reference triggerbot
+    // used and the dump names it "the local player is scoping / hardscoping";
+    // 0xC9AF4E0 is the fire component's own ADS flag (dump 851428), and the same
+    // fire component is already read every scan for the bullet speed, so that
+    // call chain is proven on device.
+    inline bool   (*fn_PawnIsAiming)(void *)                = nullptr;
+    inline void  *(*fn_WeaponGetCurrentFireComponent)(void *) = nullptr;
+    inline bool   (*fn_FireComponentGetIsAiming)(void *)     = nullptr;
+
     // A hook only ever touches the local player
     inline bool IsLocalFireComponent(void *fireComponent)
     {
@@ -514,10 +544,21 @@ namespace NewFeatures
     }
 
     // Fire-component level "is scoping" (WeaponFireComponent_Instant::get_IsAiming).
-    inline bool IsFireComponentScoping(void *fireComponent)
+    // `answered` says whether the game was asked at all - a missing symbol must
+    // NOT be read as "the game said no", or the ADS mode would block on a build
+    // where the getter did not resolve.
+    inline bool IsFireComponentScoping(void *fireComponent, bool *answered = nullptr)
     {
-        static auto getIsAiming = (bool (*)(void *))UnityRva(RVA::GetIsAiming);   // maps scan once
-        return getIsAiming != nullptr && getIsAiming(fireComponent);
+        if (answered != nullptr) *answered = false;
+        if (!IsReadable(fireComponent)) return false;
+        bool (*getIsAiming)(void *) = fn_FireComponentGetIsAiming;
+        if (getIsAiming == nullptr) {
+            static auto lazy = (bool (*)(void *))UnityRva(RVA::GetIsAiming);   // maps scan once
+            getIsAiming = lazy;
+        }
+        if (getIsAiming == nullptr) return false;
+        if (answered != nullptr) *answered = true;
+        return getIsAiming(fireComponent);
     }
 
     // Team check - pawn level (dump-verified getter + IsSameCamp).
@@ -770,6 +811,31 @@ namespace NewFeatures
         static constexpr float kMaxTravelTime   = 1.20f;   // s - beyond this the lead is a guess (ADVISORY only)
         static constexpr float kAssumedSpeed    = 800.0f;  // m/s - only when no fire component answers
         static constexpr float kMinFireInterval = 0.030f;  // s   - pacing floor
+        // ---- RE-PRESS PACING (edge-press weapons only) --------------------
+        // A single shot / bolt / semi-auto weapon fires on a PRESS EDGE: the
+        // trigger has to let go and press again for the next round. The old path
+        // re-pressed on the very next scan - one StartFire per frame, ~250 a
+        // second, into the weapon's own state machine, for as long as a target
+        // stayed under the crosshair - which is the "one press per frame" spam a
+        // trigger should not do. A repeat press now waits for the weapon's OWN
+        // cadence instead of a configured millisecond value, so the FIRST shot on
+        // a target is still 0-delay and no shot is ever late:
+        //   * kRepressFraction of the measured RealFireInterval 0x50EC250, and
+        //   * the wait ends the moment Weapon.CanFire() 0x5126CC4 says the gun is
+        //     ready again (bolt, pump, reload, fire-mode change all covered),
+        //   * capped at kMaxRepressPace, so even a CanFire that answers "not
+        //     ready" forever costs at most that much and can never silence the
+        //     trigger.
+        static constexpr float kRepressFraction  = 0.90f;  // - of the weapon's own interval
+        static constexpr float kMaxRepressPace   = 0.250f; // s - ceiling for that wait
+        // HOLD-PATH RE-ASSERT (automatic weapons). Holding the trigger down is one
+        // StartFire call, and the game can clear its own fire REQUEST behind our
+        // back - an auto-reload, a fire-mode transition and a weapon-state reset
+        // all end the burst even though nothing on this side changed, which is the
+        // classic "it stops shooting until I tap the button again". The press is
+        // re-asserted the moment Weapon.CanFire() turns back to true (the reload
+        // just finished) and, as a backstop, every kReassertPress seconds.
+        static constexpr float kReassertPress    = 0.250f; // s - backstop re-assert while holding
         static constexpr float kFallbackFov     = 60.0f;   // deg - only if Camera.get_fieldOfView fails
         static constexpr float kDegToRad        = 0.01745329f;
         static constexpr float kRadToDeg        = 57.29578f;
@@ -807,7 +873,11 @@ namespace NewFeatures
     inline void *GetCurrentFireComponent(void *weapon)
     {
         if (!A_FireObjectAlive(weapon)) return nullptr;
-        static auto fn = (void *(*)(void *))UnityRva(RVA::Weapon_get_CurrentFireComponent);
+        void *(*fn)(void *) = fn_WeaponGetCurrentFireComponent;
+        if (fn == nullptr) {
+            static auto lazy = (void *(*)(void *))UnityRva(RVA::Weapon_get_CurrentFireComponent);
+            fn = lazy;
+        }
         if (fn == nullptr) return nullptr;
         void *comp = fn(weapon);
         return A_FireObjectAlive(comp) ? comp : nullptr;
@@ -844,9 +914,13 @@ namespace NewFeatures
         if (fn_WeaponIsAutoFire != nullptr && fn_WeaponIsAutoFire(weapon)) return FireMode::Auto;
         if (fn_WeaponIsBurstFire != nullptr && fn_WeaponIsBurstFire(weapon)) return FireMode::Burst;
         if (fn_WeaponIsSingleShot != nullptr && fn_WeaponIsSingleShot(weapon)) return FireMode::Single;
-        // No flag answered: assume an automatic weapon so one press is enough
-        // and the weapon's own fire interval controls the rate.
-        return FireMode::Auto;
+        // No flag answered. Single, NOT Auto: the press path treats
+        // Single/Unknown as an EDGE press (press, release, re-press the moment the
+        // gun is ready), which is wrong for nothing - whereas "Auto" holds the
+        // trigger down, and on a semi-auto whose fire-mode flags did not resolve
+        // holding fires exactly one shot and then nothing for as long as the
+        // crosshair stays on the target.
+        return FireMode::Single;
     }
 
     // Target velocity for leading (Pawn.get_Velocity @0x51B38CC, dump 713743).
@@ -998,35 +1072,93 @@ namespace NewFeatures
         return fn_WeaponCanFire(weapon);
     }
 
-    // ---- "ADS only" (TriggerbotMode 1): is the LOCAL player's weapon aiming? ---
-    // Two dump-verified Weapon fields, read on a weapon A_FireObjectAlive has
-    // already accepted:
-    //   Weapon.m_IsAiming          @0xC21  bool   (behind get_IsAiming 0x516699C)
-    //   Weapon.m_AimingPercentage  @0x460  float  (0..1 ADS transition)
-    // Either one answering yes means the player is scoping; a transition that is
-    // more than half done already counts, so the mode fires while the scope comes
-    // up instead of waiting for it to finish. The percentage is range-checked: a
-    // value outside 0..2 is not an ADS progress at all and is ignored rather than
-    // read as "always aiming".
+    // ---- "ADS only" (TriggerbotMode 1): is the LOCAL player scoping? ---------
+    // Two independent, dump-verified sources are asked, cheapest and most general
+    // first, and the mode lets the shot through when EITHER says "scoped":
     //
-    // Pawn.IsAiming() 0x519BB10 is NOT called any more. It is a native method
-    // that walks the pawn's own weapon / fire-component chain internally, so no
-    // guard on this side can bound what it touches - that is the crash the "ADS
-    // Only" option caused. A field read at a fixed offset cannot jump anywhere.
-    inline bool A_FireHeldWeaponAiming(void *weapon,
-                                       bool *flagOut = nullptr,
-                                       float *percentOut = nullptr)
+    //   1. Pawn::IsAiming() 0x519BB10 on the LOCAL PAWN.
+    //      The game's own scoping flag - the symbol the reference triggerbot used
+    //      and the one the .57 dump labels "the local player is scoping /
+    //      hardscoping". It answers for every weapon, including ones with no fire
+    //      component yet (knives, launchers, a weapon mid-equip).
+    //      WHY IT IS SAFE TO CALL AGAIN: the crash that removed this call was a
+    //      GUARD bug, not a bad address. The old gate validated the pawn with
+    //      Tools::IsPtrValid() alone, which passes for a pawn the game already
+    //      Destroyed - the managed wrapper stays readable while
+    //      UnityEngine.Object.m_CachedPtr @0x10 is cleared - and the native method
+    //      then walked that pawn's own weapon chain. A_FireObjectAlive() IS that
+    //      check, and it is the guard every other native call in this file already
+    //      goes through; the pawn's own alive flag is asked as well.
+    //
+    //   2. WeaponFireComponent_Instant::get_IsAiming() 0xC9AF4E0 on the held
+    //      weapon's current fire component (Weapon.get_CurrentFireComponent
+    //      0x50EB1E4). This is where the ADS state actually lives, and the same
+    //      component is read every scan for the bullet speed, so the chain is
+    //      already proven on device. It is the answer that survives a build where
+    //      the pawn-level getter moved.
+    //
+    //   3. The raw Weapon fields (m_IsAiming @0xC21 / m_AimingPercentage @0x460)
+    //      are reported and NEVER trusted - their offsets are unverified (see the
+    //      Offsets note), and a wrong offset is exactly what makes this mode block
+    //      every shot or fire at random.
+    //
+    // FAIL OPEN, LOUDLY: when no source can answer (symbols unresolved, or every
+    // object refused by the liveness checks) the mode does NOT block. It sets
+    // adsUnknown and the panel turns red, because silently refusing every shot is
+    // the failure that reads as "ADS Only does not work at all". One source
+    // answering "not scoped" is still enough to block - that is the mode working.
+    struct AdsRead
     {
-        if (!A_FireObjectAlive(weapon)) {          // destroyed / not a weapon
-            if (flagOut)    *flagOut = false;
-            if (percentOut) *percentOut = 0.0f;
-            return false;
+        bool  aiming;      // verdict handed to the mode gate
+        bool  unknown;     // no trustworthy source -> aiming is fail-open true
+        bool  pawnOk;      // Pawn::IsAiming was asked
+        bool  pawnAim;     // ... and said "scoping"
+        bool  fcOk;        // the fire component's get_IsAiming was asked
+        bool  fcAim;       // ... and said "scoping"
+        bool  fieldFlag;   // raw Weapon.m_IsAiming byte      (display only)
+        float fieldPct;    // raw Weapon.m_AimingPercentage   (display only)
+    };
+
+    // May this pawn be handed to a native getter? Object.m_CachedPtr @0x10
+    // (A_FireObjectAlive) AND the pawn's own alive flag. This is the exact pair
+    // the crashed version was missing. (A_FirePawnAlive below is the stronger,
+    // game-getter-first verdict used for target validation; this one is only
+    // "is calling into this object safe".)
+    inline bool A_FirePawnCallable(Pawn *pawn)
+    {
+        if (!A_FireObjectAlive((void *)pawn)) return false;
+        return ((Pawn *)pawn)->m_IsAlive();
+    }
+
+    inline AdsRead A_FireAdsGate(void *weapon, Pawn *localPawn)
+    {
+        AdsRead r{};
+        r.aiming = r.unknown = r.pawnOk = r.pawnAim = r.fcOk = r.fcAim = false;
+        r.fieldFlag = false;
+        r.fieldPct  = 0.0f;
+
+        // ---- 1. the game's own pawn-level flag -----------------------------
+        if (fn_PawnIsAiming != nullptr && A_FirePawnCallable(localPawn)) {
+            r.pawnOk  = true;
+            r.pawnAim = fn_PawnIsAiming((void *)localPawn);
         }
-        const bool  flag    = *(bool *)((uintptr_t)weapon + Offsets::Weapon_m_IsAiming);
-        const float percent = *(float *)((uintptr_t)weapon + Offsets::Weapon_m_AimingPercentage);
-        if (flagOut)    *flagOut = flag;
-        if (percentOut) *percentOut = percent;
-        return flag || (percent > 0.5f && percent <= 2.0f);
+
+        // ---- 2. the held weapon's own fire component -----------------------
+        void *fireComp = GetCurrentFireComponent(weapon);
+        if (fireComp != nullptr)
+            r.fcAim = IsFireComponentScoping(fireComp, &r.fcOk);
+
+        // ---- 3. the raw fields: reported, never trusted --------------------
+        if (Tools::IsPtrValid(weapon)) {
+            r.fieldFlag = *(bool *)((uintptr_t)weapon + Offsets::Weapon_m_IsAiming);
+            r.fieldPct  = *(float *)((uintptr_t)weapon + Offsets::Weapon_m_AimingPercentage);
+        }
+
+        if (r.pawnAim || r.fcAim) { r.aiming = true;  return r; }   // scoped
+        if (r.pawnOk  || r.fcOk)  { r.aiming = false; return r; }   // asked, said no
+        r.unknown = true;                                            // nobody answered
+        r.aiming  = true;                                            // -> fail OPEN
+        return r;
     }
 
     // The weapon's own fire interval, in seconds
@@ -1050,6 +1182,21 @@ namespace NewFeatures
         if (!(interval > 0.0f)) interval = A_FireTune::kMinFireInterval;
         if (interval < A_FireTune::kMinFireInterval) interval = A_FireTune::kMinFireInterval;
         return interval;
+    }
+
+    // How long a REPEAT press has to wait for an edge-press weapon (single shot /
+    // bolt / semi-auto / an unrecognised weapon). The FIRST press of a burst of
+    // fire is never delayed - this only stops the trigger from re-pressing the
+    // same weapon on the same target faster than the gun itself can shoot. Clamped
+    // to [kMinFireInterval, kMaxRepressPace] so neither a missing nor an absurd
+    // interval can make the trigger spam or stall (A_FireTune).
+    inline float A_FireRepressPaceSeconds(float interval)
+    {
+        float pace = interval * A_FireTune::kRepressFraction;
+        if (!(pace > 0.0f) || pace < A_FireTune::kMinFireInterval)
+            pace = A_FireTune::kMinFireInterval;
+        if (pace > A_FireTune::kMaxRepressPace) pace = A_FireTune::kMaxRepressPace;
+        return pace;
     }
 
     // A pawn is alive if the game's OWN getter says so, or failing that if the
@@ -1248,6 +1395,15 @@ namespace NewFeatures
     inline bool     g_afireHoldingFire       = false;
     inline void    *g_afireFiringOn          = nullptr;
     inline double   g_afireLastPressTime     = -1000.0;
+    // The WEAPON of the last press. A_FireReleaseTrigger clears g_afireFiringOn
+    // (that is what "let go" means), so the released weapon cannot be recognised
+    // from it - and "same weapon as the last press" is exactly what the re-press
+    // pace is keyed on.
+    inline void    *g_afireLastPressWeapon   = nullptr;
+    // Weapon.CanFire() as of the previous scan, for the hold-path re-assert: a
+    // false -> true edge is the gun becoming ready again (reload done) and that is
+    // the exact frame a held trigger has to re-assert its fire request.
+    inline bool     g_afireCanFireLast       = false;
     inline double   g_afireLastEvalTime      = -1000.0;
     inline void    *g_afireTargetPawn       = nullptr; // the pawn the trigger is currently on
 
@@ -1326,13 +1482,24 @@ namespace NewFeatures
         unsigned aimingTarget;  // Weapon.get_AimingTarget() - the game's own answer
         float  aimingTargetDis; // Weapon.get_CurrentAimingTargetDis()
         // ---- "ADS only" (TriggerbotMode 1) --------------------------------
-        // The LOCAL WEAPON's own aiming state, read as fields on the weapon the
-        // scan already validated: Weapon.m_IsAiming @0xC21 (the bool behind
-        // Weapon.get_IsAiming 0x516699C) and Weapon.m_AimingPercentage @0x460
-        // (0..1 ADS transition). Pawn.IsAiming() 0x519BB10 is never called any
-        // more - see the note on A_FireHeldWeaponAiming.
-        int    adsFlag;         // last scan: Weapon.m_IsAiming (0/1)
-        float  adsPct;          // last scan: Weapon.m_AimingPercentage
+        // adsPawn*/adsFc* are the two sources that DECIDE the mode (see
+        // A_FireAdsGate): the game's own Pawn::IsAiming 0x519BB10 and the fire
+        // component's get_IsAiming 0xC9AF4E0. adsFlag/adsPct are the raw Weapon
+        // fields at their UNVERIFIED offsets, kept only so the panel can show them
+        // while those offsets are judged on device.
+        int    adsFlag;         // raw Weapon.m_IsAiming byte    (display only)
+        float  adsPct;          // raw Weapon.m_AimingPercentage (display only)
+        bool   adsUnknown;      // no source answered -> the mode did NOT block
+        bool   adsPawnOk;       // Pawn::IsAiming 0x519BB10 was asked
+        bool   adsPawnAim;      // ... and said "scoping"
+        bool   adsFcOk;         // fire-component get_IsAiming 0xC9AF4E0 was asked
+        bool   adsFcAim;        // ... and said "scoping"
+        // ---- re-press pacing (edge-press weapons) --------------------------
+        float  paceSeconds;     // s - A_FireRepressPaceSeconds for the last scan
+        int    repressSkipped;  // lifetime: presses held back (gun still cycling)
+        bool   paceWaiting;     // this scan: target under the crosshair, waiting on the gun
+        // ---- hold-path re-assert (automatic weapons) -----------------------
+        int    reasserts;       // lifetime: StartFire calls re-asserting a held trigger
 
                                 // 4 no StartFire ptr, 5 pointers ok / no heartbeat
     };
@@ -2627,24 +2794,28 @@ namespace NewFeatures
         // ---- 4. trigger key gating (the mode combo) ----------------------
         // 0 = Always  : the trigger fires on its own the moment a target is under
         //               the crosshair (0-delay, no reaction delay).
-        // 1 = ADS only: only while the LOCAL PLAYER'S OWN HELD WEAPON is aiming.
-        //               Answered by A_FireHeldWeaponAiming(held) - two field reads
-        //               on the weapon validated three paragraphs above. The old
-        //               gate called Pawn.IsAiming() 0x519BB10 here, a native method
-        //               that walks the pawn's own weapon chain internally; that is
-        //               what crashed this mode, and it is not called any more.
+        // 1 = ADS only: only while the local player is scoping. Answered by
+        //               A_FireAdsGate(held, localPawn) - the game's own
+        //               Pawn.IsAiming() 0x519BB10 and the held weapon's fire
+        //               component get_IsAiming() 0xC9AF4E0, each called only on an
+        //               object that passed the m_CachedPtr liveness check. NEITHER
+        //               answering fails OPEN (and the panel says so) instead of
+        //               blocking every shot the way a bad field offset did.
         // 2 = Firing only: only while the player's own fire input is active
         //               (Pawn.get_IsFiring 0x51A8A38). Note the trigger's own
         //               press also raises that flag, which is what keeps a burst
         //               going while the crosshair stays on the target - the same
         //               semantics the reference implementation had.
         if (Config.NewFeaturesMenu.TriggerbotMode == 1) {
-            bool  adsFlag  = false;
-            float adsPct   = 0.0f;
-            const bool aiming = A_FireHeldWeaponAiming((void *)held, &adsFlag, &adsPct);
-            d.adsFlag = adsFlag ? 1 : 0;
-            d.adsPct  = adsPct;
-            if (!aiming)
+            const AdsRead ads = A_FireAdsGate((void *)held, localPawn);
+            d.adsFlag    = ads.fieldFlag ? 1 : 0;
+            d.adsPct     = ads.fieldPct;
+            d.adsUnknown = ads.unknown;
+            d.adsPawnOk  = ads.pawnOk;
+            d.adsPawnAim = ads.pawnAim;
+            d.adsFcOk    = ads.fcOk;
+            d.adsFcAim   = ads.fcAim;
+            if (!ads.aiming)
                 return FireBlock::ModeNotAds;
         } else if (Config.NewFeaturesMenu.TriggerbotMode == 2) {
             if (fn_PawnGetIsFiring == nullptr || !fn_PawnGetIsFiring(localPawn))
@@ -2811,30 +2982,86 @@ namespace NewFeatures
         if (g_afireHoldingFire && g_afireFiringOn != (void *)held)
             A_FireReleaseTrigger(nullptr);
 
-        const FireMode mode = GetWeaponFireMode(held);
+        const FireMode mode     = GetWeaponFireMode(held);
+        const float    interval = A_FireWeaponInterval(held);
+        d.lastFireInterval = interval;
+
+        // An EDGE-PRESS weapon fires on the transition of the trigger, not on its
+        // level: single shot, bolt, semi-auto - and anything whose fire-mode flags
+        // did not resolve (GetWeaponFireMode answers Single for those, because
+        // holding a trigger down on an unrecognised weapon is exactly how a
+        // semi-auto ends up firing once and never again).
+        const bool edgePress = (mode != FireMode::Auto && mode != FireMode::Burst);
 
         // Already holding the trigger on this weapon and this target: keep
         // holding. The game's own fire interval (and Weapon.CanFire above) is
         // what limits the rate, so there is nothing to re-press.
         if (g_afireHoldingFire && g_afireFiringOn == (void *)held &&
             g_afireTargetPawn == (void *)target.pawn) {
-            if (mode == FireMode::Single) {
-                // Semi-auto: one press is one shot - release now so the next
-                // scan can press again once the weapon's interval has elapsed.
+            if (edgePress) {
+                // One press is one shot: let go now, so the next press is a real
+                // EDGE (pressing an already-held trigger is a no-op for these, and
+                // the release is what arms the next round).
                 A_FireReleaseTrigger(nullptr);
+            } else {
+                // AUTO / BURST: the trigger stays down - but the game can clear its
+                // own fire request behind our back (auto-reload, fire-mode change,
+                // weapon-state reset) and then the burst is over with nothing
+                // changed on this side. Re-assert the press on the exact scan the
+                // weapon is able to fire again, and as a slow backstop. StartFire
+                // while already firing is idempotent for these weapons.
+                const bool becameReady = d.canFire && !g_afireCanFireLast;
+                const bool stale = (now - g_afireLastPressTime) >=
+                                   (double)A_FireTune::kReassertPress;
+                if (fn_Weapon_StartFire != nullptr && (becameReady || stale)) {
+                    fn_Weapon_StartFire(held);
+                    g_afireLastPressTime = now;
+                    d.reasserts++;
+                }
             }
+            g_afireCanFireLast = d.canFire;
             s_dbgTriggerState = 2;
             g_afireInTick = false;
             return;
         }
 
-        // NO RE-PRESS PACING. The old gate held the trigger off until 85 % of the
-        // weapon's own interval had elapsed, which is literally an artificial delay
-        // between shots - exactly what this feature is supposed to remove. StartFire
-        // is called the moment a visible enemy is under the crosshair and the game's
-        // own fire interval decides the rate. The interval is still measured for the
-        // diagnostics panel.
-        d.lastFireInterval = A_FireWeaponInterval(held);
+        // ---- Re-press pacing (the "one press per frame" fix) ----------------
+        // A NEW target or a NEW weapon is never paced: the first shot stays
+        // 0-delay, always. Only a repeat press on the SAME weapon and the SAME
+        // target - i.e. the gun is still cycling from the shot already taken -
+        // waits, and it waits for the weapon's OWN cadence, never for a configured
+        // millisecond value:
+        //   * Weapon.CanFire() 0x5126CC4 ends the wait the moment the game says the
+        //     gun is ready again (bolt, pump, reload and fire-mode changes included),
+        //   * kRepressFraction of the measured interval bounds how fast we may try,
+        //     and the wait is capped at kMaxRepressPace - so a CanFire that never
+        //     answers "ready" costs at most that much and never silences it.
+        // The alternative (pressing on every scan) was ~250 StartFire calls a
+        // second into the weapon's state machine while a target stayed under the
+        // crosshair - pure spam that no gun ever needed.
+        d.paceWaiting = false;
+        if (edgePress) {
+            if (g_afireTargetPawn != (void *)target.pawn ||
+                g_afireLastPressWeapon != (void *)held)
+                g_afireLastPressTime = -1000.0;              // new target/weapon: no pacing
+            const float  pace    = A_FireRepressPaceSeconds(interval);
+            const double since   = now - g_afireLastPressTime;
+            const bool   tooSoon = since < (double)pace;
+            // The shortcut that keeps a repeat shot from ever being LATE: the
+            // moment the game's own CanFire() says the gun is ready again (bolt
+            // done, pump done, reload done) the press goes out, even inside the
+            // pace window. A missing symbol leaves the pace in charge instead of
+            // blocking, and the pace is capped, so neither answer can stall it.
+            const bool   ready   = (fn_WeaponCanFire != nullptr) && fn_WeaponCanFire(held);
+            d.paceSeconds = pace;
+            if (tooSoon && !ready) {
+                d.repressSkipped++;
+                d.paceWaiting = true;
+                s_dbgTriggerState = 1;        // aimed in, waiting on the gun itself
+                g_afireInTick = false;
+                return;
+            }
+        }
 
         if (fn_Weapon_StartFire == nullptr) {
             A_FireReleaseTrigger(nullptr);
@@ -2846,7 +3073,9 @@ namespace NewFeatures
         g_afireHoldingFire    = true;
         g_afireFiringOn       = (void *)held;
         g_afireTargetPawn     = (void *)target.pawn;
+        g_afireLastPressWeapon = (void *)held;
         g_afireLastPressTime  = now;
+        g_afireCanFireLast    = d.canFire;
         fn_Weapon_StartFire(held);
         d.fires++;
         s_dbgTriggerState = 2;                           // firing
@@ -2870,6 +3099,8 @@ namespace NewFeatures
         g_afireTargetPawn  = nullptr;
         g_afireFiringOn    = nullptr;
         g_afireLastPressTime = -1000.0;
+        g_afireLastPressWeapon = nullptr;
+        g_afireCanFireLast   = false;
         g_afireLastEvalTime  = -1000.0;
         g_afireInTick        = false;
         g_afireLosOk         = false;
@@ -3105,10 +3336,27 @@ namespace NewFeatures
         if (Tools::IsPtrValid(camMainAddr))
             fn_CameraGetMain = (void *(*)())camMainAddr;
 
-        // Pawn::IsAiming() 0x519BB10 is deliberately NOT resolved any more: the
-        // "ADS only" mode reads Weapon.m_IsAiming / m_AimingPercentage instead
-        // (see A_FireHeldWeaponAiming). Resolving a pointer only to never call it
-        // is how a crash-prone call survives a refactor unnoticed.
+        // ---- ADS detection (TriggerbotMode 1) ----------------------------
+        // Pawn::IsAiming() 0x519BB10 - the local player's own scoping flag. It is
+        // resolved again and called again, but only through A_FirePawnCallable(),
+        // which is the m_CachedPtr liveness check the version that crashed was
+        // missing. A missing symbol is logged and the mode falls back to the fire
+        // component (and, if that is missing too, fails OPEN rather than blocking).
+        auto aimingAddr = UnityRva(RVA::Pawn_IsAiming);
+        if (Tools::IsPtrValid(aimingAddr))
+            fn_PawnIsAiming = (bool (*)(void *))aimingAddr;
+        else
+            LOGE("[NewFeatures] triggerbot: Pawn::IsAiming 0x%llX did not resolve -"
+                 " \"ADS only\" falls back to the fire component",
+                 (unsigned long long)RVA::Pawn_IsAiming);
+
+        auto curFireAddr = UnityRva(RVA::Weapon_get_CurrentFireComponent);
+        if (Tools::IsPtrValid(curFireAddr))
+            fn_WeaponGetCurrentFireComponent = (void *(*)(void *))curFireAddr;
+
+        auto fcAimAddr = UnityRva(RVA::GetIsAiming);
+        if (Tools::IsPtrValid(fcAimAddr))
+            fn_FireComponentGetIsAiming = (bool (*)(void *))fcAimAddr;
 
         auto firingAddr = UnityRva(RVA::Pawn_get_IsFiring);
         if (Tools::IsPtrValid(firingAddr))

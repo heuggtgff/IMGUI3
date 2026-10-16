@@ -2141,7 +2141,11 @@ if (runtimeState.activeTab == 4) {
                                 } else if (dbgState == 2) {
                                     ImGui::TextColored(ImVec4(0, 1, 0, 1), ">> FIRING <<");
                                 } else if (dbgState == 1) {
-                                    ImGui::TextColored(ImVec4(1, 1, 0, 1), "HOLDING: aimed in");
+                                    if (td.paceWaiting)
+                                        ImGui::TextColored(ImVec4(1, 1, 0, 1),
+                                            "WAITING: aimed in, gun still cycling");
+                                    else
+                                        ImGui::TextColored(ImVec4(1, 1, 0, 1), "HOLDING: aimed in");
                                 } else {
                                     ImGui::TextColored(ImVec4(1, 0.5f, 0, 1), "BLOCKED: %s",
                                                        NewFeatures::A_FireBlockText(lastBlock));
@@ -2165,15 +2169,39 @@ if (runtimeState.activeTab == 4) {
                                     ImGui::TextColored(dim, "Scan=%d Enemy=%d Cand=%d Ray=%d Tgt=%d Fire=%d",
                                         td.scans, td.enemyCount, td.candidates,
                                         td.losChecked, td.targets, td.fires);
-                                    // Ads= is the "ADS only" gate's own input: the held
-                                    // weapon's m_IsAiming flag and its 0..1 aiming
-                                    // percentage. Both are field reads - Pawn.IsAiming()
-                                    // is not called any more, which is what crashed the
-                                    // option.
-                                    ImGui::TextColored(dim, "R=%.0f Closest=%.0fpx LOSblk=%d Friend=%d Ads=%d/%.2f",
+                                    ImGui::TextColored(dim, "R=%.0f Closest=%.0fpx LOSblk=%d Friend=%d",
                                         td.radiusPx,
                                         td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx),
-                                        td.losBlocked, td.friendsInLine, td.adsFlag, td.adsPct);
+                                        td.losBlocked, td.friendsInLine);
+                                    // "ADS only" is decided by the game's OWN getters -
+                                    // Pawn.IsAiming 0x519BB10 and the held weapon's fire
+                                    // component get_IsAiming 0xC9AF4E0 - each called only
+                                    // on an object that passed the m_CachedPtr liveness
+                                    // check. The RawField line under them is the two
+                                    // Weapon field offsets, which are NOT verified and are
+                                    // shown for the record only. NO SIGNAL means the mode
+                                    // is not blocking at all (fail-open), which is why
+                                    // that line turns red instead of silently doing
+                                    // nothing.
+                                    if (Config.NewFeaturesMenu.TriggerbotMode == 1) {
+                                        if (td.adsUnknown)
+                                            ImGui::TextColored(ImVec4(1, 0.5f, 0, 1),
+                                                "ADS: NO SIGNAL - mode not enforced (fail-open)");
+                                        else
+                                            ImGui::TextColored(dim, "ADS: pawn=%s fc=%s => %s",
+                                                td.adsPawnOk ? (td.adsPawnAim ? "scoped" : "no") : "n/a",
+                                                td.adsFcOk   ? (td.adsFcAim   ? "scoped" : "no") : "n/a",
+                                                (td.adsPawnAim || td.adsFcAim) ? "SCOPED" : "hipfire");
+                                    }
+                                    ImGui::TextColored(dim, "RawField=%d/%.2f (offset unverified)",
+                                        td.adsFlag, td.adsPct);
+                                    // Re-press pacing: Pace is the wait a repeat press
+                                    // obeys (the weapon's own cadence), skipped counts the
+                                    // presses held back, waiting is this scan. The first
+                                    // shot on a target is never paced.
+                                    ImGui::TextColored(dim, "Pace=%.3fs skipped=%d waiting=%d reassert=%d",
+                                        td.paceSeconds, td.repressSkipped,
+                                        td.paceWaiting ? 1 : 0, td.reasserts);
                                     // Which path accepted (or would accept) the shot, and
                                     // what the visibility ray actually hit. "Rays=id/blk"
                                     // is the anti-wall gate: id = the nearest thing on the

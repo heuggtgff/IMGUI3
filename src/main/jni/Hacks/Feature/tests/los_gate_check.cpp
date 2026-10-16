@@ -349,6 +349,15 @@ static void installFns()
     fn_WeaponGetAimingTarget  = nullptr;
     fn_WeaponGetAimingTargetDis = nullptr;
     fn_BaseGameGetTeamPawns   = nullptr;      // no teammates in this world
+    // The triggerbot's ADS + re-press entry points. They are installed per test
+    // (see testAdsGate / testRepressPacing) and nulled here so nothing leaks
+    // from one test into the next.
+    fn_PawnIsAiming                  = nullptr;
+    fn_WeaponGetCurrentFireComponent = nullptr;
+    fn_FireComponentGetIsAiming      = nullptr;
+    fn_WeaponCanFire                 = nullptr;
+    fn_WeaponRealFireInterval        = nullptr;
+    fn_WeaponIsAutoFire              = nullptr;
 
     // The dot crosshair IS the trigger's crosshair now: its pixel is what the
     // scan measures from and its radius is the zone it accepts. Put it on the
@@ -1241,21 +1250,30 @@ static void testTickHookCost()
 //     called Pawn.get_CurrentWeapon() from INSIDE that getter, on a pawn that may
 //     already have been destroyed (its managed wrapper stays readable, so
 //     Tools::IsPtrValid passes and the native call walks the cleared m_CachedPtr);
-//   * the "ADS only" gate called Pawn.IsAiming() 0x519BB10, a native method that
-//     walks the pawn's own weapon / fire-component chain internally.
+//   * the "ADS only" gate called Pawn.IsAiming() 0x519BB10 after validating the
+//     pawn with Tools::IsPtrValid() alone - which passes for a pawn the game has
+//     already Destroyed, whose managed wrapper stays readable while
+//     Object.m_CachedPtr is cleared. The GUARD was the bug, not the symbol.
 //
-// They are now PURE: one pointer compare against a cache refreshed from the local
-// pawn's own tick, and two field reads on the weapon the tree already validated.
-// Every fake below COUNTS, and the counters must stay at zero where it matters -
-// that is what proves the crash is gone rather than moved.
+// The sprint-delay gate is PURE now: one pointer compare against a cache
+// refreshed from the local pawn's own tick. Pawn.IsAiming() IS called again (it
+// is the game's own scoping flag and the .57 dump's answer), but only through
+// A_FirePawnCallable(), and the ADS gate has a second, independent source plus a
+// fail-open verdict when neither can answer. Every fake below COUNTS, and the
+// counters must stay at zero where it matters - that is what proves the crash is
+// gone rather than moved.
 // ---------------------------------------------------------------------------
-static int g_isAimingCalls      = 0;   // Pawn::IsAiming 0x519BB10 - must stay 0
+static int g_isAimingCalls      = 0;   // the api15 macro path - must stay 0
 static int g_currentWeaponCalls = 0;   // Pawn::get_CurrentWeapon - only our tick may call it
 
-static bool fake_pawnIsAiming(void *)
+// Pawn::IsAiming through the api15 MACRO (Class_Pawn_IsAiming). The triggerbot
+// resolves its own pointer and goes through A_FirePawnCallable; this trap answers
+// "yes, scoping", so a stray macro call shows up as a shot in a test that expects
+// a block.
+static bool fake_pawnIsAimingTrap(void *)
 {
-    g_isAimingCalls++;                  // the gate must never ask
-    return true;                        // ...so "the pawn says it IS aiming" is a trap
+    g_isAimingCalls++;
+    return true;
 }
 
 static Weapon *fake_currentWeapon(Pawn *)
@@ -1264,111 +1282,88 @@ static Weapon *fake_currentWeapon(Pawn *)
     return (Weapon *)g_weaponObj.b;
 }
 
-// Weapon.m_IsAiming @0xC21 / m_AimingPercentage @0x460, the two fields the ADS
-// gate reads (Offsets in NewFeatures.h).
+// Weapon.m_IsAiming @0xC21 / m_AimingPercentage @0x460. These offsets are NOT
+// verified anywhere in this repo, so the gate only ever PRINTS them - which is
+// what keeps a wrong offset from turning "ADS only" into "always" or "never".
 static void setWeaponAiming(bool flag, float percent)
 {
     *(bool  *)(g_weaponObj.b + Offsets::Weapon_m_IsAiming)         = flag;
     *(float *)(g_weaponObj.b + Offsets::Weapon_m_AimingPercentage) = percent;
 }
 
-// The same crosshair setup the scan tests use, driven through the whole decision
-// tree (A_FireShouldFire) so the mode gate really runs.
-static FireBlock runTreeOnCrosshairSetup(TriggerTarget &out)
+// The world a Fired verdict needs, without running the tree: the mode gate and
+// the re-press pacing below both drive A_FireShouldFire / A_FireTick for real.
+static void armFiringWorld()
 {
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
     objTargetUnderDot();          // path A fires here, so the dot is ON him
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sTrueProjection;   // path A fires here: real body projection
-    // The dot's ray NAMES the enemy (path A fires): the mode gate under test
-    // sits in front of the scan, so the scan's Fired verdict has to be
-    // reachable at all.
     g_centreHits = { {0.02f, &g_selfCol}, {5.0f, &g_targetCol} };
     g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
     setCrosshair(0.0f, 0.0f, 80.0f);
+}
+
+static int  g_pawnAimingCalls = 0;
+static bool g_pawnAimingValue = false;
+static int  g_fcAimingCalls   = 0;
+static bool g_fcAimingValue   = false;
+static bool g_isFiringValue   = false;
+
+static bool fake_pawnAimingCounted(void *)
+{
+    g_pawnAimingCalls++;
+    return g_pawnAimingValue;
+}
+static bool fake_fireComponentAiming(void *)
+{
+    g_fcAimingCalls++;
+    return g_fcAimingValue;
+}
+static void *fake_currentFireComponent(void *weapon)
+{
+    return weapon == (void *)g_weaponObj.b ? (void *)g_weaponObj.b : nullptr;
+}
+static bool fake_pawnIsFiring(void *) { return g_isFiringValue; }
+
+static void installAdsFakes()
+{
+    fn_PawnIsAiming                  = fake_pawnAimingCounted;
+    fn_WeaponGetCurrentFireComponent = fake_currentFireComponent;
+    fn_FireComponentGetIsAiming      = fake_fireComponentAiming;
+}
+
+// The same crosshair setup the scan tests use, driven through the whole decision
+// tree (A_FireShouldFire) so the mode gate really runs.
+static FireBlock runTreeOnCrosshairSetup(TriggerTarget &out)
+{
+    // The dot's ray NAMES the enemy (path A fires): the mode gate under test
+    // sits in front of the scan, so the scan's Fired verdict has to be
+    // reachable at all.
+    armFiringWorld();
     return A_FireShouldFire(out);
 }
 
 static void testCrashFixes()
 {
     api12 = (uintptr_t)&fake_localPawnCounted;   // GamePlay::get_LocalPawn
-    api15 = (uintptr_t)&fake_pawnIsAiming;       // Pawn::IsAiming   - must never run
+    api15 = (uintptr_t)&fake_pawnIsAimingTrap;   // the api15 macro path - never taken
     api22 = (uintptr_t)&fake_currentWeapon;      // Pawn::get_CurrentWeapon
     Config.NewFeaturesMenu.Triggerbot = false;
 
-    // --- A1: "ADS Only" + a hipfiring weapon -> blocked, pawn never asked ----
-    resetWorld();
-    setWeaponAiming(false, 0.0f);
-    Config.NewFeaturesMenu.TriggerbotMode = 1;
-    g_isAimingCalls = 0;
-    g_currentWeaponCalls = 0;
-    {
-        TriggerTarget out{};
-        const FireBlock b = runTreeOnCrosshairSetup(out);
-        CHECK(b == FireBlock::ModeNotAds,
-              "A1 ADS Only: a weapon that is not aiming blocks the shot");
-        CHECK(g_isAimingCalls == 0,
-              "A1 ... and Pawn.IsAiming() is NEVER called (the ADS crash)");
-        CHECK(g_triggerDiag.adsFlag == 0 && g_triggerDiag.adsPct == 0.0f,
-              "A1 the panel shows the weapon's own aiming fields");
-    }
-
-    // --- A2: the weapon's own m_IsAiming flag -> the mode lets the shot run --
-    resetWorld();
-    setWeaponAiming(true, 0.0f);
-    g_isAimingCalls = 0;
-    {
-        TriggerTarget out{};
-        const FireBlock b = runTreeOnCrosshairSetup(out);
-        CHECK(b == FireBlock::Fired,
-              "A2 ADS Only: Weapon.m_IsAiming @0xC21 lets the shot through");
-        CHECK(g_isAimingCalls == 0, "A2 ... still without asking the pawn");
-        CHECK(g_triggerDiag.adsFlag == 1, "A2 ... and the flag is what the panel shows");
-    }
-
-    // --- A3: a half-raised scope counts (m_AimingPercentage) ----------------
-    resetWorld();
-    setWeaponAiming(false, 0.95f);
-    {
-        TriggerTarget out{};
-        const FireBlock b = runTreeOnCrosshairSetup(out);
-        CHECK(b == FireBlock::Fired,
-              "A3 ADS Only: m_AimingPercentage @0x460 above half counts as aiming");
-        CHECK(g_triggerDiag.adsPct == 0.95f, "A3 ... and its value is reported");
-    }
-
-    // --- A4: an early transition is NOT aiming ------------------------------
-    resetWorld();
-    setWeaponAiming(false, 0.2f);
-    {
-        TriggerTarget out{};
-        const FireBlock b = runTreeOnCrosshairSetup(out);
-        CHECK(b == FireBlock::ModeNotAds,
-              "A4 ADS Only: 0.2 into the ADS animation is still hipfire");
-    }
-
-    // --- A5: garbage in the field is ignored, not read as "aiming" ----------
-    // A wrong offset would hand us an arbitrary float; the gate range-checks it
-    // instead of turning the mode into "Always".
-    resetWorld();
-    setWeaponAiming(false, 7.5f);
-    {
-        TriggerTarget out{};
-        const FireBlock b = runTreeOnCrosshairSetup(out);
-        CHECK(b == FireBlock::ModeNotAds,
-              "A5 ADS Only: an out-of-range percentage is not 'always aiming'");
-    }
-
-    // --- A6: a destroyed weapon is refused before the gate ------------------
+    // --- A0: a destroyed weapon is refused before any ADS call --------------
     resetWorld();
     *(void **)(g_weaponObj.b + 0x10) = nullptr;    // m_CachedPtr cleared = Destroy()d
+    Config.NewFeaturesMenu.TriggerbotMode = 1;
+    g_pawnAimingCalls = g_fcAimingCalls = 0;
     {
         TriggerTarget out{};
         const FireBlock b = runTreeOnCrosshairSetup(out);
         CHECK(b == FireBlock::NoWeapon,
-              "A6 a destroyed weapon is refused by the liveness check");
-        CHECK(g_isAimingCalls == 0, "A6 ... and nothing native is called on it");
+              "A0 a destroyed weapon is refused by the liveness check");
+        CHECK(g_pawnAimingCalls == 0 && g_fcAimingCalls == 0,
+              "A0 ... and neither ADS source is asked about it");
     }
     objInit(g_weaponObj);                          // the rest of the suite needs it back
 
@@ -1427,6 +1422,334 @@ static void testCrashFixes()
     resetWorld();
 }
 
+// ---------------------------------------------------------------------------
+// 10. The "ADS only" gate (TriggerbotMode 1)
+//
+// The mode used to read two UNVERIFIED Weapon field offsets, and a wrong offset
+// is exactly what makes it block every shot - the reported "ADS only does not
+// work". The verdict now comes from the game's own getters:
+//   Pawn::IsAiming() 0x519BB10 (the .57 dump's "local player is scoping") and
+//   WeaponFireComponent_Instant::get_IsAiming() 0xC9AF4E0 on the held weapon's
+//   current fire component - each called ONLY on an object that passed the
+//   m_CachedPtr liveness check (the guard the crashed version was missing), and
+//   when NEITHER can answer the mode fires anyway and the panel says so.
+// ---------------------------------------------------------------------------
+static void testAdsGate()
+{
+    api12 = (uintptr_t)&fake_localPawnCounted;
+    api15 = (uintptr_t)&fake_pawnIsAimingTrap;
+    api22 = (uintptr_t)&fake_currentWeapon;
+    Config.NewFeaturesMenu.Triggerbot = false;
+
+    // --- B1: neither source is scoping -> the mode blocks the shot ----------
+    resetWorld();
+    installAdsFakes();
+    setWeaponAiming(false, 0.0f);
+    Config.NewFeaturesMenu.TriggerbotMode = 1;
+    g_pawnAimingCalls = g_fcAimingCalls = g_isAimingCalls = 0;
+    g_pawnAimingValue = g_fcAimingValue = false;
+    {
+        TriggerTarget out{};
+        CHECK(runTreeOnCrosshairSetup(out) == FireBlock::ModeNotAds,
+              "B1 ADS Only: neither source is scoping -> the shot is blocked");
+        CHECK(g_pawnAimingCalls == 1 && g_fcAimingCalls == 1,
+              "B1 both ADS sources were asked, exactly once");
+        CHECK(g_isAimingCalls == 0,
+              "B1 ... through the resolved pointer, never the api15 macro (a trap that says 'scoping')");
+        CHECK(g_triggerDiag.adsPawnOk && g_triggerDiag.adsFcOk &&
+              !g_triggerDiag.adsPawnAim && !g_triggerDiag.adsFcAim &&
+              !g_triggerDiag.adsUnknown,
+              "B1 the panel reports who answered and what they said");
+    }
+
+    // --- B2: the pawn's own flag (the .57-dump source) fires ----------------
+    resetWorld();
+    installAdsFakes();
+    g_pawnAimingValue = true; g_fcAimingValue = false;
+    {
+        TriggerTarget out{};
+        CHECK(runTreeOnCrosshairSetup(out) == FireBlock::Fired,
+              "B2 Pawn.IsAiming 0x519BB10 = scoped -> the shot goes out");
+        CHECK(g_triggerDiag.adsPawnAim && !g_triggerDiag.adsFcAim,
+              "B2 ... and the panel credits the pawn flag");
+    }
+
+    // --- B3: the fire component alone is enough ----------------------------
+    resetWorld();
+    installAdsFakes();
+    g_pawnAimingValue = false; g_fcAimingValue = true;
+    g_pawnAimingCalls = 0;
+    {
+        TriggerTarget out{};
+        CHECK(runTreeOnCrosshairSetup(out) == FireBlock::Fired,
+              "B3 the fire component's get_IsAiming 0xC9AF4E0 = scoped -> fires");
+        CHECK(g_pawnAimingCalls == 1, "B3 ... the pawn is still asked (it is the primary)");
+        CHECK(g_triggerDiag.adsFcAim && !g_triggerDiag.adsPawnAim,
+              "B3 ... and the fire component is credited");
+    }
+
+    // --- B4: NO usable source -> FAIL OPEN (never block every shot) --------
+    resetWorld();
+    fn_PawnIsAiming                  = nullptr;
+    fn_WeaponGetCurrentFireComponent = nullptr;
+    fn_FireComponentGetIsAiming      = nullptr;
+    g_pawnAimingValue = g_fcAimingValue = false;
+    {
+        TriggerTarget out{};
+        CHECK(runTreeOnCrosshairSetup(out) == FireBlock::Fired,
+              "B4 ADS Only with no usable ADS signal FAILS OPEN (was: every shot blocked)");
+        CHECK(g_triggerDiag.adsUnknown,
+              "B4 ... and the panel says the signal is missing");
+    }
+    installAdsFakes();
+
+    // --- B5: a pawn the game reports as dead is never asked ----------------
+    {
+        objSetAlive(g_localPawn, false);
+        g_pawnAimingCalls = 0; g_fcAimingValue = false;
+        const AdsRead ads = A_FireAdsGate((void *)g_weaponObj.b, (Pawn *)g_localPawn.b);
+        CHECK(g_pawnAimingCalls == 0 && !ads.pawnOk,
+              "B5 a pawn whose alive flag is clear is NEVER handed to the native getter");
+        objSetAlive(g_localPawn, true);
+    }
+
+    // --- B6: the actual crash class - a Destroy()ed native object ----------
+    {
+        *(void **)(g_localPawn.b + 0x10) = nullptr;   // Object.m_CachedPtr cleared
+        g_pawnAimingCalls = 0;
+        const AdsRead ads = A_FireAdsGate((void *)g_weaponObj.b, (Pawn *)g_localPawn.b);
+        CHECK(g_pawnAimingCalls == 0 && !ads.pawnOk,
+              "B6 a Destroy()ed pawn (m_CachedPtr cleared) is never passed to the game");
+        objInit(g_localPawn);
+    }
+
+    // --- B7: the raw field offsets are display-only ------------------------
+    // Whatever those unverified offsets hold must not decide a shot: here they
+    // claim "aiming" while BOTH real sources say "not scoped".
+    resetWorld();
+    installAdsFakes();
+    g_pawnAimingValue = g_fcAimingValue = false;
+    setWeaponAiming(true, 7.5f);
+    {
+        TriggerTarget out{};
+        CHECK(runTreeOnCrosshairSetup(out) == FireBlock::ModeNotAds,
+              "B7 garbage in the unverified field offsets cannot make the mode 'Always'");
+        CHECK(g_triggerDiag.adsFlag == 1 && g_triggerDiag.adsPct == 7.5f,
+              "B7 ... but the panel still reports them for the record");
+    }
+
+    // --- B8: "Always" asks neither source ----------------------------------
+    resetWorld();
+    installAdsFakes();
+    Config.NewFeaturesMenu.TriggerbotMode = 0;
+    g_pawnAimingCalls = g_fcAimingCalls = 0;
+    {
+        TriggerTarget out{};
+        CHECK(runTreeOnCrosshairSetup(out) == FireBlock::Fired,
+              "B8 mode Always fires with a hipfiring weapon");
+        CHECK(g_pawnAimingCalls == 0 && g_fcAimingCalls == 0,
+              "B8 ... and asks neither ADS source");
+    }
+
+    // --- B9: "Firing only" is untouched by the ADS gate --------------------
+    resetWorld();
+    installAdsFakes();
+    Config.NewFeaturesMenu.TriggerbotMode = 2;
+    fn_PawnGetIsFiring = fake_pawnIsFiring;
+    g_isFiringValue = true;
+    g_pawnAimingCalls = g_fcAimingCalls = 0;
+    {
+        TriggerTarget out{};
+        CHECK(runTreeOnCrosshairSetup(out) == FireBlock::Fired,
+              "B9 mode Firing only uses Pawn.get_IsFiring, not the ADS gate");
+        CHECK(g_pawnAimingCalls == 0 && g_fcAimingCalls == 0,
+              "B9 ... so neither ADS source is asked in that mode");
+    }
+    g_isFiringValue = false;
+    fn_PawnGetIsFiring = nullptr;
+
+    objInit(g_weaponObj);
+    setWeaponAiming(false, 0.0f);
+    Config.NewFeaturesMenu.TriggerbotMode = 0;
+    Config.NewFeaturesMenu.Triggerbot = false;
+    resetWorld();
+}
+
+// ---------------------------------------------------------------------------
+// 11. Re-press pacing - an edge-press weapon must not be pressed every scan
+//
+// The old path re-pressed on the very next scan: one StartFire per frame, ~250
+// a second, into the weapon's own state machine for as long as a target stayed
+// under the crosshair. A repeat press now waits for the weapon's own cadence -
+// ended early by Weapon.CanFire() the moment the gun is ready - while the FIRST
+// shot on a target is never delayed at all.
+// ---------------------------------------------------------------------------
+static int   g_startFireCalls = 0;
+static int   g_stopFireCalls  = 0;
+static bool  g_canFireValue   = true;
+static float g_realInterval   = 0.20f;
+
+static void  fake_startFire(void *)       { g_startFireCalls++; }
+static void  fake_stopFire(void *, bool)  { g_stopFireCalls++; }
+static bool  fake_canFire(void *)         { return g_canFireValue; }
+static float fake_realInterval(void *)    { return g_realInterval; }
+static bool  fake_autoFire(void *)        { return true; }
+
+// A_FireTick drops everything inside 4 ms of the previous scan, and the local
+// pawn / held weapon are cached for 50 ms: open that window between the calls
+// below instead of sleeping through it.
+static void openTickWindow()
+{
+    g_afireLastEvalTime = -1000.0;
+    g_afireInTick       = false;
+}
+
+static void testRepressPacing()
+{
+    api12 = (uintptr_t)&fake_localPawnCounted;
+    api22 = (uintptr_t)&fake_currentWeapon;
+    fn_PawnIsAiming                  = nullptr;
+    fn_WeaponGetCurrentFireComponent = nullptr;
+    fn_FireComponentGetIsAiming      = nullptr;
+    fn_PawnGetIsFiring               = nullptr;
+    fn_WeaponIsAutoFire              = nullptr;      // unresolved -> edge press
+    fn_WeaponRealFireInterval        = fake_realInterval;
+    fn_WeaponCanFire                 = fake_canFire;
+    fn_Weapon_StartFire              = fake_startFire;
+    fn_Weapon_StopFire               = fake_stopFire;
+    Config.NewFeaturesMenu.Triggerbot = true;
+    Config.NewFeaturesMenu.TriggerbotMode = 0;       // Always: keep the mode gate out
+    g_realInterval = 0.20f;                          // -> pace = 0.18 s
+    g_canFireValue = false;                          // the gun is still cycling
+
+    resetWorld();
+    armFiringWorld();
+    resetLocalPawnCache();
+    g_triggerDiag = TriggerbotDiag{};
+    g_startFireCalls = g_stopFireCalls = 0;
+    g_afireLastPressTime   = -1000.0;
+    g_afireLastPressWeapon = nullptr;
+
+    // --- P0: the pure helper's clamps --------------------------------------
+    CHECK(std::fabs(A_FireRepressPaceSeconds(0.20f) - 0.18f) < 1e-5f,
+          "P0 pace = 90% of the weapon's own interval");
+    CHECK(A_FireRepressPaceSeconds(0.0001f) == A_FireTune::kMinFireInterval,
+          "P0 a degenerate interval falls back to the pacing floor");
+    CHECK(A_FireRepressPaceSeconds(9.0f) == A_FireTune::kMaxRepressPace,
+          "P0 a huge interval is capped, so a repeat press never waits too long");
+
+    // --- P1: the FIRST shot is never paced ---------------------------------
+    openTickWindow();
+    A_FireTick(nullptr);
+    CHECK(g_startFireCalls == 1, "P1 the first press goes out with no delay");
+    CHECK(g_triggerDiag.fires == 1, "P1 ... and the panel counts it");
+
+    // --- P2: the release that arms the next round --------------------------
+    openTickWindow();
+    A_FireTick(nullptr);
+    CHECK(g_stopFireCalls == 1 && !g_afireHoldingFire,
+          "P2 an edge-press weapon is released on the next scan (one press = one shot)");
+    CHECK(g_startFireCalls == 1, "P2 ... and nothing was re-pressed yet");
+
+    // --- P3: too soon AND the gun says "not ready" -> no press -------------
+    openTickWindow();
+    A_FireTick(nullptr);
+    CHECK(g_startFireCalls == 1,
+          "P3 a repeat press waits (was: one StartFire per scan, ~250/s)");
+    CHECK(g_triggerDiag.repressSkipped >= 1 && g_triggerDiag.paceWaiting,
+          "P3 ... and the panel shows the wait");
+    CHECK(GetTriggerbotDebugState() == 1,
+          "P3 ... as an 'aimed in, waiting on the gun' state");
+
+    // --- P4: Weapon.CanFire() ends the wait immediately --------------------
+    g_canFireValue = true;
+    openTickWindow();
+    A_FireTick(nullptr);
+    CHECK(g_startFireCalls == 2,
+          "P4 the moment the game says the gun can fire, the press goes out (no added delay)");
+    g_canFireValue = false;
+
+    // --- P5: a CanFire that never answers "ready" cannot silence it --------
+    // The pace alone allows the next press - it is bounded, so the trigger can
+    // never go quiet, and it is the only thing standing between us and the old
+    // press-per-scan spam.
+    openTickWindow();
+    A_FireTick(nullptr);                                  // release
+    g_afireLastPressTime = A_FireNow() - 0.30;            // past the 0.18 s pace
+    openTickWindow();
+    A_FireTick(nullptr);
+    CHECK(g_startFireCalls == 3,
+          "P5 past the pace a press goes out even with CanFire stuck 'not ready'");
+
+    // --- P6: a NEW target is never paced -----------------------------------
+    g_afireLastPressTime   = A_FireNow();                 // as if we had just fired
+    g_afireLastPressWeapon = (void *)g_weaponObj.b;
+    g_afireTargetPawn      = (void *)g_otherPawn.b;       // ... at somebody else
+    openTickWindow();
+    A_FireTick(nullptr);
+    CHECK(g_startFireCalls == 4, "P6 a new target is pressed immediately, never paced");
+
+    // --- P7: an auto weapon is held, never released, never re-pressed ------
+    A_FireReleaseTrigger(nullptr);                        // clean, released state
+    g_afireTargetPawn      = nullptr;
+    g_afireLastPressTime   = -1000.0;
+    g_afireLastPressWeapon = nullptr;
+    fn_WeaponIsAutoFire    = fake_autoFire;
+    openTickWindow();
+    A_FireTick(nullptr);
+    const int autoPresses = g_startFireCalls;
+    const int autoStops   = g_stopFireCalls;
+    openTickWindow();
+    A_FireTick(nullptr);
+    openTickWindow();
+    A_FireTick(nullptr);
+    CHECK(g_startFireCalls == autoPresses && g_stopFireCalls == autoStops,
+          "P7 an auto weapon is held: no release and no re-press while the target stays");
+    CHECK(g_afireHoldingFire, "P7 ... the trigger stays down");
+
+    // --- P9: a held auto weapon re-asserts when the gun becomes ready again
+    // The game clears its own fire request on an auto-reload; without this the
+    // burst never resumes until the player taps the button again.
+    const int beforeReassert = g_startFireCalls;
+    g_canFireValue = false;                       // reloading
+    openTickWindow();
+    A_FireTick(nullptr);
+    g_canFireValue = true;                        // reload finished
+    openTickWindow();
+    A_FireTick(nullptr);
+    CHECK(g_startFireCalls == beforeReassert + 1,
+          "P9 a held auto weapon re-presses the moment CanFire turns true (reload recovery)");
+    CHECK(g_triggerDiag.reasserts >= 1, "P9 ... and the panel counts the re-assert");
+
+    // --- P10: the backstop, for a gun that stays "ready" while held --------
+    g_afireLastPressTime = A_FireNow() - 0.30;    // past kReassertPress
+    openTickWindow();
+    A_FireTick(nullptr);
+    CHECK(g_startFireCalls == beforeReassert + 2,
+          "P10 a held trigger also re-asserts on the periodic backstop");
+
+    // --- P8: an unknown fire mode is an EDGE press, not a hold -------------
+    // Holding is how a semi-auto whose flags did not resolve fires once and then
+    // never again.
+    fn_WeaponIsAutoFire = nullptr;
+    CHECK(GetWeaponFireMode((void *)g_weaponObj.b) == FireMode::Single,
+          "P8 an unrecognised weapon behaves as single shot (edge), never as a hold");
+
+    // Leave the suite as it was found.
+    g_afireHoldingFire     = false;
+    g_afireFiringOn        = nullptr;
+    g_afireTargetPawn      = nullptr;
+    g_afireLastPressWeapon = nullptr;
+    g_afireLastPressTime   = -1000.0;
+    fn_Weapon_StartFire          = nullptr;
+    fn_Weapon_StopFire           = nullptr;
+    fn_WeaponCanFire             = nullptr;
+    fn_WeaponRealFireInterval    = nullptr;
+    fn_WeaponIsAutoFire          = nullptr;
+    Config.NewFeaturesMenu.Triggerbot = false;
+    resetWorld();
+}
+
 int main()
 {
     installFns();
@@ -1440,6 +1763,8 @@ int main()
     testCrosshairAim();
     testTickHookCost();
     testCrashFixes();
+    testAdsGate();
+    testRepressPacing();
 
     if (g_failures == 0) {
         printf("\nOK: all LOS gate checks passed\n");
