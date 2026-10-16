@@ -504,6 +504,24 @@ inline void ResolveTargetIds(const TargetChar &t,
     packId    = t.rolepackID;
 }
 
+// Can the character list apply a skin at all right now?
+//
+// ApplyCharacterSkin() walks each row list and skips the ones that are empty, so
+// the apply only needs the tiers a click really reads: the CharacterModel rows
+// it writes, plus the ItemResource / RoleConf rows it looks up by the selected
+// target's ids. RolePackConf deliberately does NOT belong in this test. The game
+// builds those pack configs lazily (a BR lobby usually has none), so requiring
+// them meant every click on a character returned before the apply ran - the
+// "I choose a character skin and nothing happens" report. Keeping the pack tier
+// out of it leaves that list empty and simply skips the pack writes, exactly the
+// way the list builder in Skin/Thread.h LoadCharacterSkins() already treats it.
+inline bool CharacterApplyReady(const std::vector<void *> &charModels,
+                                const std::vector<void *> &itemResources,
+                                const std::vector<void *> &roleConfs)
+{
+    return !charModels.empty() && !itemResources.empty() && !roleConfs.empty();
+}
+
 // Copy `getchar`'s own config values onto the character selected in the Target
 // Character dropdown.
 //

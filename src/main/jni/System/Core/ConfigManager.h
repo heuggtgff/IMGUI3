@@ -53,6 +53,7 @@ void LoadConfig() {
         else if (key == "Aim.Trigger") Config.Aim.Trigger = static_cast<EAimTrigger>(std::stoi(valueStr));
         else if (key == "Aim.By") Config.Aim.By = static_cast<EAim>(std::stoi(valueStr));
         else if (key == "ExtraMenu.Kinetic") Config.ExtraMenu.Kinetic = (valueStr == "1");
+        else if (key == "ExtraMenu.UnlockAttachments") Config.ExtraMenu.UnlockAttachments = (valueStr == "1");
         else if (key == "ExtraMenu.Recoil") Config.ExtraMenu.Recoil = (valueStr == "1");
         else if (key == "ExtraMenu.Spread") Config.ExtraMenu.Spread = (valueStr == "1");
         else if (key == "ExtraMenu.Reload") Config.ExtraMenu.Reload = (valueStr == "1");
@@ -122,6 +123,7 @@ void SaveConfig() {
     file << "Aim.Trigger " << Config.Aim.Trigger << "\n";
     file << "Aim.By " << Config.Aim.By << "\n";
     file << "ExtraMenu.Kinetic " << Config.ExtraMenu.Kinetic << "\n";
+    file << "ExtraMenu.UnlockAttachments " << Config.ExtraMenu.UnlockAttachments << "\n";
     file << "ExtraMenu.Recoil " << Config.ExtraMenu.Recoil << "\n";
     file << "ExtraMenu.Spread " << Config.ExtraMenu.Spread << "\n";
     file << "ExtraMenu.Reload " << Config.ExtraMenu.Reload << "\n";

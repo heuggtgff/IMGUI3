@@ -52,6 +52,7 @@ void SaveConfiguration(const std::string& filename) {
     config["ExtraMenu"]["Scope"] = Config.ExtraMenu.Scope;
     config["ExtraMenu"]["Switch"] = Config.ExtraMenu.Switch;
     config["ExtraMenu"]["KineticArmor"] = Config.ExtraMenu.Kinetic;
+    config["ExtraMenu"]["UnlockAttachments"] = Config.ExtraMenu.UnlockAttachments;
 
     config["isJumpAdjustmentEnabled"] = isJumpAdjustmentEnabled;
     config["jumpHeightMultiplier"] = jumpHeightMultiplier;
@@ -144,6 +145,10 @@ bool LoadConfiguration(const std::string& filename) {
             Config.ExtraMenu.Scope = config["ExtraMenu"]["Scope"].get<bool>();
             Config.ExtraMenu.Switch = config["ExtraMenu"]["Switch"].get<bool>();
             Config.ExtraMenu.Kinetic = config["ExtraMenu"]["Kinetic"].get<bool>();
+            // Guarded: a config file written before the switch existed keeps the
+            // default (on) instead of throwing out of the whole load.
+            if (config["ExtraMenu"].contains("UnlockAttachments"))
+                Config.ExtraMenu.UnlockAttachments = config["ExtraMenu"]["UnlockAttachments"].get<bool>();
     if (config.contains("NewFeatures")) {
         Config.NewFeaturesMenu.NoCrouch = config["NewFeatures"]["NoCrouch"].get<bool>();
         Config.NewFeaturesMenu.Triggerbot = config["NewFeatures"]["Triggerbot"].get<bool>();

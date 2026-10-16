@@ -3,6 +3,7 @@
 #include "Includes/obfuscate.h"
 #include "Includes/Utils.h"
 #include "ImGui/Call_ImGui.h"
+#include "ImGui/menu_layout.h"
 #include "IL2CppSDKGenerator/BasicStructs/Call_BasicStructs.h"
 #include "IL2CppSDKGenerator/IL2Cpp/Call_IL2Cpp.h"
 #include "Hacks/Hacks.h"
@@ -947,9 +948,6 @@ static bool isMenuVisible = true;
 
 int TABG = 1;
 
-static ImVec2 g_WheelPos = ImVec2(-1.0f, -1.0f);
-static bool   g_WheelPosInit = false;
-
 EGLBoolean (*old_eglSwapBuffers)(EGLDisplay dpy, EGLSurface surface);
 
 // ---- Pizza outline: single color from the menu hue slider, thicker ----
@@ -1626,18 +1624,12 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
             float openAlpha = 0.2f + 0.8f * openEase;
             ImGui::PushStyleVar(ImGuiStyleVar_Alpha, openAlpha);
 
-            const float menuW = ImMin(900.0f, ioDisplaySize.x * 0.72f);
-            const float menuH = ImMin(600.0f, ioDisplaySize.y * 0.88f);
-            const float wheelW = 320.0f;
-            const float totalW = menuW + wheelW + 24.0f;
-            ImVec2 menuPos;
-            if (totalW < ioDisplaySize.x) {
-                menuPos = ImVec2((ioDisplaySize.x - totalW) * 0.5f,
-                                 (ioDisplaySize.y - menuH) * 0.5f);
-            } else {
-                menuPos = ImVec2((ioDisplaySize.x - menuW) * 0.5f,
-                                 (ioDisplaySize.y - menuH) * 0.5f);
-            }
+            // Position and size both come from the display, so the window fits
+            // whatever the render surface is (ImGui/menu_layout.h).
+            const MenuLayout menuLayout = ComputeMenuLayout(ioDisplaySize);
+            const float menuW = menuLayout.menuW;
+            const float menuH = menuLayout.menuH;
+            ImVec2 menuPos = menuLayout.menuPos;
 
             ImGui::SetNextWindowPos(menuPos, ImGuiCond_Always, ImVec2(0.0f, 0.0f));
             ImGui::SetNextWindowSize(ImVec2(menuW, menuH), ImGuiCond_Always);
@@ -1694,10 +1686,9 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 
                     const ImVec2 hostMin(contentLeft, headerTop + headerHeight + layoutGap);
                     const ImVec2 hostMax(contentRight, runtimeWindowPos.y + runtimeWindowSize.y - outerPad);
+                    // Top left of the content area inside the shell; the sidebar
+                    // below splits it into the rail, the panel and the tab host.
                     const ImVec2 contentInnerMin(hostMin.x + contentPadding, hostMin.y + contentPadding);
-                    const ImVec2 contentInnerSize(
-                        ImMax(0.0f, (hostMax.x - hostMin.x) - contentPadding * 2.0f),
-                        ImMax(0.0f, (hostMax.y - hostMin.y) - contentPadding * 2.0f));
 
                     runtimeState.page = ImClamp(runtimeState.page, 1, 6);
                     runtimeState.activeTab = ImClamp(runtimeState.activeTab, 1, 6);
@@ -1766,8 +1757,109 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 
                     runtimeDrawList->AddRectFilled(hostMin, hostMax, ImGui::GetColorU32(main_runtime_theme::GetSidebarShellBackgroundColor()), 11.0f);
 
-                    ImGui::SetCursorScreenPos(contentInnerMin);
-                    ImGui::BeginChild("##RuntimeContentHost", contentInnerSize, false, ImGuiWindowFlags_NoBackground);
+                    // ---- Sidebar: the tab switcher -------------------------
+                    // Tabs used to be picked from a floating radial wheel beside
+                    // the window. They live in a sidebar inside the window now,
+                    // with a hamburger at the top of the rail that folds it
+                    // away. The sizes are pure functions of the host area
+                    // (ImGui/menu_layout.h), so the rail, the panel and the tab
+                    // content can never overlap whatever the surface is.
+                    static bool  g_sidebarOpen = true;
+                    static float g_sidebarAnim = 1.0f;
+                    const float  sidebarTarget = g_sidebarOpen ? 1.0f : 0.0f;
+                    g_sidebarAnim += (sidebarTarget - g_sidebarAnim) *
+                                     ImMin(1.0f, ImGui::GetIO().DeltaTime * 12.0f);
+                    if (g_sidebarAnim > 0.998f)      g_sidebarAnim = 1.0f;
+                    else if (g_sidebarAnim < 0.002f) g_sidebarAnim = 0.0f;
+
+                    const ImVec2 hostSize(ImMax(1.0f, hostMax.x - hostMin.x),
+                                          ImMax(1.0f, hostMax.y - hostMin.y));
+                    const SidebarLayout sidebar = ComputeSidebarLayout(hostSize, g_sidebarAnim);
+
+                    const float  hostInnerH = ImMax(1.0f, (hostMax.y - contentPadding) - contentInnerMin.y);
+                    const ImVec2 railMin(contentInnerMin.x, contentInnerMin.y);
+                    const ImVec2 sidebarMin(railMin.x + sidebar.railW, contentInnerMin.y);
+                    const ImVec2 sidebarMax(sidebarMin.x + sidebar.panelW, contentInnerMin.y + hostInnerH);
+                    const ImVec2 contentMin(sidebarMin.x + sidebar.panelW + sidebar.gap, contentInnerMin.y);
+                    const ImVec2 contentSize(ImMax(1.0f, (hostMax.x - contentPadding) - contentMin.x),
+                                             hostInnerH);
+
+                    // The rail never goes away, so a folded sidebar can always
+                    // be brought back.
+                    if (custom::shell::DrawSidebarButton("##menu_sidebar_toggle", ICON_FA_BARS,
+                                                         g_sidebarOpen, railMin,
+                                                         ImVec2(sidebar.railW, sidebar.railW)))
+                        g_sidebarOpen = !g_sidebarOpen;
+                    if (sidebar.panelW > 1.0f) {
+                        runtimeDrawList->AddRectFilled(sidebarMin, sidebarMax,
+                            ImGui::GetColorU32(main_runtime_theme::GetActiveTabBackgroundColor()), 9.0f);
+                        runtimeDrawList->AddRect(sidebarMin, sidebarMax,
+                            main_runtime_theme::GetAccentTintU32(0.22f, 0.35f), 9.0f, 0, 1.0f);
+
+                        // The six entries the radial wheel had: the same ids, the
+                        // same icons and labels, listed instead of ringed.
+                        static const char *sbIcons[] = { ICON_FA_HOME, ICON_FA_EYE, ICON_FA_SLIDERS_H,
+                                                         ICON_FA_STAR, ICON_FA_MICROCHIP, ICON_FA_COG };
+                        static const char *sbNames[] = { "HOME", "ESP", "EXTRA", "SKINS", "AIM", "SETTINGS" };
+                        static const int   sbIds[]   = { 2, 1, 5, 4, 3, 6 };
+
+                        ImFont *sbIconFont = custom::shell::GetIconFont();
+                        ImFont *sbTextFont = font::inter_semibold ? font::inter_semibold : ImGui::GetFont();
+
+                        // Clipped to the panel: while the fold animates the rows
+                        // slide away, and they must not paint over the content.
+                        ImGui::PushClipRect(sidebarMin, sidebarMax, true);
+                        float rowY = sidebarMin.y + sidebar.topPad;
+                        for (int i = 0; i < sidebar.rows; ++i) {
+                            const ImVec2 rMin(sidebarMin.x + sidebar.sidePad, rowY);
+                            const ImVec2 rSize(ImMax(1.0f, sidebar.panelW - sidebar.sidePad * 2.0f), sidebar.rowH);
+                            const ImVec2 rMax(rMin.x + rSize.x, rMin.y + rSize.y);
+
+                            ImGui::SetCursorScreenPos(rMin);
+                            char rId[48];
+                            snprintf(rId, sizeof(rId), "##menu_sidebar_%d", sbIds[i]);
+                            ImGui::InvisibleButton(rId, rSize);
+                            const bool hov = ImGui::IsItemHovered();
+                            const bool act = (runtimeState.page == sbIds[i]);
+
+                            if (act || hov) {
+                                runtimeDrawList->AddRectFilled(rMin, rMax,
+                                    act ? ImGui::GetColorU32(main_runtime_theme::GetActiveTabBackgroundColor())
+                                        : IM_COL32(18, 20, 29, 150), 8.0f);
+                            }
+                            if (act) {
+                                runtimeDrawList->AddRectFilled(rMin, ImVec2(rMin.x + 3.0f, rMax.y),
+                                    main_runtime_theme::GetAccentU32(), 2.0f);
+                            }
+
+                            if (sbIconFont) {
+                                runtimeDrawList->AddText(sbIconFont, 16.0f,
+                                    ImVec2(rMin.x + 10.0f, rMin.y + (rSize.y - 16.0f) * 0.5f),
+                                    act ? main_runtime_theme::GetAccentTintU32(0.98f, 1.0f)
+                                        : IM_COL32(154, 160, 182, hov ? 245 : 220),
+                                    sbIcons[i]);
+                            }
+
+                            if (rMax.x - 6.0f > rMin.x + 34.0f) {
+                                runtimeDrawList->AddText(sbTextFont, 12.5f,
+                                    ImVec2(rMin.x + 34.0f, rMin.y + (rSize.y - 12.5f) * 0.5f),
+                                    act ? IM_COL32(245, 245, 250, 255)
+                                        : IM_COL32(154, 160, 182, hov ? 245 : 205),
+                                    sbNames[i]);
+                            }
+
+                            if (ImGui::IsItemClicked()) {
+                                runtimeState.page = sbIds[i];
+                                runtimeState.activeTab = sbIds[i];
+                                g_LogoPreviewMode = false;
+                            }
+                            rowY += sidebar.rowH + sidebar.rowGap;
+                        }
+                        ImGui::PopClipRect();
+                    }
+
+                    ImGui::SetCursorScreenPos(contentMin);
+                    ImGui::BeginChild("##RuntimeContentHost", contentSize, false, ImGuiWindowFlags_NoBackground);
                     {
                         const bool pushedContentFont = (font::inter_semibold != nullptr);
                         if (pushedContentFont) ImGui::PushFont(font::inter_semibold);
@@ -1799,6 +1891,9 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 // No Slide Fatigue: remove the slide limit/fatigue system
                                 // (SlideTackleComponent::get_UseSlideTackleLimit -> false,
                                 // local pawn only). Unlimited slides, no idle-time decay.
+                                // Unlock attachments (blueprints + mythic sights),
+                                // on by default: the HOME tab owns it now.
+                                custom::Checkbox("Unlock Attachments", &Config.ExtraMenu.UnlockAttachments);
                                 custom::Checkbox("No Slide Fatigue", &Config.NewFeaturesMenu.NoSlideFatigue);
                                 custom::Separator();
                                 custom::Separator();
@@ -1904,8 +1999,9 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 if (runtimeState.activeTab == 4) {
     const ChildFrame skinChild = BeginContentChild("SKINS", ImVec2(contentRegion.x, childHeight));
 
-    custom::Checkbox("Unlock Blueprints", &Config.ExtraMenu.Blueprints);
-
+    // No "Unlock Blueprints" / "Unlock Mythic Attachments" checkbox: both
+    // unlocks are unconditional (System/Hooks/Feats.h answers true and there is
+    // no flag behind them any more). The row only ate list height here.
     RenderSkinCategoryContent(skinSubTab, true);
     EndContentChild(skinChild);
 }
@@ -2252,206 +2348,6 @@ if (runtimeState.activeTab == 4) {
         }
 
         ImGui::PopStyleVar();
-    }
-
-    if (isLogin && isMenuVisible && !windowCollapsed) {
-        const float WW = 320.0f;
-        const float WH = 320.0f;
-        const float cx = WW * 0.5f;
-        const float cy = WH * 0.5f;
-        const float outerR  = 130.0f;
-        const float itemR   = 92.0f;
-        const float centerR = 50.0f;
-
-        if (!g_WheelPosInit) {
-            const float menuW = ImMin(900.0f, ioDisplaySize.x * 0.72f);
-            const float menuH = ImMin(600.0f, ioDisplaySize.y * 0.88f);
-            const float totalW = menuW + WW + 24.0f;
-            if (totalW < ioDisplaySize.x) {
-                g_WheelPos = ImVec2((ioDisplaySize.x - totalW) * 0.5f + menuW + 24.0f,
-                                    (ioDisplaySize.y - WH) * 0.5f);
-            } else {
-                g_WheelPos = ImVec2((ioDisplaySize.x - WW) * 0.5f,
-                                    ioDisplaySize.y - WH - 20.0f);
-            }
-            g_WheelPosInit = true;
-        }
-
-        g_WheelPos.x = ImClamp(g_WheelPos.x, 0.0f, ImMax(0.0f, ioDisplaySize.x - WW));
-        g_WheelPos.y = ImClamp(g_WheelPos.y, 0.0f, ImMax(0.0f, ioDisplaySize.y - WH));
-
-        ImGui::SetNextWindowPos(g_WheelPos, ImGuiCond_Always);
-        ImGui::SetNextWindowSize(ImVec2(WW, WH), ImGuiCond_Always);
-        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleColor(ImGuiCol_Border,  ImVec4(0, 0, 0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-
-        if (ImGui::Begin("##RadialWheel", nullptr,
-            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse |
-            ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground)) {
-
-            ImDrawList* wdl = ImGui::GetWindowDrawList();
-            ImVec2 wp2 = ImGui::GetWindowPos();
-            const float cx2 = wp2.x + cx;
-            const float cy2 = wp2.y + cy;
-
-            static float t = 0.0f;
-            t += ImGui::GetIO().DeltaTime * 0.6f;
-
-            auto RainbowU32 = [](float hue, int alpha) -> ImU32 {
-                float r, g, b;
-                ImGui::ColorConvertHSVtoRGB(hue - floorf(hue), 0.95f, 1.0f, r, g, b);
-                return IM_COL32((int)(r * 255), (int)(g * 255), (int)(b * 255), alpha);
-            };
-
-            {
-                ImVec2 mouse = ImGui::GetIO().MousePos;
-                float dx = mouse.x - cx2;
-                float dy = mouse.y - cy2;
-                float dist = sqrtf(dx * dx + dy * dy);
-
-                bool overTile = false;
-                for (int i = 0; i < 6; ++i) {
-                    float a = -IM_PI * 0.5f + (2.0f * IM_PI / 6.0f) * i;
-                    ImVec2 ic(cx2 + cosf(a) * itemR, cy2 + sinf(a) * itemR);
-                    float ddx = mouse.x - ic.x;
-                    float ddy = mouse.y - ic.y;
-                    if (ddx * ddx + ddy * ddy < 42.0f * 42.0f) { overTile = true; break; }
-                }
-
-                static bool s_dragActive = false;
-                static ImVec2 s_dragAnchor, s_wheelAnchor;
-
-                bool insideRing = (dist < outerR + 22.0f) && (dist > 0.0f);
-                if (insideRing && !overTile && ImGui::IsMouseClicked(0)) {
-                    s_dragActive = true;
-                    s_dragAnchor = mouse;
-                    s_wheelAnchor = g_WheelPos;
-                }
-                if (!ImGui::IsMouseDown(0)) s_dragActive = false;
-                if (s_dragActive) {
-                    g_WheelPos.x = s_wheelAnchor.x + (mouse.x - s_dragAnchor.x);
-                    g_WheelPos.y = s_wheelAnchor.y + (mouse.y - s_dragAnchor.y);
-                }
-            }
-
-            const int   slices    = 12;
-            const float sliceStep = (2.0f * IM_PI) / (float)slices;
-            for (int i = 0; i < slices; ++i) {
-                float a0 = -IM_PI * 0.5f + sliceStep * i + 0.02f;
-                float a1 = -IM_PI * 0.5f + sliceStep * (i + 1) - 0.02f;
-                float hue = t + (float)i / (float)slices;
-                wdl->PathClear();
-                wdl->PathArcTo(ImVec2(cx2, cy2), outerR + 3.0f, a0, a1, 24);
-                wdl->PathStroke(RainbowU32(hue, 230), false, 6.0f);
-                wdl->PathClear();
-                wdl->PathArcTo(ImVec2(cx2, cy2), outerR + 8.0f, a0, a1, 24);
-                wdl->PathStroke(RainbowU32(hue, 70), false, 3.0f);
-            }
-
-            wdl->AddCircleFilled(ImVec2(cx2, cy2), outerR + 1.0f, IM_COL32(10, 4, 22, 200), 96);
-            wdl->AddCircle(ImVec2(cx2, cy2), outerR - 18.0f, IM_COL32(160, 80, 255, 25), 96, 0.8f);
-            wdl->AddCircle(ImVec2(cx2, cy2), outerR - 38.0f, IM_COL32(160, 80, 255, 18), 96, 0.6f);
-
-            for (int i = 0; i < slices; ++i) {
-                float a = -IM_PI * 0.5f + sliceStep * i;
-                float hue = t + (float)i / (float)slices;
-                ImVec2 p0(cx2 + cosf(a) * (centerR + 4.0f), cy2 + sinf(a) * (centerR + 4.0f));
-                ImVec2 p1(cx2 + cosf(a) * (outerR + 1.0f),  cy2 + sinf(a) * (outerR + 1.0f));
-                wdl->AddLine(p0, p1, RainbowU32(hue, 90), 1.0f);
-            }
-
-            const char* radialIcons[] = { ICON_FA_HOME, ICON_FA_EYE, ICON_FA_SLIDERS_H, ICON_FA_STAR, ICON_FA_MICROCHIP, ICON_FA_COG };
-            const char* radialNames[] = { "HOME", "ESP", "EXTRA", "SKINS", "AIM", "SETTINGS" };
-            const int   radialIds[]   = { 2, 1, 5, 4, 3, 6 };
-
-            auto DrawHex = [&](ImVec2 center, float radius, ImU32 fillCol, ImU32 borderCol, float thick) {
-                ImVec2 pts[6];
-                for (int j = 0; j < 6; j++) {
-                    float angle = IM_PI / 6.0f + j * (IM_PI / 3.0f);
-                    pts[j] = ImVec2(center.x + cosf(angle) * radius, center.y + sinf(angle) * radius);
-                }
-                wdl->AddConvexPolyFilled(pts, 6, fillCol);
-                if (thick > 0.0f)
-                    for (int j = 0; j < 6; j++)
-                        wdl->AddLine(pts[j], pts[(j+1)%6], borderCol, thick);
-            };
-
-            for (int i = 0; i < 6; ++i) {
-                float a = -IM_PI * 0.5f + (2.0f * IM_PI / 6.0f) * i;
-                const ImVec2 itemCenter(cx2 + cosf(a) * itemR, cy2 + sinf(a) * itemR);
-                const bool active = (page == radialIds[i]);
-                const float hexR = active ? 34.0f : 30.0f;
-                float hue = t + (float)i / 6.0f;
-                ImU32 scU32 = RainbowU32(hue, 255);
-
-                if (active) {
-                    DrawHex(itemCenter, hexR + 12.0f, RainbowU32(hue, 25), IM_COL32(0,0,0,0), 0.0f);
-                    DrawHex(itemCenter, hexR + 7.0f,  RainbowU32(hue, 60), IM_COL32(0,0,0,0), 0.0f);
-                }
-
-                ImU32 hexFill;
-                if (active) {
-                    float r, g, b;
-                    ImGui::ColorConvertHSVtoRGB(hue - floorf(hue), 0.85f, 0.55f, r, g, b);
-                    hexFill = IM_COL32((int)(r*255), (int)(g*255), (int)(b*255), 230);
-                } else hexFill = IM_COL32(16, 8, 32, 245);
-
-                ImU32 hexBorder = active ? scU32 : IM_COL32(120, 80, 180, 180);
-                DrawHex(itemCenter, hexR, hexFill, hexBorder, active ? 2.5f : 1.2f);
-
-                if (active)
-                    DrawHex(ImVec2(itemCenter.x - 2.0f, itemCenter.y - 4.0f), hexR * 0.48f, IM_COL32(255,255,255,40), IM_COL32(0,0,0,0), 0.0f);
-                else
-                    DrawHex(itemCenter, hexR - 5.0f, IM_COL32(0,0,0,0), IM_COL32(140, 100, 200, 70), 0.7f);
-
-                ImFont* font = ImGui::GetFont();
-                const float iconScale = 0.82f, textScale = 0.58f;
-                const ImVec2 iconSz = font->CalcTextSizeA(ImGui::GetFontSize() * iconScale, FLT_MAX, 0.0f, radialIcons[i]);
-                const ImVec2 nameSz = font->CalcTextSizeA(ImGui::GetFontSize() * textScale, FLT_MAX, 0.0f, radialNames[i]);
-
-                ImU32 iconCol = active ? IM_COL32(255,255,255,255) : IM_COL32(153,153,184,255);
-                ImU32 nameCol = active ? scU32 : IM_COL32(97,97,122,255);
-
-                wdl->AddText(font, ImGui::GetFontSize() * iconScale,
-                    ImVec2(itemCenter.x - iconSz.x * 0.5f, itemCenter.y - 15.0f), iconCol, radialIcons[i]);
-                wdl->AddText(font, ImGui::GetFontSize() * textScale,
-                    ImVec2(itemCenter.x - nameSz.x * 0.5f, itemCenter.y + 6.0f), nameCol, radialNames[i]);
-
-                ImGui::SetCursorScreenPos(ImVec2(itemCenter.x - 38.0f, itemCenter.y - 38.0f));
-                char tabId[64]; snprintf(tabId, sizeof(tabId), "##Radial_%d", radialIds[i]);
-                if (ImGui::InvisibleButton(tabId, ImVec2(76.0f, 76.0f))) {
-                    page = radialIds[i];
-                    activeTab = radialIds[i];
-                    g_LogoPreviewMode = false;
-                }
-            }
-
-            {
-                ImVec2 octPts[8];
-                for (int j = 0; j < 8; j++) {
-                    float ang = j * (IM_PI / 4.0f) + IM_PI / 8.0f;
-                    octPts[j] = ImVec2(cx2 + cosf(ang) * centerR, cy2 + sinf(ang) * centerR);
-                }
-                wdl->AddConvexPolyFilled(octPts, 8, IM_COL32(6, 2, 14, 255));
-                for (int j = 0; j < 8; j++) {
-                    float hue = t + (float)j / 8.0f;
-                    wdl->AddLine(octPts[j], octPts[(j+1)%8], RainbowU32(hue, 230), 2.2f);
-                }
-            }
-
-            {
-                const char* centerText = "ETHNIR NOIR";
-                ImFont* cf = font::inter_semibold ? font::inter_semibold : ImGui::GetFont();
-                ImVec2 ts = cf->CalcTextSizeA(15.0f, FLT_MAX, 0.0f, centerText);
-                wdl->AddText(cf, 15.0f, ImVec2(cx2 - ts.x * 0.5f, cy2 - ts.y * 0.5f), RainbowU32(t, 255), centerText);
-            }
-        }
-        ImGui::End();
-        ImGui::PopStyleVar(2);
-        ImGui::PopStyleColor(2);
     }
 
     auto Input_get_touchCount = (int (*)())(Class_Input_get_touchCount);

@@ -521,36 +521,39 @@ case 0:
                         pair.second = false;
                 }
 
-                if (!CharacterModelConfigInstance.empty() &&
-                    !itemResourceConfigInstance.empty() &&
-                    !RoleConfConfigInstance.empty() &&
-                    !RolePackConfConfigInstance.empty()) {
+                // Bounds-checked: g_targetCharacters can be rebuilt between two
+                // frames, and an out-of-range index would read past the vector
+                // instead of just doing nothing.
+                if (g_selectedTargetCharIndex < 0 ||
+                    g_selectedTargetCharIndex >= (int)g_targetCharacters.size())
+                    return;
 
-                    // Bounds-checked: g_targetCharacters can be rebuilt between
-                    // two frames, and an out-of-range index would read past the
-                    // vector instead of just doing nothing.
-                    if (g_selectedTargetCharIndex < 0 ||
-                        g_selectedTargetCharIndex >= (int)g_targetCharacters.size())
-                        return;
+                // Only the tiers the apply really reads, and no RolePackConf:
+                // the game builds those pack configs lazily, and demanding them
+                // here made the click do nothing in a lobby (see
+                // CharacterApplyReady in Skin/Fields.h).
+                if (!CharacterApplyReady(CharacterModelConfigInstance,
+                                         itemResourceConfigInstance,
+                                         RoleConfConfigInstance))
+                    return;
 
-                    int selTraitor1P = 0, selTraitor3P = 0, selItemID = 0,
-                        selRoleID = 0, selPackID = 0;
-                    ResolveTargetIds(g_targetCharacters[g_selectedTargetCharIndex],
-                                     selTraitor1P, selTraitor3P,
-                                     selItemID, selRoleID, selPackID);
+                int selTraitor1P = 0, selTraitor3P = 0, selItemID = 0,
+                    selRoleID = 0, selPackID = 0;
+                ResolveTargetIds(g_targetCharacters[g_selectedTargetCharIndex],
+                                 selTraitor1P, selTraitor3P,
+                                 selItemID, selRoleID, selPackID);
 
-                    // The whole apply lives in Skin/Fields.h so the host test
-                    // (Skin/tests/character_apply_check.cpp) drives the same code
-                    // this button does. Only the SELECTED target's rows are
-                    // written, and only the non-zero values of this character.
-                    ApplyCharacterSkin(getchar,
-                                       selTraitor1P, selTraitor3P,
-                                       selItemID, selRoleID, selPackID,
-                                       CharacterModelConfigInstance,
-                                       itemResourceConfigInstance,
-                                       RoleConfConfigInstance,
-                                       RolePackConfConfigInstance);
-                }
+                // The whole apply lives in Skin/Fields.h so the host test
+                // (Skin/tests/character_apply_check.cpp) drives the same code
+                // this button does. Only the SELECTED target's rows are written,
+                // and only the non-zero values of this character.
+                ApplyCharacterSkin(getchar,
+                                   selTraitor1P, selTraitor3P,
+                                   selItemID, selRoleID, selPackID,
+                                   CharacterModelConfigInstance,
+                                   itemResourceConfigInstance,
+                                   RoleConfConfigInstance,
+                                   RolePackConfConfigInstance);
             });
 
             ImGui::PopStyleVar();

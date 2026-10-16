@@ -195,8 +195,11 @@ sColorsESPBOT sColorsESPBOT{0};
         bool Grapss;
         bool EnhanceFPS;
         bool Spectatex;
-        bool Attachment;
-		bool Blueprints;
+        // Unlock attachments: the weapon blueprints plus the mythic sights and
+        // attachments they carry (System/Hooks/Feats.h answers the game's own
+        // IsUnlocked / IsWeaponAttachmentUnlock). ON by default, and toggled
+        // from the HOME tab.
+        bool UnlockAttachments = true;
 		bool ClearDisplay;
 		bool ResetGuest;
 		bool RedWallhack;

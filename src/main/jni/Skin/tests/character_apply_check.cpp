@@ -28,6 +28,10 @@
 
 #include "IL2CppSDKGenerator/BasicStructs/Vector3.hpp"
 #include "IL2CppSDKGenerator/IL2Cpp/Il2Cpp.h"
+// Fields.h's inline helpers guard their rows with Tools::IsPtrValid, so the
+// declaration has to be visible here. Nothing in this test calls one of those
+// helpers, so Tools.cpp is still not linked.
+#include "IL2CppSDKGenerator/IL2Cpp/Tools.h"
 #include "Skin/Fields.h"
 
 static int g_checks = 0;
@@ -306,6 +310,36 @@ int main()
               "T5 an id that matches no row writes nothing");
         CHECK(resUnchanged(g_charlyRes) && resUnchanged(g_ghostRes),
               "T5 ... including the item resources");
+    }
+
+    // --- T6: a lobby with no RolePackConf rows ------------------------------
+    // The list builder stopped waiting for the pack tier in Skin/Thread.h, but
+    // the click handler still demanded all four vectors before it would apply
+    // anything, and the game builds the pack configs lazily - so in a lobby a
+    // click on a character did nothing at all. CharacterApplyReady() must not
+    // look at the pack tier, and the apply must still write the tiers it has.
+    {
+        resetWorld();
+        CHECK(CharacterApplyReady(models(), res(), roles()),
+              "T6 a lobby without RolePackConf rows is still ready to apply");
+        CHECK(!CharacterApplyReady({}, res(), roles()) &&
+              !CharacterApplyReady(models(), {}, roles()) &&
+              !CharacterApplyReady(models(), res(), {}),
+              "T6 ... but a tier the apply really reads is required");
+
+        std::vector<void *> noPacks;   // the game built none
+        int a = 0, b = 0, c = 0, d = 0, e = 0;
+        ResolveTargetIds(ghost, a, b, c, d, e);
+        ApplyCharacterSkin(skin, a, b, c, d, e, models(), res(), roles(), noPacks);
+
+        bool modelOk = true;
+        for (int i = 0; i < 12; i++)
+            if (modelField(g_ghostModel, i) != 1001 + i) modelOk = false;
+        CHECK(modelOk, "T6 the model ids land with an empty pack list");
+        CHECK(resSpr(g_ghostRes, 0) == 11,
+              "T6 the card sprites land with an empty pack list");
+        CHECK(roleColor(g_ghostRole) == 11 + 3,
+              "T6 the role conf lands with an empty pack list");
     }
 
     printf("\n");

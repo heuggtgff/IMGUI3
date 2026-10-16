@@ -589,25 +589,29 @@ inline float DisperseBase(void * instance) {
     return orig_DisperseBase(instance);
 } 
 
-// Unlock Blueprints
+// Unlock Attachments - one switch for both halves of the unlock, ON by default
+// and toggled from the HOME tab (Config.ExtraMenu.UnlockAttachments).
+//
+// BlueprintWeaponInfo.IsUnlocked() is the game's own "do I own this blueprint"
+// test and WeaponPromotionInfo.IsWeaponAttachmentUnlock() the mythic-sight /
+// attachment test; answering yes is what makes the blueprints and the mythic
+// attachments usable. The flag defaults to on, and the JSON config keeps
+// whatever the user picks after that.
+//
+// IsWeaponAttachmentUnlock is declared with the method's real shape
+// (this + the attachment slot). It used to be a one-argument pointer calling a
+// two-argument method, so the old "off" path handed the game whatever the
+// second register happened to hold.
 inline bool (*orig_IsUnlocked)(void *instance);
 inline bool IsUnlocked(void *instance) {
-    if (instance != NULL) {
-        if (Config.ExtraMenu.Blueprints) {
-            return true;
-        }
-    }
+    if (Config.ExtraMenu.UnlockAttachments) return true;
     return orig_IsUnlocked(instance);
 }
 
-inline bool (*orig_IsWeaponAttachmentUnlock)(void *instance);
-inline bool IsWeaponAttachmentUnlock(void *instance) {
-    if (instance != NULL) {
-        if (Config.ExtraMenu.Attachment) {
-            return true;
-        }
-    }
-    return orig_IsWeaponAttachmentUnlock(instance);
+inline bool (*orig_IsWeaponAttachmentUnlock)(void *instance, int attachment);
+inline bool IsWeaponAttachmentUnlock(void *instance, int attachment) {
+    if (Config.ExtraMenu.UnlockAttachments) return true;
+    return orig_IsWeaponAttachmentUnlock(instance, attachment);
 }
 
 // No Spectate Deelay
@@ -940,8 +944,10 @@ inline void InitializeAllHooks() {
   ///Camera Pov
   DobbyHook((void *) getAbsoluteAddress("libunity.so", 0xC347950), (void *)  &InputSettingConfig_Instant_GetMainCameraFov_3p, (void **) &oInputSettingConfig_Instant_GetMainCameraFov_3p); 
 
-    //-- Unlock Blueprints
+    //-- Unlock Blueprints + mythic attachments (HOME tab switch, on by default)
+    // Dump .57: BlueprintWeaponInfo.IsUnlocked() @0x901F988 (no parameters) and
+    // WeaponPromotionInfo.IsWeaponAttachmentUnlock(int attachment) @0xA61AA00.
     HOOK_LIB("libunity.so", "0x901F988", IsUnlocked, orig_IsUnlocked);
-    
+
     HOOK_LIB("libunity.so", "0xA61AA00", IsWeaponAttachmentUnlock, orig_IsWeaponAttachmentUnlock);
 }
