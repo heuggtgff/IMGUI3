@@ -17,11 +17,11 @@ using json = nlohmann::json;
 extern JavaVM* jvm;
 std::string g_Token, g_Auth;
 bool bValid = false;
-std::string EXP = " ";
+std::string EXP = "LIFETIME";
 std::string usedKey = " ";
 std::string mod_status = " ";
 std::string max_dev = " ";
-std::string userType = "DELUXE PAID";
+std::string userType = "ETHNIR PREM";
 int keyUserCount = 0;
 time_t expiryTimestamp = 0;
 
