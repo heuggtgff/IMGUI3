@@ -727,94 +727,72 @@ static void testScan()
 }
 
 // ---------------------------------------------------------------------------
-// 6. Target filter (the menu's Filter dropdown)
+// 6. The target filter is GONE (All / Visible Only / Within 25-50-100 m)
+//
+// The option never changed a shot on device, so it was removed from the scan, the
+// UI and the config. These checks pin the removal down: a pawn the game itself
+// reports as occluded, and a pawn far outside every distance the old filter
+// offered, must both remain shootable - the visibility RAY is the only opinion
+// left about whether a shot is possible.
 // ---------------------------------------------------------------------------
-static void testFilter()
+static void testNoTargetFilter()
 {
     Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
 
-    // --- F1: VisibleOnly, and the GAME says he is occluded -> refused -------
+    // --- F1: the game reports him occluded -> the scan does not care --------
     resetWorld();
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
-    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::VisibleOnly;
-    g_lastOccVisible = 0; g_recentlyRendered = 0;
+    g_lastOccVisible = 0; g_recentlyRendered = 0;      // what "Visible Only" refused
     g_centreHits = { {0.02f, &g_selfCol} };
     g_losHits    = { {3.3f, &g_targetCol} };
     {
         TriggerTarget out{};
         FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
-        CHECK(b == FireBlock::NoEnemyInZone, "F1 VisibleOnly: game reports him occluded -> refused");
-        CHECK(g_triggerDiag.filteredOut == 1, "F1 the panel counts the filtered pawn");
-        CHECK(g_rayAllCalls == 1, "F1 dropped before any LOS ray (centre ray only)");
+        CHECK(b == FireBlock::Fired,
+              "F1 no filter: an occluded-by-the-game pawn is still fired");
+        CHECK(g_rayAllCalls >= 1,
+              "F1 ... decided by a real visibility ray, not by a getter veto");
     }
 
-    // --- F2: same, but the game reports him visible -> FIRES ---------------
+    // --- F2: 40 m away, under the crosshair -> still fired ------------------
     resetWorld();
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
-    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::VisibleOnly;
-    g_lastOccVisible = 1; g_recentlyRendered = 1;
-    g_centreHits = { {0.02f, &g_selfCol} };
-    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
-    {
-        TriggerTarget out{};
-        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
-        CHECK(b == FireBlock::Fired, "F2 VisibleOnly + visibly drawn pawn -> fires");
-        CHECK(g_triggerDiag.filteredOut == 0, "F2 nothing filtered");
-    }
-
-    // --- F3: a range filter inside its own limit -> fires ------------------
-    resetWorld();
-    setEnemyList(enemies, 1);
-    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
-    g_w2sImpl = w2sOnCrosshair;
-    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::Within25m;
-    g_centreHits = { {0.02f, &g_selfCol} };
-    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
-    {
-        TriggerTarget out{};
-        FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
-        CHECK(b == FireBlock::Fired, "F3 Within 25 m: a 3.3 m pawn is inside it");
-        CHECK(g_triggerDiag.filteredOut == 0, "F3 in range -> not filtered");
-    }
-
-    // --- F4: the same enemy at 40 m -> refused by the range filter ---------
-    resetWorld();
-    setEnemyList(enemies, 1);
-    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
-    g_w2sImpl = w2sOnCrosshair;
-    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::Within25m;
-    objPos(g_targetHead, 0.5f, 1.7f, 40.0f);
+    objPos(g_targetHead, 0.5f, 1.7f, 40.0f);           // what "Within 25 m" refused
     objPos(g_targetMesh, 0.5f, 0.0f, 40.0f);
+    objPos(g_targetRoot, 0.5f, 0.0f, 40.0f);
     g_centreHits = { {0.02f, &g_selfCol} };
     g_losHits    = { {0.0f, &g_selfCol}, {38.0f, &g_targetCol} };
     {
         TriggerTarget out{};
         FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
-        CHECK(b == FireBlock::NoEnemyInZone, "F4 Within 25 m: a 40 m pawn is out of range");
-        CHECK(g_triggerDiag.filteredOut == 1, "F4 counted as filtered, not as a wall");
-        CHECK(g_triggerDiag.losBlocked == 0, "F4 the range filter never reports 'no line of sight'");
+        CHECK(b == FireBlock::Fired, "F2 no filter: a 40 m pawn under the dot is fired");
+        CHECK(g_triggerDiag.losBlocked == 0,
+              "F2 ... and it is not reported as a wall either");
     }
 
-    // --- F5: All (the default) filters nothing -----------------------------
+    // --- F3: both removed rules at once -------------------------------------
     resetWorld();
     setEnemyList(enemies, 1);
     fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
     g_w2sImpl = w2sOnCrosshair;
-    Config.NewFeaturesMenu.TriggerbotFilter = (int)TriggerFilter::All;
+    g_lastOccVisible = 0; g_recentlyRendered = 0;
+    objPos(g_targetHead, 0.5f, 1.7f, 40.0f);
+    objPos(g_targetMesh, 0.5f, 0.0f, 40.0f);
+    objPos(g_targetRoot, 0.5f, 0.0f, 40.0f);
     g_centreHits = { {0.02f, &g_selfCol} };
-    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
+    g_losHits    = { {0.0f, &g_selfCol}, {38.0f, &g_targetCol} };
     {
         TriggerTarget out{};
         FireBlock b = A_FireScan((Pawn *)g_localPawn.b, (Weapon *)g_weaponObj.b, out);
-        CHECK(b == FireBlock::Fired, "F5 Filter=All is the old behaviour");
-        CHECK(g_triggerDiag.filteredOut == 0, "F5 nothing filtered");
+        CHECK(b == FireBlock::Fired,
+              "F3 occluded AND 40 m away: still fired - neither removed rule survives");
+        CHECK(g_triggerDiag.losBlocked == 0, "F3 ... and never reported as a wall");
     }
 
-    Config.NewFeaturesMenu.TriggerbotFilter = 0;
     g_w2sImpl = nullptr;
 }
 
@@ -1024,6 +1002,197 @@ static void testTickHookCost()
     CHECK(g_triggerDiag.lastTickTime > 0.0, "H3 the heartbeat stays alive");
 }
 
+// ---------------------------------------------------------------------------
+// 9. The two options that crashed the client: No Sprint Fire Delay, ADS Only
+//
+// Both called back into the game from a place no guard on this side could cover:
+//
+//   * the hooked Weapon.get_DelaySprintFire body resolved the local pawn and
+//     called Pawn.get_CurrentWeapon() from INSIDE that getter, on a pawn that may
+//     already have been destroyed (its managed wrapper stays readable, so
+//     Tools::IsPtrValid passes and the native call walks the cleared m_CachedPtr);
+//   * the "ADS only" gate called Pawn.IsAiming() 0x519BB10, a native method that
+//     walks the pawn's own weapon / fire-component chain internally.
+//
+// They are now PURE: one pointer compare against a cache refreshed from the local
+// pawn's own tick, and two field reads on the weapon the tree already validated.
+// Every fake below COUNTS, and the counters must stay at zero where it matters -
+// that is what proves the crash is gone rather than moved.
+// ---------------------------------------------------------------------------
+static int g_isAimingCalls      = 0;   // Pawn::IsAiming 0x519BB10 - must stay 0
+static int g_currentWeaponCalls = 0;   // Pawn::get_CurrentWeapon - only our tick may call it
+
+static bool fake_pawnIsAiming(void *)
+{
+    g_isAimingCalls++;                  // the gate must never ask
+    return true;                        // ...so "the pawn says it IS aiming" is a trap
+}
+
+static Weapon *fake_currentWeapon(Pawn *)
+{
+    g_currentWeaponCalls++;
+    return (Weapon *)g_weaponObj.b;
+}
+
+// Weapon.m_IsAiming @0xC21 / m_AimingPercentage @0x460, the two fields the ADS
+// gate reads (Offsets in NewFeatures.h).
+static void setWeaponAiming(bool flag, float percent)
+{
+    *(bool  *)(g_weaponObj.b + Offsets::Weapon_m_IsAiming)         = flag;
+    *(float *)(g_weaponObj.b + Offsets::Weapon_m_AimingPercentage) = percent;
+}
+
+// The same crosshair setup the scan tests use, driven through the whole decision
+// tree (A_FireShouldFire) so the mode gate really runs.
+static FireBlock runTreeOnCrosshairSetup(TriggerTarget &out)
+{
+    Pawn *enemies[1] = { (Pawn *)g_targetPawn.b };
+    setEnemyList(enemies, 1);
+    fn_GameGetMatchGame = []() -> void * { return g_gameObj.b; };
+    g_w2sImpl = w2sOnCrosshair;
+    g_centreHits = { {0.02f, &g_selfCol} };
+    g_losHits    = { {0.0f, &g_selfCol}, {3.3f, &g_targetCol} };
+    setCrosshair(0.0f, 0.0f, 80.0f);
+    return A_FireShouldFire(out);
+}
+
+static void testCrashFixes()
+{
+    api12 = (uintptr_t)&fake_localPawnCounted;   // GamePlay::get_LocalPawn
+    api15 = (uintptr_t)&fake_pawnIsAiming;       // Pawn::IsAiming   - must never run
+    api22 = (uintptr_t)&fake_currentWeapon;      // Pawn::get_CurrentWeapon
+    Config.NewFeaturesMenu.Triggerbot = false;
+
+    // --- A1: "ADS Only" + a hipfiring weapon -> blocked, pawn never asked ----
+    resetWorld();
+    setWeaponAiming(false, 0.0f);
+    Config.NewFeaturesMenu.TriggerbotMode = 1;
+    g_isAimingCalls = 0;
+    g_currentWeaponCalls = 0;
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::ModeNotAds,
+              "A1 ADS Only: a weapon that is not aiming blocks the shot");
+        CHECK(g_isAimingCalls == 0,
+              "A1 ... and Pawn.IsAiming() is NEVER called (the ADS crash)");
+        CHECK(g_triggerDiag.adsFlag == 0 && g_triggerDiag.adsPct == 0.0f,
+              "A1 the panel shows the weapon's own aiming fields");
+    }
+
+    // --- A2: the weapon's own m_IsAiming flag -> the mode lets the shot run --
+    resetWorld();
+    setWeaponAiming(true, 0.0f);
+    g_isAimingCalls = 0;
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::Fired,
+              "A2 ADS Only: Weapon.m_IsAiming @0xC21 lets the shot through");
+        CHECK(g_isAimingCalls == 0, "A2 ... still without asking the pawn");
+        CHECK(g_triggerDiag.adsFlag == 1, "A2 ... and the flag is what the panel shows");
+    }
+
+    // --- A3: a half-raised scope counts (m_AimingPercentage) ----------------
+    resetWorld();
+    setWeaponAiming(false, 0.95f);
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::Fired,
+              "A3 ADS Only: m_AimingPercentage @0x460 above half counts as aiming");
+        CHECK(g_triggerDiag.adsPct == 0.95f, "A3 ... and its value is reported");
+    }
+
+    // --- A4: an early transition is NOT aiming ------------------------------
+    resetWorld();
+    setWeaponAiming(false, 0.2f);
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::ModeNotAds,
+              "A4 ADS Only: 0.2 into the ADS animation is still hipfire");
+    }
+
+    // --- A5: garbage in the field is ignored, not read as "aiming" ----------
+    // A wrong offset would hand us an arbitrary float; the gate range-checks it
+    // instead of turning the mode into "Always".
+    resetWorld();
+    setWeaponAiming(false, 7.5f);
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::ModeNotAds,
+              "A5 ADS Only: an out-of-range percentage is not 'always aiming'");
+    }
+
+    // --- A6: a destroyed weapon is refused before the gate ------------------
+    resetWorld();
+    *(void **)(g_weaponObj.b + 0x10) = nullptr;    // m_CachedPtr cleared = Destroy()d
+    {
+        TriggerTarget out{};
+        const FireBlock b = runTreeOnCrosshairSetup(out);
+        CHECK(b == FireBlock::NoWeapon,
+              "A6 a destroyed weapon is refused by the liveness check");
+        CHECK(g_isAimingCalls == 0, "A6 ... and nothing native is called on it");
+    }
+    objInit(g_weaponObj);                          // the rest of the suite needs it back
+
+    // --- B1: the sprint-delay gate is pure ----------------------------------
+    // This is the function the hooked Weapon.get_DelaySprintFire calls. The two
+    // counters below are native game calls: the hook body must make NONE.
+    resetWorld();
+    api12 = (uintptr_t)&fake_localPawnCounted;
+    api22 = (uintptr_t)&fake_currentWeapon;
+    Config.NewFeaturesMenu.NoSprintToFireDelay = true;
+    g_noSprintFireDelayWeapon.store((void *)g_weaponObj.b, std::memory_order_relaxed);
+    {
+        g_localPawnLookups = 0;
+        g_currentWeaponCalls = 0;
+        for (int i = 0; i < 200; i++)
+            (void)NoSprintFireDelayActive(g_weaponObj.b);
+        CHECK(g_localPawnLookups == 0 && g_currentWeaponCalls == 0,
+              "B1 200 hooked-getter bodies make ZERO native calls (the sprint-delay crash)");
+        CHECK(NoSprintFireDelayActive(g_weaponObj.b),
+              "B1 ... and still recognise the local player's own weapon");
+    }
+
+    // --- B2: only THAT weapon, and only while the option is on -------------
+    CHECK(!NoSprintFireDelayActive((void *)g_otherPawn.b),
+          "B2 a remote player's weapon is never touched");
+    CHECK(!NoSprintFireDelayActive(nullptr), "B2 a null instance is refused");
+    Config.NewFeaturesMenu.NoSprintToFireDelay = false;
+    CHECK(!NoSprintFireDelayActive(g_weaponObj.b),
+          "B2 with the option off the getter falls through to the game's value");
+    Config.NewFeaturesMenu.NoSprintToFireDelay = true;
+
+    // --- B3: the cache is filled from the local pawn's OWN tick ------------
+    // A_FirePawnTicked is the game ticking this very pawn - the one moment where
+    // "alive with a real weapon" is not a guess, so the native calls are allowed
+    // there (and only there).
+    g_noSprintFireDelayWeapon.store(nullptr, std::memory_order_relaxed);
+    {
+        g_currentWeaponCalls = 0;
+        A_FirePawnTicked((void *)g_localPawn.b);
+        CHECK(g_currentWeaponCalls == 1,
+              "B3 our own pawn tick is one native get_CurrentWeapon call");
+        CHECK(g_noSprintFireDelayWeapon.load() == (void *)g_weaponObj.b,
+              "B3 ... and it caches the held weapon for the hook to compare against");
+    }
+
+    // --- B4: switching the option off empties the cache (hook becomes inert) -
+    Config.NewFeaturesMenu.NoSprintToFireDelay = false;
+    A_FirePawnTicked((void *)g_localPawn.b);
+    CHECK(g_noSprintFireDelayWeapon.load() == nullptr,
+          "B4 with the option off the cache is cleared, so the hook changes nothing");
+
+    // Leave the suite as it was found.
+    Config.NewFeaturesMenu.NoSprintToFireDelay = false;
+    Config.NewFeaturesMenu.TriggerbotMode = 0;
+    objInit(g_weaponObj);
+    resetWorld();
+}
+
 int main()
 {
     installFns();
@@ -1033,9 +1202,10 @@ int main()
     testArrayGuards();
     testCentreRay();
     testScan();
-    testFilter();
+    testNoTargetFilter();
     testCrosshairAim();
     testTickHookCost();
+    testCrashFixes();
 
     if (g_failures == 0) {
         printf("\nOK: all LOS gate checks passed\n");

@@ -235,11 +235,6 @@ sColorsESPBOT sColorsESPBOT{0};
         int TriggerbotRadius = 40;     // LEGACY, unused: the zone IS the dot crosshair now
                                        // (Crosshair.Size below). Kept only so old
                                        // config files keep loading.
-        // Which enemies the trigger may engage. 0 = All (no filter, the
-        // behaviour before this option existed), 1 = only pawns the game itself
-        // reports as visible, 2/3/4 = only inside 25 / 50 / 100 m. The filter can
-        // only remove candidates; it never turns a blocked shot into a fired one.
-        int TriggerbotFilter = 0;         // 0=All, 1=Visible only, 2=<=25m, 3=<=50m, 4=<=100m
         bool NoHitFlinch = false;
         bool NoDrift = false;
         bool NoSlideFatigue = false;

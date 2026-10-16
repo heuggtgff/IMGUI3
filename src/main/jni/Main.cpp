@@ -1813,6 +1813,19 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
                                 // === NEW FEATURES: Firing timing ===
                                 // (No Fire Delay and Stable Scope removed per request.)
                                 custom::Checkbox("No Sprint Fire Delay", &Config.NewFeaturesMenu.NoSprintToFireDelay);
+                                if (Config.NewFeaturesMenu.NoSprintToFireDelay) {
+                                    // The option is applied inside the game's own
+                                    // Weapon.get_DelaySprintFire, and that hook body only
+                                    // compares the instance against a cache (it may not
+                                    // call into the game - the native call it used to
+                                    // make is what crashed this option). This line is
+                                    // that cache: an empty one means the local player's
+                                    // pawn tick has not run yet, so nothing is overridden.
+                                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "  %s",
+                                        NewFeatures::g_noSprintFireDelayWeapon.load() != nullptr
+                                            ? "armed: local weapon cached"
+                                            : "waiting for the local pawn tick");
+                                }
                                 custom::Checkbox("No Hipfire Delay", &Config.NewFeaturesMenu.NoHipfireDelay);
                                 custom::Separator();
                                 // Dev / Debug options
@@ -1947,20 +1960,15 @@ if (runtimeState.activeTab == 4) {
                                     // Pawn.get_HeadPosition getter and the root
                                     // transform, measured against the crosshair
                                     // segment and confirmed by the visibility ray.
-                                    // Target filter. Applied AFTER every hard gate
-                                    // (alive / not us / not a teammate / under the
-                                    // crosshair), so it can only narrow the list:
-                                    // "All" is exactly the old behaviour.
-                                    static const char* triggerFilters[] = {
-                                        "All", "Visible Only", "Within 25 m", "Within 50 m", "Within 100 m"
-                                    };
-                                    custom::Combo("Filter", &Config.NewFeaturesMenu.TriggerbotFilter, triggerFilters, IM_ARRAYSIZE(triggerFilters));
-                                    // The advisory options that used to sit here (Lead Target,
-                                    // Check Spread, Require Ready) could not change a
-                                    // shot, so they are gone; so is the debug Test Fire
-                                    // button. Everything the trigger actually obeys is above
-                                    // (Mode, Filter) plus StartFire itself - and its
-                                    // crosshair zone, which is the dot below.
+                                    // No target filter any more (Visible Only / the
+                                    // 25-50-100 m limits): it never changed a shot and
+                                    // it silently dropped candidates the rest of the
+                                    // gate accepts. The advisory options that used to sit
+                                    // here (Lead Target, Check Spread, Require Ready)
+                                    // could not change a shot either, and the debug Test
+                                    // Fire button is gone too. Everything the trigger
+                                    // obeys is above (Mode) plus StartFire itself - and
+                                    // its crosshair zone, which is the dot below.
                                 }
                                 // ---- The dot crosshair (the trigger's crosshair) --------
                                 // There is ONE crosshair now: this dot. The triggerbot
@@ -2044,10 +2052,15 @@ if (runtimeState.activeTab == 4) {
                                     ImGui::TextColored(dim, "Scan=%d Enemy=%d Cand=%d Ray=%d Tgt=%d Fire=%d",
                                         td.scans, td.enemyCount, td.candidates,
                                         td.losChecked, td.targets, td.fires);
-                                    ImGui::TextColored(dim, "R=%.0f Closest=%.0fpx LOSblk=%d Friend=%d Filt=%d",
+                                    // Ads= is the "ADS only" gate's own input: the held
+                                    // weapon's m_IsAiming flag and its 0..1 aiming
+                                    // percentage. Both are field reads - Pawn.IsAiming()
+                                    // is not called any more, which is what crashed the
+                                    // option.
+                                    ImGui::TextColored(dim, "R=%.0f Closest=%.0fpx LOSblk=%d Friend=%d Ads=%d/%.2f",
                                         td.radiusPx,
                                         td.closestPx < 0.0f ? -1.0f : sqrtf(td.closestPx),
-                                        td.losBlocked, td.friendsInLine, td.filteredOut);
+                                        td.losBlocked, td.friendsInLine, td.adsFlag, td.adsPct);
                                     // Which path accepted (or would accept) the shot, and
                                     // what the visibility ray actually hit. "Rays=id/blk"
                                     // is the anti-wall gate: id = the nearest thing on the

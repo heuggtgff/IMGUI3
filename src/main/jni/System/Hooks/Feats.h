@@ -168,8 +168,13 @@ inline void hook_OnFlashBangExplode(void *instance, int weaponItemID, float whit
 //   get_FireBoltTime    @0x51237F4 (No Fire Delay feature removed per request)
 //   get_FireInterval    @0x5105C74 (No Fire Delay feature removed per request)
 //   get_DelaySprintFire @0x513CBC4 -> No Sprint Fire Delay (sprint-out timer)
-// NewFeatures::NoSprintFireDelayActive() requires the instance to be the local player's
-// current weapon, so nothing is changed for remote players.
+// NewFeatures::NoSprintFireDelayActive() answers "is this the local player's held
+// weapon?" from a CACHE refreshed by the local pawn's own tick, because this body
+// runs inside game code on every weapon of the world: it must not resolve the local
+// pawn or call Pawn::get_CurrentWeapon() itself. That native call from inside the
+// getter is what crashed the option (a pawn the game already destroyed passes a plain
+// readability check), so the body is now a pure pointer compare - nothing is changed
+// for remote players either way.
 inline float (*orig_get_FireBoltTime)(void *) = nullptr;
 inline float get_FireBoltTime(void * instance) {
     if (instance != NULL) {

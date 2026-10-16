@@ -133,10 +133,12 @@
 //     Camera::get_main()          RVA 0x5024010
 //     Camera::WorldToScreenPoint  RVA 0x5023B54   (the 1-arg overload - see the
 //                                 note above A_FireScan's candidate loop)
-//     Pawn::IsAiming()            RVA 0x519BB10   ("ADS only" mode; note
-//                                 0x516699C is Weapon::get_IsAiming, and
-//                                 calling that on a Pawn is what the old
-//                                 build did)
+//     Pawn::IsAiming()            RVA 0x519BB10   NOT CALLED any more - it is a
+//                                 native method that walks the pawn's own
+//                                 weapon chain, and it is what crashed the
+//                                 "ADS only" mode. That mode now reads the
+//                                 held weapon's own fields (m_IsAiming @0xC21,
+//                                 m_AimingPercentage @0x460) instead.
 //     Pawn::get_IsFiring()        RVA 0x51A8A38   ("Firing only" mode)
 //
 //   The LOS rays used by the tree (dump.cs line -> RVA):
@@ -180,6 +182,11 @@
 //        Weapon::get_DelaySprintFire()  RVA 0x513CBC4
 //        Weapon.m_DelaySprintFire @0x9F8 / WeaponData.DelaySprintFire @0x2C8
 //        -> sprint-out timer that blocks firing.
+//        The Feats.h hook on that getter returns ~0 for the LOCAL player's held
+//        weapon only, and its body is a PURE pointer compare against a cache
+//        refreshed from the local pawn's tick. It used to resolve the local pawn
+//        and call Pawn.get_CurrentWeapon() from inside the getter - a native call
+//        on a possibly destroyed pawn - which is what crashed this option.
 //
 //   3.3 No Fire Delay (re-fire cooldown)
 //        Weapon::get_FireInterval()     RVA 0x5105C74  (shot-to-shot cooldown)
@@ -249,6 +256,16 @@ namespace NewFeatures
         constexpr uintptr_t Pawn_FirstPersonCamDestX        = 0x700; // m_FirstPersonCameraDestOffsetX
 
         constexpr uintptr_t WeaponShake_Owner               = 0x78;  // WeaponShakeController::m_Pawn
+
+        // Weapon aiming state, read as FIELDS by the triggerbot's "ADS only"
+        // gate. Both offsets come straight from the Weapon class in dump.cs:
+        //   m_IsAiming          @0xC21  private bool  (behind get_IsAiming 0x516699C)
+        //   m_AimingPercentage  @0x460  private float (0..1 ADS transition)
+        // A field read on a weapon A_FireObjectAlive accepted cannot walk into
+        // unrelated code, which is exactly what calling Pawn.IsAiming() 0x519BB10
+        // could do (that call is gone).
+        constexpr uintptr_t Weapon_m_IsAiming               = 0xC21; // bool
+        constexpr uintptr_t Weapon_m_AimingPercentage       = 0x460; // float
     }
 
     // ---------------------------------------------------------------------
@@ -451,16 +468,9 @@ namespace NewFeatures
         return A_FireObjectAlive(obj);
     }
 
-    // Pawn::IsAiming() @0x519BB10 - "the local player is scoping / ADS"
-    inline bool IsLocalPlayerScoping()
-    {
-        void *localPawn = LocalPlayer();
-        if (!IsReadable(localPawn)) return false;
-        // `static`: UnityRva() re-opens and regex-scans /proc/self/maps on every
-        // call - a full maps scan per query is not something a hot path may do.
-        static auto isAiming = (bool (*)(void *))UnityRva(RVA::Pawn_IsAiming);
-        return isAiming != nullptr && isAiming(localPawn);
-    }
+    // NOTE: IsLocalPlayerScoping() (Pawn.IsAiming on the local pawn) is gone with
+    // the ADS gate that used to need it - see A_FireHeldWeaponAiming for why the
+    // pawn-level native call was replaced by two weapon fields.
 
     inline bool IsPawnAlive(void *pawn)
     {
@@ -597,7 +607,6 @@ namespace NewFeatures
     inline void *(*fn_GameGetMatchGame)() = nullptr;
     inline bool (*fn_PawnRecentlyRendered)(void *) = nullptr;
     inline bool (*fn_PawnLastOccVisible)(void *) = nullptr;
-    inline bool (*fn_PawnIsAiming)(void *) = nullptr;
     inline bool (*fn_PawnGetIsFiring)(void *) = nullptr;
 
     // ---- ShouldFire tree pointers (every RVA verified, see the RVA block) ---
@@ -960,6 +969,37 @@ namespace NewFeatures
         return fn_WeaponCanFire(weapon);
     }
 
+    // ---- "ADS only" (TriggerbotMode 1): is the LOCAL player's weapon aiming? ---
+    // Two dump-verified Weapon fields, read on a weapon A_FireObjectAlive has
+    // already accepted:
+    //   Weapon.m_IsAiming          @0xC21  bool   (behind get_IsAiming 0x516699C)
+    //   Weapon.m_AimingPercentage  @0x460  float  (0..1 ADS transition)
+    // Either one answering yes means the player is scoping; a transition that is
+    // more than half done already counts, so the mode fires while the scope comes
+    // up instead of waiting for it to finish. The percentage is range-checked: a
+    // value outside 0..2 is not an ADS progress at all and is ignored rather than
+    // read as "always aiming".
+    //
+    // Pawn.IsAiming() 0x519BB10 is NOT called any more. It is a native method
+    // that walks the pawn's own weapon / fire-component chain internally, so no
+    // guard on this side can bound what it touches - that is the crash the "ADS
+    // Only" option caused. A field read at a fixed offset cannot jump anywhere.
+    inline bool A_FireHeldWeaponAiming(void *weapon,
+                                       bool *flagOut = nullptr,
+                                       float *percentOut = nullptr)
+    {
+        if (!A_FireObjectAlive(weapon)) {          // destroyed / not a weapon
+            if (flagOut)    *flagOut = false;
+            if (percentOut) *percentOut = 0.0f;
+            return false;
+        }
+        const bool  flag    = *(bool *)((uintptr_t)weapon + Offsets::Weapon_m_IsAiming);
+        const float percent = *(float *)((uintptr_t)weapon + Offsets::Weapon_m_AimingPercentage);
+        if (flagOut)    *flagOut = flag;
+        if (percentOut) *percentOut = percent;
+        return flag || (percent > 0.5f && percent <= 2.0f);
+    }
+
     // The weapon's own fire interval, in seconds
     // (Weapon.RealFireInterval 0x50EC250 dump 739186, Weapon.get_FireInterval
     // 0x5105C74 dump 740026). Used as the trigger's re-press pacing, so the
@@ -1151,7 +1191,8 @@ namespace NewFeatures
     //    Weapon::Tick                  0x5114C34  void(float) Slot 33 [HOOKED]
     //    Pawn::Tick                    0x51C366C  void(float) Slot 33 (base only)
     //    Pawn::get_CurrentWeapon       0x518BEA8  Weapon*()
-    //    Pawn::IsAiming()              0x519BB10  bool()  (0x516699C is
+    //    Pawn::IsAiming()              0x519BB10  bool()  - NOT CALLED (see the
+    //                                             ADS note; 0x516699C is
     //                                             Weapon::get_IsAiming)
     //    Pawn::get_IsFiring()          0x51A8A38  bool()
     //    Weapon::StartFire()           0x5123C84  void()   Slot 55 [raw ptr]
@@ -1212,7 +1253,6 @@ namespace NewFeatures
         int    blockCount[(int)FireBlock::Count];  // lifetime counter per FireBlock reason
         int    lastBlock;       // FireBlock of the most recent scan
         int    candidates;      // enemies inside the crosshair zone, last scan
-        int    filteredOut;     // ... dropped by the user's target filter, last scan
         int    losChecked;      // candidates that got a visibility ray, last scan
         int    friendsInLine;   // teammates that blocked a shot, last scan
         bool   ammoOk;          // Weapon.AmmoCanFire()/get_ClipAmmoCount() verdict
@@ -1252,6 +1292,14 @@ namespace NewFeatures
         float  lastFireInterval;// s, the weapon's own interval (measured, NOT enforced)
         unsigned aimingTarget;  // Weapon.get_AimingTarget() - the game's own answer
         float  aimingTargetDis; // Weapon.get_CurrentAimingTargetDis()
+        // ---- "ADS only" (TriggerbotMode 1) --------------------------------
+        // The LOCAL WEAPON's own aiming state, read as fields on the weapon the
+        // scan already validated: Weapon.m_IsAiming @0xC21 (the bool behind
+        // Weapon.get_IsAiming 0x516699C) and Weapon.m_AimingPercentage @0x460
+        // (0..1 ADS transition). Pawn.IsAiming() 0x519BB10 is never called any
+        // more - see the note on A_FireHeldWeaponAiming.
+        int    adsFlag;         // last scan: Weapon.m_IsAiming (0/1)
+        float  adsPct;          // last scan: Weapon.m_AimingPercentage
 
                                 // 4 no StartFire ptr, 5 pointers ok / no heartbeat
     };
@@ -1938,46 +1986,13 @@ namespace NewFeatures
     //  refused. Candidates are checked nearest-to-crosshair first, so the pawn
     //  under the crosshair is the one that gets the ray budget.
     // =====================================================================
-    // ---- the user's target filter ------------------------------------------
-    // Checked only AFTER a pawn has survived every hard gate (alive, not us, not
-    // a teammate, under the crosshair), so it can only ever NARROW the candidate
-    // list: it can never turn a blocked shot into a fired one. Every rule is a
-    // local read or a symbol the gate already uses - no new game method is
-    // involved, which is what makes the filter safe to add to a working feature.
-    //
-    //   All         - every valid enemy (the behaviour before the filter existed)
-    //   VisibleOnly - only pawns the GAME says it drew / did not occlude last
-    //                 frame (Pawn.get_LastOccVisible / get_RecentlyRendered, the
-    //                 same verdicts the near-origin escape uses)
-    //   Within*     - only pawns whose aim point is inside that range
-    enum class TriggerFilter : int
-    {
-        All         = 0,
-        VisibleOnly = 1,
-        Within25m   = 2,
-        Within50m   = 3,
-        Within100m  = 4
-    };
-
-    // worldDist < 0 means "not known yet" - a rule that needs the distance lets
-    // the pawn through and is re-asked once the aim point exists.
-    inline bool A_FireFilterPass(int filter, void *pawn, float worldDist)
-    {
-        switch ((TriggerFilter)filter) {
-            case TriggerFilter::VisibleOnly:
-                return A_FireGameSaysVisible((Pawn *)pawn);
-            case TriggerFilter::Within25m:
-                return worldDist < 0.0f || worldDist <= 25.0f;
-            case TriggerFilter::Within50m:
-                return worldDist < 0.0f || worldDist <= 50.0f;
-            case TriggerFilter::Within100m:
-                return worldDist < 0.0f || worldDist <= 100.0f;
-            case TriggerFilter::All:
-            default:
-                return true;
-        }
-    }
-
+    // The user's target filter (All / Visible Only / Within 25-50-100 m) is
+    // GONE. It never changed a shot on device and it quietly threw away
+    // candidates the rest of the tree would have accepted, so the rule set is now
+    // exactly the hard gates in A_FireScan: list-alive, not us, not a teammate,
+    // alive, body on screen, measured against the dot crosshair, and the
+    // visibility ray. A pawn the game reports as occluded is still eligible - the
+    // ray decides, and the ray can name the blocker.
     inline FireBlock A_FireScan(Pawn *localPawn, Weapon *weapon, TriggerTarget &out)
     {
         TriggerbotDiag &d = g_triggerDiag;
@@ -1989,7 +2004,6 @@ namespace NewFeatures
         d.candidates = 0;
         d.losChecked = 0;
         d.friendsInLine = 0;
-        d.filteredOut = 0;
         d.selfHitsSkipped = 0;
         d.triggerHitsSkipped = 0;
         d.occOverrides = 0;
@@ -2054,7 +2068,6 @@ namespace NewFeatures
         d.radiusPx = radius;
 
         // Read once per scan, not per candidate.
-        const int targetFilter = Config.NewFeaturesMenu.TriggerbotFilter;
         const float focalPx = A_FireFocalPx();
         d.focalPx = focalPx;
 
@@ -2082,11 +2095,9 @@ namespace NewFeatures
             if (symbolMissing && fn_PhysicsRaycastSegment == nullptr) {
                 d.rayUnknown = true;                        // no way at all to trace
             } else if (centred != nullptr && centred != localPawn &&
-                       !IsSameTeamAcceptBots(localPawn, centred) && A_FirePawnAlive(centred) &&
-                       A_FireFilterPass(targetFilter, centred, centreHitDist)) {
-                // A centre-ray pawn the filter refuses simply falls through to
-                // the zone scan below, which applies the same filter and does the
-                // counting.
+                       !IsSameTeamAcceptBots(localPawn, centred) && A_FirePawnAlive(centred)) {
+                // Nothing narrows this any more: the pawn the dot's own ray landed
+                // on, past our body and past trigger volumes, IS the shot.
                 // The shot does not depend on the probe - the centre ray already
                 // proved visibility AND ownership - so this is only the aim point
                 // handed to the spread/lead report.
@@ -2149,13 +2160,6 @@ namespace NewFeatures
             if (p == localPawn) continue;                        // never shoot yourself
             if (sameTeamGate(p)) continue;                        // team id is the gate
             if (!A_FirePawnAlive(p)) continue;                    // dead / downed / still ragdolling
-            // The user's filter, first pass: a rule that needs no distance
-            // (VisibleOnly) drops this pawn before its three projections.
-            if (!A_FireFilterPass(targetFilter, p, -1.0f)) {
-                d.filteredOut++;
-                continue;
-            }
-
             const A_FireAimPoint ap = A_FireAimPointFor(p);
             if (!ap.valid) continue;                              // the game answered nothing about his body
 
@@ -2191,13 +2195,7 @@ namespace NewFeatures
             const float pxOffset = sqrtf(d2);
             if (n >= MAX_CANDIDATES) continue;
 
-            // Second pass: the rules that only apply once the distance to the
-            // aim point is known.
             const float candDist = Vector3::Distance(camPos, ap.pos);
-            if (!A_FireFilterPass(targetFilter, p, candDist)) {
-                d.filteredOut++;
-                continue;
-            }
 
             cands[n].pawn      = p;
             cands[n].aim       = ap;
@@ -2448,14 +2446,24 @@ namespace NewFeatures
         // ---- 4. trigger key gating (the mode combo) ----------------------
         // 0 = Always  : the trigger fires on its own the moment a target is under
         //               the crosshair (0-delay, no reaction delay).
-        // 1 = ADS only: only while the player is scoping (Pawn.IsAiming 0x519BB10).
+        // 1 = ADS only: only while the LOCAL PLAYER'S OWN HELD WEAPON is aiming.
+        //               Answered by A_FireHeldWeaponAiming(held) - two field reads
+        //               on the weapon validated three paragraphs above. The old
+        //               gate called Pawn.IsAiming() 0x519BB10 here, a native method
+        //               that walks the pawn's own weapon chain internally; that is
+        //               what crashed this mode, and it is not called any more.
         // 2 = Firing only: only while the player's own fire input is active
         //               (Pawn.get_IsFiring 0x51A8A38). Note the trigger's own
         //               press also raises that flag, which is what keeps a burst
         //               going while the crosshair stays on the target - the same
         //               semantics the reference implementation had.
         if (Config.NewFeaturesMenu.TriggerbotMode == 1) {
-            if (fn_PawnIsAiming == nullptr || !fn_PawnIsAiming(localPawn))
+            bool  adsFlag  = false;
+            float adsPct   = 0.0f;
+            const bool aiming = A_FireHeldWeaponAiming((void *)held, &adsFlag, &adsPct);
+            d.adsFlag = adsFlag ? 1 : 0;
+            d.adsPct  = adsPct;
+            if (!aiming)
                 return FireBlock::ModeNotAds;
         } else if (Config.NewFeaturesMenu.TriggerbotMode == 2) {
             if (fn_PawnGetIsFiring == nullptr || !fn_PawnGetIsFiring(localPawn))
@@ -2692,6 +2700,12 @@ namespace NewFeatures
         g_afireHeldWeaponStamp    = -1000.0;
     }
 
+    // Refreshes the held-weapon cache the hooked Weapon::get_DelaySprintFire
+    // compares against (No Sprint Fire Delay). DEFINED with the firing-timing
+    // features (section 3.1) further down; declared here because the pawn-tick
+    // heartbeat below is what feeds it.
+    inline void UpdateNoSprintFireDelayWeapon(void *localPawnInstance);
+
     // ---- Heartbeats -------------------------------------------------------
     // Weapon::Tick / Pawn::Tick are BASE implementations; il2cpp virtual
     // dispatch invokes each subclass's Slot-33 override instead, so neither
@@ -2707,6 +2721,10 @@ namespace NewFeatures
         if (A_FireLocalPawnFast() == (Pawn *)pawnInstance) {
             d.localPawn = pawnInstance;
             d.pawnLocalTicks++;
+            // Refresh the held-weapon cache the hooked Weapon getter compares
+            // against (No Sprint Fire Delay). This is the game ticking this very
+            // pawn, so the pawn is alive and its weapon is live by construction.
+            UpdateNoSprintFireDelayWeapon(pawnInstance);
             A_FireTick(nullptr);        // the local player's own pawn ticked
         }
     }
@@ -2894,9 +2912,10 @@ namespace NewFeatures
         if (Tools::IsPtrValid(camMainAddr))
             fn_CameraGetMain = (void *(*)())camMainAddr;
 
-        auto aimingAddr = UnityRva(RVA::Pawn_IsAiming);
-        if (Tools::IsPtrValid(aimingAddr))
-            fn_PawnIsAiming = (bool (*)(void *))aimingAddr;
+        // Pawn::IsAiming() 0x519BB10 is deliberately NOT resolved any more: the
+        // "ADS only" mode reads Weapon.m_IsAiming / m_AimingPercentage instead
+        // (see A_FireHeldWeaponAiming). Resolving a pointer only to never call it
+        // is how a crash-prone call survives a refactor unnoticed.
 
         auto firingAddr = UnityRva(RVA::Pawn_get_IsFiring);
         if (Tools::IsPtrValid(firingAddr))
@@ -3087,32 +3106,51 @@ namespace NewFeatures
         constexpr uintptr_t LocalPawn_GetCurrentWeapon = 0x518BEA8; // Pawn::get_CurrentWeapon()
     }
 
-    // Is `weaponInstance` the weapon the local player is currently holding?
-    // (keeps every timing override local-player-only)
-    inline bool IsLocalWeapon(void *weaponInstance)
+    // Is `weaponInstance` the local player's own held weapon? The answer is a
+    // CACHE, refreshed from the local player's own pawn tick - because the only
+    // caller is the hooked Weapon::get_DelaySprintFire, which the game runs on
+    // every weapon in the world while those weapons are constructed, ticked and
+    // destroyed.
+    //
+    // WHAT CRASHED THIS OPTION: the old body called IsLocalWeapon(), which
+    // resolved the local pawn and called Pawn::get_CurrentWeapon() on it from
+    // inside that getter, guarded only by Tools::IsPtrValid. A pawn the game has
+    // already destroyed still has its managed wrapper in readable memory, so the
+    // guard passed and the native call walked the cleared m_CachedPtr - the exact
+    // crash class documented above A_FireObjectAlive. There is no safe moment for
+    // a native call inside that getter, so the hook makes none.
+    inline std::atomic<void *> g_noSprintFireDelayWeapon{nullptr};
+
+    // Game thread, once per frame, from the local player's OWN pawn tick
+    // (A_FirePawnTicked) - the one place where "this pawn is alive right now and
+    // its weapon is real" is not a guess, because the game is ticking it.
+    inline void UpdateNoSprintFireDelayWeapon(void *localPawnInstance)
     {
-        if (!IsReadable(weaponInstance)) return false;
-        void *localPawn = LocalPlayer();
-        if (!IsReadable(localPawn)) return false;
-        // `static`: NoSprintFireDelayActive() reaches this from a hooked weapon
-        // getter, i.e. potentially many times per frame - resolve the RVA once.
-        static auto getCurrentWeapon = (void *(*)(void *))UnityRva(FiringTiming::LocalPawn_GetCurrentWeapon);
-        if (getCurrentWeapon == nullptr) return false;
-        return getCurrentWeapon(localPawn) == weaponInstance;
+        void *held = nullptr;
+        if (Config.NewFeaturesMenu.NoSprintToFireDelay &&
+            A_FireObjectAlive(localPawnInstance)) {
+            Weapon *weapon = ((Pawn *)localPawnInstance)->get_CurrentWeapon();
+            if (A_FireObjectAlive((void *)weapon))
+                held = (void *)weapon;
+        }
+        g_noSprintFireDelayWeapon.store(held, std::memory_order_relaxed);
     }
 
-    // Hipfiring == local player alive and NOT scoping / ADS.
-    inline bool LocalPlayerIsHipfiring()
+    // The comparison itself, pure so a host test can drive it directly.
+    inline bool NoSprintFireDelayActiveFor(void *weaponInstance, void *cachedLocalWeapon)
     {
-        void *localPawn = LocalPlayer();
-        if (!IsReadable(localPawn) || !IsPawnAlive(localPawn)) return false;
-        return !IsLocalPlayerScoping();
+        return weaponInstance != nullptr && weaponInstance == cachedLocalWeapon;
     }
 
-    // Consumed by the existing Feats.h hooks (single hook per address).
+    // Consumed by the existing Feats.h hook on Weapon::get_DelaySprintFire
+    // (single hook per address - the template already hooked it for Firerate
+    // Speed). Runs inside game code on every weapon instance of the world, so
+    // nothing here touches the game: no native call, no dereference, no lock.
     inline bool NoSprintFireDelayActive(void *weaponInstance)
     {
-        return Config.NewFeaturesMenu.NoSprintToFireDelay && IsLocalWeapon(weaponInstance);
+        if (!Config.NewFeaturesMenu.NoSprintToFireDelay) return false;
+        return NoSprintFireDelayActiveFor(
+            weaponInstance, g_noSprintFireDelayWeapon.load(std::memory_order_relaxed));
     }
 
     // ---- 3.2 No Hipfire Delay -------------------------------------------
@@ -3127,9 +3165,8 @@ namespace NewFeatures
     // the gate reports "no get-ready time" for every weapon instance.  That is
     // exactly what the option asks for and it matches how the repo's other
     // tiny-function/global patches (NoDrift, NoHitFlinch, NoCrouch, ...) work.
-    // IsLocalWeapon() is still used by the Feats.h timing hooks above;
-    // LocalPlayerIsHipfiring() is now only a helper (kept, no longer on any
-    // hot path since the two getters are patched, not hooked).
+    // NoSprintFireDelayActive() (3.1 above) is the only helper the Feats.h timing
+    // hooks call, and it is now a pure pointer compare.
 
     // =====================================================================
     //  Original function pointers + hook bodies

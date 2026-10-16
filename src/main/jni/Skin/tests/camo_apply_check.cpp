@@ -2,9 +2,11 @@
 // searchable, and make a pick replace the equipped camo on every gun".
 //
 // It drives the REAL InsertCamo() (the de-duping list builder LoadCamos() feeds
-// from the game's WeaponCamosConfig table) and the REAL ApplyCamoToEveryGun()
-// the tab's rows call, over fake WeaponConfConfig rows written at the exact
-// offsets Skin/Fields.h reads (cast base +0x20: DefWeaponSkinID @0x38, ID @0x40).
+// from the game's WeaponCamosConfig table), the REAL ApplyCamoToEveryGun() and
+// the REAL ApplyCamoToEveryWeaponSkin() the tab's rows call, over fake
+// WeaponConfConfig rows (cast base +0x20: DefWeaponSkinID @0x38, ID @0x40) and
+// fake WeaponSkinConfig rows (cast base +0x10: CamoID @0x1C, ColorSubID @0x20,
+// ID @0x24) written at the exact offsets Skin/Fields.h reads.
 //
 // Host test, not an on-device run (no NDK needed - the Android/JNI headers are
 // the stubs in Skin/tests, __fastcall is elided like the real build):
@@ -100,6 +102,33 @@ static ConfObj *makeConf(uint id, int defSkin)
 static int  confSkin(const ConfObj *c) { return get<int>(c->b + 0x20, CF_DEFSKIN); }
 static uint confID(const ConfObj *c)   { return get<uint>(c->b + 0x20, CF_ID); }
 
+// ---------------------------------------------------------------------------
+// Fake WeaponSkinConfig rows (dump 825712), read through the same +0x10 cast as
+// ApplyCamoToEveryWeaponSkin(): CamoID @0x1C, ColorSubID @0x20, ID @0x24.
+// ---------------------------------------------------------------------------
+struct SkinObj { alignas(8) unsigned char b[OBJ_SIZE]; };
+
+static const size_t SK_CAMOID   = 0x0C;   // real 0x1C
+static const size_t SK_COLORSUB = 0x10;   // real 0x20
+static const size_t SK_ID       = 0x14;   // real 0x24
+
+static std::vector<std::unique_ptr<SkinObj>> g_skinStore;
+
+static SkinObj *makeSkin(uint id, int camoID, int colorSub)
+{
+    auto s = std::make_unique<SkinObj>();
+    std::memset(s->b, 0, OBJ_SIZE);
+    put<uint>(s->b + 0x10, SK_ID, id);
+    put<int>(s->b + 0x10, SK_CAMOID, camoID);
+    put<int>(s->b + 0x10, SK_COLORSUB, colorSub);
+    SkinObj *raw = s.get();
+    g_skinStore.push_back(std::move(s));
+    return raw;
+}
+
+static int skinCamoID(const SkinObj *s)   { return get<int>(s->b + 0x10, SK_CAMOID); }
+static int skinColorSub(const SkinObj *s) { return get<int>(s->b + 0x10, SK_COLORSUB); }
+
 // The proven constants the original template shipped (Skin/Fields.h).
 static const int ID_GOLD     = 0x1D37F755;
 static const int ID_REDSPR   = 0x1D37F77E;
@@ -144,24 +173,27 @@ int main()
               "T2 a row usable on every weapon wins over a per-weapon one");
     }
 
-    // --- T2b: a name that merely contains a keyword is not that camo -------
+    // --- T2b: a keyword inside a name is not that camo, while two SPELLINGS of
+    //          the same proven camo are one row --------------------------------
     {
         camoData.clear();
         InsertCamo(5001, "Golden Emerald", 1, 0);
         InsertCamo(5002, "Gold", 1, 0);
         InsertCamo(5003, "krm gold", 1, 0);      // per-weapon prefix form
-        CHECK(camoData.size() == 3, "T2b the three rows stay three camos");
-        const camoInfo *ge = nullptr, *gold = nullptr, *prefixed = nullptr;
+        CHECK(camoData.size() == 2,
+              "T2b the two Gold spellings are ONE row (they apply the same id)");
+        const camoInfo *ge = nullptr, *gold = nullptr;
         for (const auto &c : camoData) {
             if (c.camoName == "Golden Emerald") ge = &c;
             if (c.camoName == "Gold") gold = &c;
-            if (c.camoName == "krm gold") prefixed = &c;
         }
         CHECK(ge && ge->applyID == 5001,
               "T2b \"Golden Emerald\" is not read as Gold");
-        CHECK(gold && gold->applyID == ID_GOLD, "T2b an exact \"Gold\" is");
-        CHECK(prefixed && prefixed->applyID == ID_GOLD,
-              "T2b a \"<weapon> gold\" row is too");
+        CHECK(gold && gold->applyID == ID_GOLD,
+              "T2b the Gold row applies the proven constant");
+        CHECK(gold && gold->camoItemID == 5002,
+              "T2b ... and it is the first table row that showed it");
+        CHECK(gold && gold->textureAssetID == 1, "T2b its texture id is kept");
     }
 
     // --- T2c: a name with the id form still resolves once the real one lands
@@ -255,6 +287,94 @@ int main()
         // Diamond and Aether Crystal contain an "a"; Gold and Red Sprite do not.
         CHECK(matches("a") == 2, "T5 a one-letter search matches mid-name characters");
         CHECK(matches("zzz") == 0, "T5 a search that matches nothing returns nothing");
+    }
+
+    // --- T6: the duplicate rows the search used to show ---------------------
+    // The game's table names one camo once per weapon, and every one of those
+    // rows applies the same proven id - so the list showed the same camo several
+    // times. They are one entry now, under one canonical name.
+    {
+        camoData.clear();
+        InsertCamo(8101, "Gold",       0, 955);   // the KRM's own row
+        InsertCamo(8102, "KRM Gold",   0, 955);
+        InsertCamo(8103, "AK117 Gold", 0, 0);
+        InsertCamo(8104, "M4 Gold",    0, 0);
+        CHECK(camoData.size() == 1, "T6 four per-weapon Gold rows = one list entry");
+        CHECK(camoData[0].camoName == "Gold", "T6 ... under the canonical name");
+        CHECK(camoData[0].applyID == ID_GOLD, "T6 ... applying the proven id");
+
+        int found = 0;
+        for (const auto &c : camoData)
+            if (CamoNameLower(c.camoName).find("gold") != std::string::npos)
+                found++;
+        CHECK(found == 1, "T6 a search for \"gold\" lists it exactly once");
+
+        // A camo that merely starts with the keyword is still its own row.
+        InsertCamo(8105, "Golden Emerald", 0, 0);
+        CHECK(camoData.size() == 2, "T6 Golden Emerald stays a separate camo");
+
+        // Same name but a DIFFERENT applied id = two genuinely different camos:
+        // collapsing those would make one of them unreachable.
+        camoData.clear();
+        InsertCamo(8201, "Zulu Camo", 0, 0);
+        InsertCamo(8202, "Zulu Camo", 0, 955);
+        CHECK(camoData.size() == 2,
+              "T6 same name + different applied id: both are kept");
+    }
+
+    // --- T7: a pick reaches the guns that ALREADY have a camo ---------------
+    // DefWeaponSkinID (T3) is only the DEFAULT skin of a gun with no camo chosen,
+    // which is why the pick used to change every gun WITHOUT one. The weapon-skin
+    // record is what a gun that already has a camo renders from.
+    {
+        std::unordered_map<uint, WeaponSkinCamoOriginal> originals;
+        SkinObj *goldGun = makeSkin(900, ID_GOLD, 3);   // already shows Gold
+        SkinObj *plain   = makeSkin(901, 0, 0);         // no camo
+        std::vector<void *> skins = { goldGun, plain };
+
+        int written = ApplyCamoToEveryWeaponSkin(ID_DIAMOND, skins, originals);
+        CHECK(written == 2, "T7 every weapon-skin record is written, camo or not");
+        CHECK(skinCamoID(goldGun) == ID_DIAMOND && skinCamoID(plain) == ID_DIAMOND,
+              "T7 the gun that already had a camo is changed too");
+        CHECK(skinColorSub(goldGun) == 0, "T7 the colour sub-id is reset with the camo");
+        CHECK(originals.size() == 2 && originals[900].camoID == ID_GOLD &&
+              originals[900].colorSubID == 3 && originals[901].camoID == 0,
+              "T7 each record's own camo was remembered once");
+
+        ApplyCamoToEveryWeaponSkin(ID_REDSPR, skins, originals);
+        CHECK(skinCamoID(goldGun) == ID_REDSPR,
+              "T7 a second pick replaces the first on every record");
+        CHECK(originals[900].camoID == ID_GOLD,
+              "T7 the remembered original is still the game's own camo");
+
+        // A record created later (another weapon) is picked up by the next pick.
+        SkinObj *later = makeSkin(902, 777, 1);
+        skins.push_back(later);
+        ApplyCamoToEveryWeaponSkin(ID_REDSPR, skins, originals);
+        CHECK(skinCamoID(later) == ID_REDSPR,
+              "T7 a record added after the first pick is written on the next one");
+
+        ApplyCamoToEveryWeaponSkin(0, skins, originals);
+        CHECK(skinCamoID(goldGun) == ID_GOLD && skinColorSub(goldGun) == 3 &&
+              skinCamoID(plain) == 0,
+              "T7 OFF restores every record's own camo");
+        CHECK(skinCamoID(later) == 777 && skinColorSub(later) == 1,
+              "T7 OFF leaves a record it never wrote completely alone");
+    }
+
+    // --- T8: a malformed record is skipped, not written ---------------------
+    {
+        std::unordered_map<uint, WeaponSkinCamoOriginal> originals;
+        SkinObj *noId = makeSkin(0, 1234, 9);       // ID == 0: not a real record
+        SkinObj *ok   = makeSkin(950, 4321, 2);
+        std::vector<void *> skins = { nullptr, noId, ok };
+
+        int written = ApplyCamoToEveryWeaponSkin(ID_GOLD, skins, originals);
+        CHECK(written == 1, "T8 a null record and an id==0 record are skipped");
+        CHECK(skinCamoID(noId) == 1234, "T8 an id==0 record is not written");
+        CHECK(skinCamoID(ok) == ID_GOLD, "T8 the real record in the same list is written");
+        CHECK(originals.size() == 1 && originals.count(950) == 1,
+              "T8 no bogus original is stored under id 0");
     }
 
     printf("\n");
