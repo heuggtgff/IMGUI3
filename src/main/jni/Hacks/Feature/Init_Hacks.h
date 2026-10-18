@@ -221,6 +221,11 @@ sColorsESPBOT sColorsESPBOT{0};
 		bool Kinetic;
         bool CamoTest;
         int CamoTestMode;
+
+        // Stretch Screen: forces UnityEngine.Camera.aspect, which widens the
+        // horizontal field of view without touching the vertical one. 1.0-3.0.
+        bool StretchScreen;
+        float StretchAspect = 1.7778f;
     };
     sExtraMenu ExtraMenu{0};
 

@@ -1685,6 +1685,18 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
             ImGui::SetNextWindowBgAlpha(0.0f);
 
             lanx::Render(g_lanxState, &g_lanxOpen);
+
+            // The LANX header's minimize control collapses the panel to the
+            // thin restore bar drawn above (tap the bar to bring it back).
+            if (g_lanxState.minimize_requested)
+            {
+                g_lanxState.minimize_requested = false;
+                windowCollapsed = true;
+                isMenuVisible = false;
+                collapseBarLastActiveTime = ImGui::GetTime();
+                collapseBarOpacityAnim = 1.0f;
+                collapseBarPressAnim = 0.0f;
+            }
             ImGui::PopStyleVar();
         }
 
@@ -1720,6 +1732,7 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 
     UpdateCamoOverride();
     ApplyWorldVisualsRuntime();
+    ApplyStretchScreen(ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
 
     // Menu toggles that write game memory, applied every frame so they hold
     // with the menu closed too.

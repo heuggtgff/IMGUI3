@@ -137,6 +137,50 @@ inline void ApplyWorldVisualsRuntime()
     lastClearTerrain = Config.ExtraMenu.ClearTerrain;
 }
 
+//-- Stretch Screen
+//
+// Writes UnityEngine.Camera.aspect on the main camera (dump .57:
+// get_aspect 0x5022768, set_aspect 0x5022784 - the same block as get_main
+// 0x5024010, so the offsets belong to the build this repo already targets).
+// The camera's own aspect is saved the first time a camera is seen and put
+// back the moment the toggle is switched off, so turning Stretch Screen off
+// restores the stock view exactly instead of leaving the game stretched.
+// Only values inside the 1.0-3.0 range are ever written; anything else falls
+// back to the aspect the game had.
+inline void ApplyStretchScreen(float displayW, float displayH)
+{
+    static Camera *lastCamera = nullptr;
+    static float   savedAspect = 0.0f;
+    static bool    applied = false;
+
+    Camera *cam = Camera::get_main();
+    if (cam == nullptr)
+        return;
+
+    if (cam != lastCamera) {
+        lastCamera = cam;
+        const float current = cam->get_aspect();
+        savedAspect = (current >= 1.0f && current <= 3.0f)
+            ? current
+            : ((displayW > 0.0f && displayH > 0.0f) ? displayW / displayH : 1.7778f);
+        applied = false;
+    }
+
+    if (!Config.ExtraMenu.StretchScreen) {
+        if (applied) {
+            cam->set_aspect(savedAspect);
+            applied = false;
+        }
+        return;
+    }
+
+    float target = Config.ExtraMenu.StretchAspect;
+    if (!(target >= 1.0f && target <= 3.0f))
+        target = savedAspect;
+    cam->set_aspect(target);
+    applied = true;
+}
+
 //-- Aim Assist
 inline float (*orig_GetAssitAimSpeed)(void *, Vector3, float, float, float, bool, bool) = nullptr;
 inline float GetAssitAimSpeed(void * instance, Vector3 assistCentorPos, float assistDis, float dis, float angle, bool isPVE, bool gamepadInput) {
@@ -613,6 +657,10 @@ inline bool IsUnlocked(void *instance) {
 // LoadoutWeaponsUIHelper.IsThisAttachmentUnlock 0x5D40528 and
 // WeaponAttr.IsAttachUnlock 0xA188634. See System/Hooks/MythicAttachments.h.
 #include "MythicAttachments.h"
+// VARIANT4's fixed mythic-attachment system: resolves the real mythic skin id
+// of every attachment and writes it into the AttachmentGroupNew / AttachItem /
+// AttachSkinData records. It OWNS 0xB83F1C0 (see MythicAttachments.h).
+#include "MythicAttachmentSystem.h"
 
 // No Spectate Deelay
 inline bool (*o_NeedDelayProcess)(void *instance, int a, int b);
@@ -964,8 +1012,16 @@ inline void InitializeAllHooks() {
     //   callers). These three are the builders / SetData of the very screen
     //   that draws the lock, so the lock is rewritten instead of answered.
     HOOK_LIB("libunity.so", "0xB6323C0", GetAttachmentList, orig_GetAttachmentList);
-    HOOK_LIB("libunity.so", "0xB83F1C0", AttachmentItemSetData, orig_AttachmentItemSetData);
+    // 0xB83F1C0 (LoadoutWeaponsAttachmentItem.SetData) is NOT hooked here any
+    // more: MythicAttachmentSystem.h owns that prologue now and does the same
+    // OwnState write plus the mythic-skin-id resolution. Two trampolines on one
+    // prologue is exactly what breaks both.
     HOOK_LIB("libunity.so", "0xB83D5E0", AttachmentCellSetData, orig_AttachmentCellSetData);
+
+    //-- The fixed mythic attachment system (VARIANT4). Capture-only table hooks
+    //   first, then the runtime hooks - both up front because this menu is
+    //   loaded before the loadout screens are ever built.
+    mythic_attachment_system::InstallMythicAttachmentHooksFresh(m_unity);
 
     // Which of those seven addresses actually took the hook? The hooker only
     // fills the original pointer on success, and the SKINS tab prints these -
@@ -975,6 +1031,8 @@ inline void InitializeAllHooks() {
     mythic_attachments::NoteLanded(mythic_attachments::GateLoadout,    orig_IsThisAttachmentUnlock != nullptr);
     mythic_attachments::NoteLanded(mythic_attachments::GateConfirm,    orig_IsAttachUnlock != nullptr);
     mythic_attachments::NoteLanded(mythic_attachments::GateList,       orig_GetAttachmentList != nullptr);
-    mythic_attachments::NoteLanded(mythic_attachments::GateItem,       orig_AttachmentItemSetData != nullptr);
+    // GateItem now lands through MythicAttachmentSystem.h's own SetData hook.
+    mythic_attachments::NoteLanded(mythic_attachments::GateItem,
+        mythic_attachment_system::mythicRuntimeInstalled.load(std::memory_order_acquire));
     mythic_attachments::NoteLanded(mythic_attachments::GateCell,       orig_AttachmentCellSetData != nullptr);
 }

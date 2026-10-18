@@ -490,6 +490,55 @@ namespace NewFeatures
         return Tools::IsPtrValid(cached);
     }
 
+    // ---- il2cpp class name, read from the object header ---------------------
+    // An il2cpp object starts with its Il2CppClass* (@0x00) and Il2CppClass
+    // holds the type name at 0x10 (image 0x00, gc_desc 0x08, name 0x10,
+    // namespaze 0x18). Used only to decide whether a fire component is legal
+    // for a subclass-only getter - a failed read just answers "no".
+    inline bool A_FireClassNameContains(void *obj, const char *needle)
+    {
+        if (needle == nullptr || needle[0] == '\0') return false;
+        if (!Tools::IsPtrValid(obj)) return false;
+        void *klass = *(void **)((uintptr_t)obj);
+        if (!Tools::IsPtrValid(klass)) return false;
+        const char *name = *(const char **)((uintptr_t)klass + 0x10);
+        if (!IsReadable((void *)name)) return false;
+
+        const unsigned maxLen = 96;
+        unsigned nameLen = 0;
+        while (nameLen < maxLen && name[nameLen] != '\0') ++nameLen;
+        if (nameLen == 0 || nameLen >= maxLen) return false;  // unreadable window
+
+        unsigned needleLen = 0;
+        while (needle[needleLen] != '\0') ++needleLen;
+        if (needleLen > nameLen) return false;
+
+        for (unsigned i = 0; i + needleLen <= nameLen; ++i) {
+            unsigned j = 0;
+            while (j < needleLen && name[i + j] == needle[j]) ++j;
+            if (j == needleLen) return true;
+        }
+        return false;
+    }
+
+    // WeaponFireComponent_Instant::get_IsAiming (0xC9AF4E0) is a NON-virtual
+    // protected getter (no Slot: line in the dump), so it is only legal on an
+    // instance of that class or one of its subclasses (the dump shows every
+    // *Instant* fire component derives from it).
+    //
+    // Weapon.get_CurrentFireComponent() returns a plain object reference that
+    // can be ANY of the hundred-plus fire components (Boxing, Shotgun, Rocket,
+    // ThrowWeapon, Smoke, ...). Called through the Instant address those
+    // instances read fields of a different layout - THAT is the crash the
+    // triggerbot hit the moment the player scoped in with a weapon whose
+    // component is not an Instant. Only components whose own class name says
+    // "Instant" are asked; everything else is not asked at all (the ADS gate
+    // then simply has one less source and stays fail-open).
+    inline bool A_FireFireComponentIsInstant(void *component)
+    {
+        return A_FireClassNameContains(component, "Instant");
+    }
+
     // The managed pawn lists hand out raw 8-byte object references. An il2cpp
     // reference is always 8-byte aligned, so an unaligned slot is a torn or
     // mid-rewrite list entry - reject it before any native call, the way V3's
@@ -551,6 +600,7 @@ namespace NewFeatures
     {
         if (answered != nullptr) *answered = false;
         if (!IsReadable(fireComponent)) return false;
+        if (!A_FireFireComponentIsInstant(fireComponent)) return false;
         bool (*getIsAiming)(void *) = fn_FireComponentGetIsAiming;
         if (getIsAiming == nullptr) {
             static auto lazy = (bool (*)(void *))UnityRva(RVA::GetIsAiming);   // maps scan once
@@ -744,6 +794,7 @@ namespace NewFeatures
         FireInterval,        // pacing against Weapon.RealFireInterval 0x50EC250
         ModeNotAds,          // TriggerbotMode 1 - not scoping (Pawn.IsAiming 0x519BB10)
         ModeNotFiring,       // TriggerbotMode 2 - you are not already firing
+        AdsTransition,       // scoping in/out: the fire component is being swapped
         NoEnemyInZone,       // nothing enemy/alive inside the crosshair zone
         NoLineOfSight,       // camera -> aim point is blocked by geometry
         LeadNoLineOfSight,   // camera -> PREDICTED point is blocked
@@ -769,6 +820,7 @@ namespace NewFeatures
             case FireBlock::WeaponNotReady:    return "weapon not ready";
             case FireBlock::FireInterval:      return "fire interval";
             case FireBlock::ModeNotAds:        return "not scoped (mode)";
+            case FireBlock::AdsTransition:     return "scope transition (held)";
             case FireBlock::ModeNotFiring:     return "not firing (mode)";
             case FireBlock::NoEnemyInZone:     return "no enemy in crosshair";
             case FireBlock::NoLineOfSight:     return "wall in the way";
@@ -1515,6 +1567,30 @@ namespace NewFeatures
     {
         return std::chrono::duration<double>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    // ---- scoping-transition settle window -----------------------------------
+    // Scoping in or out swaps the weapon's current fire component and the aim
+    // state for a moment. Pressing fire inside that window is the other half of
+    // the triggerbot crash (it hit mode 0 "Always" as well as mode 1 "ADS
+    // only" - the press itself was the problem, not the mode gate). The edge is
+    // detected from Pawn::IsAiming (a Pawn-level getter, safe on any pawn) and
+    // firing is held back for a few hundred ms after it, whichever mode is set.
+    constexpr double kAdsSettleSeconds = 0.35;
+    inline double    g_afireAdsSettleUntil = -1000.0;
+    inline int       g_afireAdsLastState   = -1;      // -1 unset, 0 hip, 1 scoped
+
+    inline bool A_FireScopingTransition(Pawn *localPawn)
+    {
+        const double now = A_FireNow();
+        const bool asked = (fn_PawnIsAiming != nullptr && A_FirePawnCallable(localPawn));
+        if (asked) {
+            const int state = fn_PawnIsAiming((void *)localPawn) ? 1 : 0;
+            if (g_afireAdsLastState != -1 && state != g_afireAdsLastState)
+                g_afireAdsSettleUntil = now + kAdsSettleSeconds;
+            g_afireAdsLastState = state;
+        }
+        return now < g_afireAdsSettleUntil;
     }
 
     // ---- cached "who is the local player" ----------------------------------
@@ -2787,6 +2863,11 @@ namespace NewFeatures
         d.switching = A_FireWeaponSwitching(held);
         d.ammoOk    = A_FireWeaponHasAmmo(held);
         d.canFire   = A_FireWeaponCanFire(held);
+
+        // Never press fire while the player is scoping in or out: the game is
+        // swapping the weapon's fire component in that window, and the press is
+        // what used to take the client down (both "Always" and "ADS only").
+        if (A_FireScopingTransition(localPawn)) return FireBlock::AdsTransition;
         // Weapon.CanFire() is measured for the panel but never gates: StartFire
         // itself refuses an illegal shot, and hard-gating on it here is what made
         // the trigger go quiet mid-fight with no visible reason.

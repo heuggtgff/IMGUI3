@@ -49,6 +49,20 @@ public:
         }
         return {0, 0, 0};
     }
+
+    // UnityEngine.Camera.aspect (dump .57: get 0x5022768 / set 0x5022784).
+    // Stretch Screen writes the aspect here and restores the saved value when
+    // the toggle goes off.
+    float get_aspect() {
+        auto _Camera__get_aspect = (float (*)(Camera *)) (Class_Camera_get_aspect);
+        if (_Camera__get_aspect == nullptr) return 0.0f;
+        return _Camera__get_aspect(this);
+    }
+
+    void set_aspect(float value) {
+        auto _Camera__set_aspect = (void (*)(Camera *, float)) (Class_Camera_set_aspect);
+        if (_Camera__set_aspect != nullptr) _Camera__set_aspect(this, value);
+    }
 };
 
 class AttackableTargetInfo {

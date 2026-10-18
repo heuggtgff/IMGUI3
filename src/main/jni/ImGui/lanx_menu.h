@@ -45,6 +45,9 @@ namespace lanx
 {
     using namespace ImGui;
 
+    // Page-switch travel (pixels) for the tab animation - see DrawTabs().
+    inline constexpr float kPageSlide = 160.f;
+
     // GetTickCount() replacement for the c_welcome_bg animation clock.
     inline unsigned int LanxNowMs()
     {
@@ -142,15 +145,19 @@ namespace lanx
 
                 if (page_is_changing)
                 {
-                    if (page_offset > 890.f)
+                    if (page_offset > kPageSlide - 10.f)
                     {
-                        page_offset = -900.f;
+                        page_offset = -kPageSlide;
                         page_is_changing = false;
                         this->c_tabs::current_idx = wanted_idx;
                     }
                 }
 
-                page_offset = ImLerp(page_offset, page_is_changing ? 900.f : 0.f, ImGui::GetIO().DeltaTime * 12.f);
+                // Short, fast slide instead of LANX's 900px / 12Hz sweep: the
+                // page is readable almost immediately after a tab tap instead
+                // of sliding in from off-panel for a third of a second.
+                page_offset = ImLerp(page_offset, page_is_changing ? kPageSlide : 0.f,
+                    ImMin(1.f, ImGui::GetIO().DeltaTime * 26.f));
             }
             ImGui::EndChild();
             ImGui::PopStyleVar();
@@ -162,26 +169,36 @@ namespace lanx
     private:
         const int p_cout = 60;
 
+        // ONE engine for the whole particle field. LANX's original built a
+        // fresh std::random_device (on Android that is an /dev/urandom open)
+        // plus a new mt19937 for every single call - 60 particles x several
+        // calls per frame - which is what made opening the menu and switching
+        // pages crawl. The engine is seeded once.
+        static std::mt19937& RandomEngine()
+        {
+            static std::mt19937 engine = [] {
+                std::random_device seed;
+                return std::mt19937(seed());
+            }();
+            return engine;
+        }
+
         ImVec2 GenerateRandomPositionInRect(const ImRect& rect)
         {
-            std::random_device rd;
-            std::mt19937 gen(rd());
             std::uniform_real_distribution<float> x_dist(rect.Min.x, rect.Max.x);
             std::uniform_real_distribution<float> y_dist(rect.Min.y, rect.Max.y);
 
-            float random_x = x_dist(gen);
-            float random_y = y_dist(gen);
+            float random_x = x_dist(RandomEngine());
+            float random_y = y_dist(RandomEngine());
 
             return ImVec2(random_x, random_y);
         }
 
         float GenerateRandomFloat(float min, float max)
         {
-            std::random_device rd;
-            std::mt19937 gen(rd());
             std::uniform_real_distribution<float> dist(min, max);
 
-            return dist(gen);
+            return dist(RandomEngine());
         }
 
         struct p_info
@@ -434,6 +451,9 @@ namespace lanx
         // Live ESP preview renderer, supplied by Main.cpp (LANX previewed its
         // own esp.h draw - this project passes in DrawEspPreview).
         void          (*draw_esp_preview)(ImDrawList*, ImVec2, float, float) = nullptr;
+        // Set by the header's minimize control; Main.cpp turns it into the
+        // existing thin restore bar (`windowCollapsed`) and clears the flag.
+        bool            minimize_requested = false;
         ImGuiColorEditFlags picker_flags =
             ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_AlphaBar |
             ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaPreview;
@@ -544,18 +564,40 @@ namespace lanx
             draw_list->AddText(ImVec2(pos.x + 60, utils::center_text(pos, pos + ImVec2(70, 70), "LineFlow").y), c::label::active, "LineFlow");
             PopFont();
 
-            draw_list->AddText(pos + ImVec2(c::bg::size.x - 70 - CalcTextSize("Lyapos").x, 18), c::label::active, "Lyapos");
+            draw_list->AddText(pos + ImVec2(c::bg::size.x - 106 - CalcTextSize("Lyapos").x, 18), c::label::active, "Lyapos");
 
             PushFont(font::esp_font);
-            draw_list->AddText(pos + ImVec2(c::bg::size.x - 70 - CalcTextSize("Administrator").x, 37), c::label::def, "Administrator");
+            draw_list->AddText(pos + ImVec2(c::bg::size.x - 106 - CalcTextSize("Administrator").x, 37), c::label::def, "Administrator");
             PopFont();
+
+            // Minimize: collapses the panel to the thin restore bar Main.cpp
+            // already draws (tap the bar to bring the menu back).
+            {
+                const ImVec2 mn_pos = pos + ImVec2(c::bg::size.x - 46.f, 17.f);
+                ImGui::SetCursorScreenPos(mn_pos);
+                ImGui::InvisibleButton("##lanx_minimize", ImVec2(24.f, 24.f));
+                const bool mn_hot = ImGui::IsItemHovered();
+                draw_list->AddRectFilled(mn_pos, mn_pos + ImVec2(24.f, 24.f),
+                    mn_hot ? utils::GetColorWithAlpha(c::main_color, 0.95f)
+                           : utils::GetColorWithAlpha(c::main_color, 0.14f), 6.f);
+                const ImU32 dash_col = mn_hot
+                    ? (ImU32)IM_COL32(18, 18, 22, 255)
+                    : (ImU32)utils::GetColorWithAlpha(c::label::def, 1.0f);
+                draw_list->AddRectFilled(mn_pos + ImVec2(7.f, 11.f), mn_pos + ImVec2(17.f, 13.f),
+                    dash_col, 1.f);
+                if (ImGui::IsItemClicked())
+                    s.minimize_requested = true;
+            }
             // top block
 
             static c_tabs p_tabs = [] {
                 std::vector<s_tab> tabs_info;
-                tabs_info.push_back({ "Combat", {"Aim Assistance", "Close Aim", "Weapon Config"} });
+                // The labels name what the page actually holds - the pages are
+                // Aim, Triggerbot, Weapon mods / player ESP, awareness ESP,
+                // world + camera, performance, memory patches, skins, config.
+                tabs_info.push_back({ "Combat", {"Aim Assist", "Triggerbot", "Weapons"} });
                 tabs_info.push_back({ "Visuals", {"Players", "Awareness", "World"} });
-                tabs_info.push_back({ "Miscellaneous ", {"Misc", "Exploits", "Configuration"} });
+                tabs_info.push_back({ "Miscellaneous ", {"Performance", "Patches", "Skins", "Configuration"} });
                 return c_tabs(tabs_info);
             }();
             p_tabs.DrawTabs();
@@ -766,6 +808,25 @@ namespace lanx
                 Checkbox("Camera POV", &Config.ExtraMenu.CameraPov);
                 SliderFloat("POV Size", &Config.ExtraMenu.CameraPovSize, 0.0f, 100.0f, "%.0f");
                 Separator_line();
+
+                // Stretch Screen: writes UnityEngine.Camera.aspect (dump .57),
+                // which widens the horizontal FOV while the vertical one stays
+                // put. Restores the camera's own aspect when switched off.
+                Checkbox("Stretch Screen", &Config.ExtraMenu.StretchScreen);
+                if (Config.ExtraMenu.StretchScreen)
+                {
+                    SliderFloat("Aspect", &Config.ExtraMenu.StretchAspect, 1.0f, 3.0f, "%.2f");
+                    const ImVec2 preset = ImVec2((ImGui::GetContentRegionAvail().x - 8.0f) / 3.0f, 34.0f);
+                    if (Button("16:9", preset))
+                        Config.ExtraMenu.StretchAspect = 1.7778f;
+                    ImGui::SameLine(0.0f, 4.0f);
+                    if (Button("21:9", preset))
+                        Config.ExtraMenu.StretchAspect = 2.3333f;
+                    ImGui::SameLine(0.0f, 4.0f);
+                    if (Button("4:3", preset))
+                        Config.ExtraMenu.StretchAspect = 1.3333f;
+                }
+                Separator_line();
                 Checkbox("Clear Display", &Config.ExtraMenu.ClearDisplay);
                 Checkbox("VSync Mode", &Config.ExtraMenu.Grap);
                 Separator_line();
@@ -842,6 +903,25 @@ namespace lanx
             }
 
             if (p_tabs.IsTabActive(8))
+            {
+                // The repo's own skins browser (System/UI/SkinTab.h): character /
+                // watch / deadbox / plane / weapon / camo / snowboard rows, the
+                // search field with the virtual keyboard and the apply checkboxes
+                // that write the weapon's config rows. It used to be the whole
+                // menu; it is a page again.
+                ImGui::SetCursorPos(ImVec2(200.f, 85 + page_offset));
+                Child("Skins##L8", ImVec2(col_w * 2.0f + col_gap, full_h), true);
+                if (Config.ExtraMenu.Blueprints)
+                    ImGui::TextColored(ImVec4(0.55f, 0.85f, 0.55f, 1.0f),
+                        "Blueprints unlocked - the game's own loadout can equip these skins");
+                else
+                    ImGui::TextColored(ImVec4(0.90f, 0.70f, 0.35f, 1.0f),
+                        "Enable Unlock Blueprints (Weapons page) so the loadout accepts the equip");
+                RenderTab4Content();
+                EndChild();
+            }
+
+            if (p_tabs.IsTabActive(9))
             {
                 static std::string config_status = "no config written yet";
 

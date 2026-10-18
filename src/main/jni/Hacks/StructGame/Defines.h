@@ -98,6 +98,13 @@ uintptr_t api21 = 0x5057F00;
 uintptr_t api22 = 0x518BEA8;
 uintptr_t api23 = 0x51199AC;
 
+//-- UnityEngine.Camera aspect (Stretch Screen). Verified against the .57 dump:
+//     Camera.get_aspect()      RVA 0x5022768  -> public float get_aspect()
+//     Camera.set_aspect(float) RVA 0x5022784  -> public void set_aspect(float)
+//   (both in the same UnityEngine.Camera block as get_main 0x5024010)
+uintptr_t api32 = 0x5022768;
+uintptr_t api33 = 0x5022784;
+
 //-- Room Info
 uintptr_t api24 = 0x5F1;
 uintptr_t api25 = 0x530;
@@ -117,6 +124,8 @@ void UpdateAllOffset(){
 #define Class_Screen_get_dpi (m_unity + api6)
 #define Class_Camera_get_main (m_unity + api7)
 #define Class_Camera_WorldToScreenPoint (m_unity + api8)
+#define Class_Camera_get_aspect (m_unity + api32)
+#define Class_Camera_set_aspect (m_unity + api33)
 #define Class_Component_get_transform (m_unity + api9)
 #define Class_Transform_get_position (m_unity + api10)
 #define Class_Gameplay_get_MatchGame (m_unity + api11)
