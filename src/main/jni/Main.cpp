@@ -6,7 +6,6 @@
 #include "ImGui/menu_layout.h"
 #include "ImGui/lanx_font.h"
 #include "ImGui/lanx_style.h"
-#include "ImGui/lanx_menu.h"
 #include "IL2CppSDKGenerator/BasicStructs/Call_BasicStructs.h"
 #include "IL2CppSDKGenerator/IL2Cpp/Call_IL2Cpp.h"
 #include "Hacks/Hacks.h"
@@ -41,6 +40,12 @@
 #include "Hacks/Feature/NewFeatures.h"
 #include "Hacks/Feature/Crosshair.h"
 #include "MainFeatureIncludes.h"
+
+// The LANX port's pages bind straight to Config / the app's own feature state
+// (Config, SaveConfiguration/LoadConfiguration, NewFeatures, the ESP preview),
+// so it has to be included after MainFeatureIncludes.h instead of with the
+// other ImGui headers above.
+#include "ImGui/lanx_menu.h"
 
 #include <jni.h>
 #include <android/log.h>
@@ -1285,6 +1290,75 @@ static void DrawEspPreview(ImDrawList* draw, ImVec2 pos, float width, float heig
     }
 }
 
+// ---------------------------------------------------------------------------
+// Menu feature patches - the toggles on the LANX "Exploits" page apply their
+// patch here (this block used to live inside the pre-LANX menu shell).
+//
+// A1 / NoCrouch are re-asserted every frame; KittyMemory skips the write while
+// the patched state already matches. The newer targets are EDGE-TRIGGERED:
+// write once on state change, never while idle, because libanogs periodic
+// integrity scans flagged the per-frame rewrites on those (~40s delayed
+// crash). The applied flags only flip when the write actually succeeded.
+// ---------------------------------------------------------------------------
+static void ApplyMenuFeaturePatches()
+{
+    if (Config.ExtraMenu.WallHack) Patches.A1.Modify();
+    else Patches.A1.Restore();
+
+    if (Config.NewFeaturesMenu.NoCrouch) Patches.NoCrouch.Modify();
+    else Patches.NoCrouch.Restore();
+
+    static bool s_appliedNoHitFlinch = false;
+    if (Config.NewFeaturesMenu.NoHitFlinch && !s_appliedNoHitFlinch) {
+        if (Patches.NoHitFlinch.Modify()) s_appliedNoHitFlinch = true;
+    } else if (!Config.NewFeaturesMenu.NoHitFlinch && s_appliedNoHitFlinch) {
+        if (Patches.NoHitFlinch.Restore()) s_appliedNoHitFlinch = false;
+    }
+
+    static bool s_appliedNoDrift = false;
+    if (Config.NewFeaturesMenu.NoDrift && !s_appliedNoDrift) {
+        if (Patches.NoDrift.Modify()) s_appliedNoDrift = true;
+    } else if (!Config.NewFeaturesMenu.NoDrift && s_appliedNoDrift) {
+        if (Patches.NoDrift.Restore()) s_appliedNoDrift = false;
+    }
+
+    static bool s_appliedNoSlideFatigue = false;
+    if (Config.NewFeaturesMenu.NoSlideFatigue && !s_appliedNoSlideFatigue) {
+        const bool ok = Patches.NoSlideFatigue.Modify()
+                     && Patches.NoSlideFatiguePve.Modify();
+        if (ok) s_appliedNoSlideFatigue = true;
+    } else if (!Config.NewFeaturesMenu.NoSlideFatigue && s_appliedNoSlideFatigue) {
+        const bool ok = Patches.NoSlideFatigue.Restore()
+                     && Patches.NoSlideFatiguePve.Restore();
+        if (ok) s_appliedNoSlideFatigue = false;
+    }
+
+    static bool s_appliedEm3Eye = false;
+    if (Config.ExtraMenu.RedWallhack && !s_appliedEm3Eye) {
+        if (Patches.Em3Eye.Modify()) s_appliedEm3Eye = true;
+    } else if (!Config.ExtraMenu.RedWallhack && s_appliedEm3Eye) {
+        if (Patches.Em3Eye.Restore()) s_appliedEm3Eye = false;
+    }
+
+    static bool s_appliedKineticArmor = false;
+    if (Config.ExtraMenu.Kinetic && !s_appliedKineticArmor) {
+        if (Patches.KineticArmor.Modify()) s_appliedKineticArmor = true;
+    } else if (!Config.ExtraMenu.Kinetic && s_appliedKineticArmor) {
+        if (Patches.KineticArmor.Restore()) s_appliedKineticArmor = false;
+    }
+
+    static bool s_appliedNoHipfireDelay = false;
+    if (Config.NewFeaturesMenu.NoHipfireDelay && !s_appliedNoHipfireDelay) {
+        const bool ok = Patches.NoHipfireUseGetReadyTime.Modify()
+                     && Patches.NoHipfireSpringFireGetReady.Modify();
+        if (ok) s_appliedNoHipfireDelay = true;
+    } else if (!Config.NewFeaturesMenu.NoHipfireDelay && s_appliedNoHipfireDelay) {
+        const bool ok = Patches.NoHipfireUseGetReadyTime.Restore()
+                     && Patches.NoHipfireSpringFireGetReady.Restore();
+        if (ok) s_appliedNoHipfireDelay = false;
+    }
+}
+
 EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 {
     if (!old_eglSwapBuffers) return EGL_FALSE;
@@ -1646,6 +1720,13 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
 
     UpdateCamoOverride();
     ApplyWorldVisualsRuntime();
+
+    // Menu toggles that write game memory, applied every frame so they hold
+    // with the menu closed too.
+    ApplyMenuFeaturePatches();
+
+    // The LANX Visuals page previews the real ESP pass.
+    g_lanxState.draw_esp_preview = &DrawEspPreview;
 
     auto currentTime = std::chrono::steady_clock::now();
     if (currentTime - lastScreenshotTime >= screenshotInterval) {

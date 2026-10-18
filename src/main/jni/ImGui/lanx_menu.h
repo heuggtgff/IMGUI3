@@ -30,6 +30,16 @@
 #include <cmath>
 #include <vector>
 #include <string>
+#include <cstdio>
+#include <cstring>
+
+// Feature state owned by Main.cpp (definitions near the top of that file).
+extern bool  HIDEESP;
+extern bool  UnlimitedFly;
+extern float SnowBsize;
+extern float SlideRange;
+extern float speedHackMultiplier;
+extern float jumpHeightMultiplier;
 
 namespace lanx
 {
@@ -421,6 +431,9 @@ namespace lanx
         int             keybind_mode[100];
         float           color_edit[10][4];
         float           col[4];
+        // Live ESP preview renderer, supplied by Main.cpp (LANX previewed its
+        // own esp.h draw - this project passes in DrawEspPreview).
+        void          (*draw_esp_preview)(ImDrawList*, ImVec2, float, float) = nullptr;
         ImGuiColorEditFlags picker_flags =
             ImGuiColorEditFlags_NoSidePreview | ImGuiColorEditFlags_AlphaBar |
             ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_AlphaPreview;
@@ -447,6 +460,36 @@ namespace lanx
         s.PopupRounding = 5.f;
         s.ScrollbarSize = 1;
         s.SeparatorTextPadding = ImVec2(10, 10);
+    }
+
+    // ---------------------------------------------------------------------------
+    // ESP colour helpers for the Players page.
+    //
+    // runtime_preview_menu::DrawRuntimeEspColorRow is the app's own colour row
+    // (a custom::ColorEdit4 over a float[4]); it writes back 0..255 while the
+    // ESP itself stores 0..1 (CREATE_COLOR divides by 255), so the value has
+    // to be normalised after an edit. The line colour is then fanned out to
+    // the team's box / name / health / distance colours, exactly like the
+    // app's own ESP settings helper does.
+    // ---------------------------------------------------------------------------
+    inline void NormalizeEspColor(float* col)
+    {
+        if (col == nullptr)
+            return;
+        for (int i = 0; i < 4; ++i)
+            if (col[i] > 1.0f)
+                col[i] /= 255.0f;
+    }
+
+    inline void ApplyEspColorGroup(float* line, float* box, float* name, float* health, float* distance)
+    {
+        if (line == nullptr)
+            return;
+        NormalizeEspColor(line);
+        if (box)      std::memcpy(box, line, sizeof(float) * 4);
+        if (name)     std::memcpy(name, line, sizeof(float) * 4);
+        if (health)   std::memcpy(health, line, sizeof(float) * 4);
+        if (distance) std::memcpy(distance, line, sizeof(float) * 4);
     }
 
     // ---------------------------------------------------------------------------
@@ -511,7 +554,7 @@ namespace lanx
             static c_tabs p_tabs = [] {
                 std::vector<s_tab> tabs_info;
                 tabs_info.push_back({ "Combat", {"Aim Assistance", "Close Aim", "Weapon Config"} });
-                tabs_info.push_back({ "Visuals", {"Players", "Radar", "World"} });
+                tabs_info.push_back({ "Visuals", {"Players", "Awareness", "World"} });
                 tabs_info.push_back({ "Miscellaneous ", {"Misc", "Exploits", "Configuration"} });
                 return c_tabs(tabs_info);
             }();
@@ -519,211 +562,346 @@ namespace lanx
 
             static const ImGuiColorEditFlags picker_flags = s.picker_flags;
 
-            const float half_w = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-            const float full_h = 450;
+            // Page geometry. The sidebar occupies the first 180px of the 850px
+            // panel, so the columns start at a 200px cursor inset and have to
+            // share what is left - sizing them from the whole content width
+            // pushed the right-hand column under the panel edge and clipped
+            // it. Height keeps the 40px card cap inside the 596px panel.
+            const float col_gap = ImGui::GetStyle().ItemSpacing.x * 3.0f;
+            const float col_w = (c::bg::size.x - 40.0f - 200.0f - col_gap) * 0.5f;
+            const float full_h = 430;
 
             if (p_tabs.IsTabActive(0))
             {
+                static const char* targets[]   = { "Head", "Chest", "Body" };
+                static const char* triggers[]  = { "None", "Shooting", "Scoping" };
+                static const char* target_by[] = { "Distance", "FOV" };
+
                 ImGui::SetCursorPos(ImVec2(200.f, 85 + page_offset));
 
-                Child("Main Aim Config##L", ImVec2(half_w, full_h), true);
-                SliderInt("Distance", &s.slider_int[2], 0, 100);
-                SliderInt("FOV Size", &s.slider_int[1], 0, 100);
-                SliderInt("Smoothing", &s.slider_int[0], 0, 100);
-                Checkbox("Prediction", &s.checkboxes[4]);
-                Checkbox("Ignore Knocked", &s.checkboxes[3]);
-                Checkbox("Visible Check", &s.checkboxes[2]);
-                Checkbox("Auto Aim", &s.checkboxes[1]);
-                Checkbox("Enable Aimbot", &s.checkboxes[0]);
-                ColorEdit4("FOV Color", &s.col[0], picker_flags);
-                static const char* aim_combo_list[] = { "Automatic Rifle", "Thompson", "Revolver", "Bow", "Knife" };
-                Combo("Aim Key", &s.combo[1], aim_combo_list, IM_ARRAYSIZE(aim_combo_list));
-                Combo("Aim Bone", &s.combo[0], aim_combo_list, IM_ARRAYSIZE(aim_combo_list));
-                BindBox("Draw FOV", &s.checkboxes[5], &s.keybind[2], &s.keybind_mode[2]);
+                Child("Aim Assist##L0", ImVec2(col_w, full_h), true);
+                Checkbox("Aim Assist 360", &Config.Aim.Aimbot360);
+                Checkbox("Silent Aim (Bullet Track)", &Config.Aim.AimSilent);
+                SliderFloat("Assist Size", &Config.Aim.AimAssistSize, 0.0f, 100.0f, "%.0f");
+                SliderFloat("FOV Radius", &Config.Aim.Cross, 0.0f, 100.0f, "%.0f");
+                Checkbox("Show FOV Circle", &Config.ESPMenu.ShowFov);
                 EndChild();
 
                 ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 3);
 
-                Child("Backup Aim Config##R", ImVec2(half_w, full_h), true);
-                SliderInt("Distance", &s.slider_int[5], 0, 100);
-                SliderInt("FOV Size", &s.slider_int[4], 0, 100);
-                ColorEdit4("Main color", (float*)&c::main_color, picker_flags);
-                SliderInt("Smoothing", &s.slider_int[3], 0, 100);
-                Combo("Aim Key", &s.combo[3], aim_combo_list, IM_ARRAYSIZE(aim_combo_list));
-                Combo("Aim Bone", &s.combo[2], aim_combo_list, IM_ARRAYSIZE(aim_combo_list));
-                Checkbox("Prediction", &s.checkboxes[10]);
-                Checkbox("Ignore Knocked", &s.checkboxes[9]);
-                Checkbox("Visible Check", &s.checkboxes[8]);
-                Checkbox("Auto Aim", &s.checkboxes[7]);
-                Checkbox("Enable Aimbot", &s.checkboxes[6]);
-                BindBox("Draw FOV", &s.checkboxes[11], &s.keybind[3], &s.keybind_mode[3]);
+                Child("Targeting##R0", ImVec2(col_w, full_h), true);
+                Combo("Aim Trigger", (int*)&Config.Aim.Trigger, triggers, IM_ARRAYSIZE(triggers));
+                Combo("Hit Part", (int*)&Config.Aim.Target, targets, IM_ARRAYSIZE(targets));
+                Combo("Target By", (int*)&Config.Aim.By, target_by, IM_ARRAYSIZE(target_by));
+                Separator_line();
+                Checkbox("Hide Stream (screenshot-safe)", &HIDEESP);
+                Separator_line();
+                ColorEdit4("Menu Color", (float*)&c::main_color, picker_flags);
                 EndChild();
             }
 
             if (p_tabs.IsTabActive(1))
             {
-                static const char* esp_combo_list[] = { "Head", "Neck", "Chest", "Pelvis", "Legs" };
-                static const char* color_mode_list[] = { "Static", "Gradient", "Rainbow", "Pulse" };
-                static const char* team_filter_list[] = { "All", "Enemies", "Teammates", "Neutral" };
-                static const char* glow_mode_list[] = { "Basic", "Rainbow", "Pulse", "Blink" };
-                static const char* material_list[] = { "Flat", "Wireframe", "Shaded", "Metallic" };
-                (void)esp_combo_list;
+                static const char* trigger_modes[] = { "Always", "ADS Only", "Firing Only" };
 
                 ImGui::SetCursorPos(ImVec2(200.f, 85 + page_offset));
 
-                Child("Visuals (General)##L2", ImVec2(half_w, full_h), true);
-                Checkbox("Show Player Box", &s.checkboxes[12]);
-                Checkbox("Show Health Bar", &s.checkboxes[13]);
-                Checkbox("Show Skeleton", &s.checkboxes[14]);
-                Checkbox("Show Names", &s.checkboxes[15]);
-                Checkbox("Show Distance", &s.checkboxes[16]);
-                SliderInt("Box Thickness", &s.slider_int[6], 1, 10);
-                SliderInt("Health Bar Width", &s.slider_int[7], 1, 20);
-                SliderInt("Name Font Size", &s.slider_int[8], 10, 30);
-                Combo("ESP Color Mode", &s.combo[4], color_mode_list, IM_ARRAYSIZE(color_mode_list));
-                Combo("Team Filter", &s.combo[5], team_filter_list, IM_ARRAYSIZE(team_filter_list));
-                BindBox("Toggle Visuals", &s.checkboxes[17], &s.keybind[4], &s.keybind_mode[4]);
+                Child("Triggerbot##L1", ImVec2(col_w, full_h), true);
+                Checkbox("Triggerbot", &Config.NewFeaturesMenu.Triggerbot);
+                if (Config.NewFeaturesMenu.Triggerbot)
+                    Combo("Mode", &Config.NewFeaturesMenu.TriggerbotMode, trigger_modes, IM_ARRAYSIZE(trigger_modes));
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "Zone = the dot crosshair");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "re-press rate = weapon fire interval");
                 EndChild();
 
                 ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 3);
 
-                Child("Visuals (Advanced)##R2", ImVec2(half_w, full_h), true);
-                Checkbox("Glow Effect", &s.checkboxes[18]);
-                Checkbox("Chams", &s.checkboxes[19]);
-                Checkbox("Offscreen Arrows", &s.checkboxes[20]);
-                Checkbox("Distance Circles", &s.checkboxes[21]);
-                Checkbox("Ammo Count", &s.checkboxes[22]);
-                SliderInt("Glow Intensity", &s.slider_int[9], 0, 100);
-                SliderInt("Chams Opacity", &s.slider_int[10], 0, 100);
-                SliderInt("Arrow Size", &s.slider_int[11], 5, 50);
-                Combo("Glow Color Mode", &s.combo[6], glow_mode_list, IM_ARRAYSIZE(glow_mode_list));
-                Combo("Chams Material", &s.combo[7], material_list, IM_ARRAYSIZE(material_list));
-                BindBox("Toggle Advanced ESP", &s.checkboxes[23], &s.keybind[5], &s.keybind_mode[5]);
+                Child("Dot Crosshair##R1", ImVec2(col_w, full_h), true);
+                Checkbox("Dot Crosshair", &Config.Crosshair.Enabled);
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "The triggerbot aims through this dot");
+                SliderFloat("Opacity", &Config.Crosshair.Color[3], 0.0f, 1.0f, "%.2f");
+                SliderFloat("Size (trigger zone)", &Config.Crosshair.Size, 1.0f, 40.0f, "%.0f px");
+                SliderFloat("Offset X", &Config.Crosshair.OffsetX, -400.0f, 400.0f, "%.0f px");
+                SliderFloat("Offset Y", &Config.Crosshair.OffsetY, -400.0f, 400.0f, "%.0f px");
+                ImGui::TextUnformatted("Crosshair Color");
+                ColorEdit4("##crosshair_color", Config.Crosshair.Color,
+                    ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel);
+                if (Button("Reset To Centre", ImVec2(ImGui::GetContentRegionAvail().x, 44)))
+                {
+                    Config.Crosshair.OffsetX = 0.0f;
+                    Config.Crosshair.OffsetY = 0.0f;
+                }
                 EndChild();
             }
 
             if (p_tabs.IsTabActive(2))
             {
                 ImGui::SetCursorPos(ImVec2(200.f, 85 + page_offset));
-                Child("Weapon Config tab", ImVec2(ImGui::GetContentRegionAvail().x - 21, 460), true);
-                {
-                    static const char* opt_combo_list[] = { "Option 1", "Option 2", "Option 3" };
 
-                    Checkbox("Enable", &s.checkboxes[20 + 0]);
-                    Combo("Aim bone for each weapon category", &s.combo[20], opt_combo_list, IM_ARRAYSIZE(opt_combo_list));
-                    Combo("Smoothing each weapon category", &s.combo[21], opt_combo_list, IM_ARRAYSIZE(opt_combo_list));
-                    Combo("Fov each weapon category", &s.combo[22], opt_combo_list, IM_ARRAYSIZE(opt_combo_list));
-                    Checkbox("Triggerbot", &s.checkboxes[21]);
-                    SliderInt("Triggerbot Distance ", &s.slider_int[20], 0, 100);
-                    Keybind("Trigger Key", &s.keybind[20], &s.keybind_mode[20]);
-                }
+                Child("Weapon Mods##L2", ImVec2(col_w, full_h), true);
+                Checkbox("Hitbox", &Config.ExtraMenu.Hit);
+                Checkbox("No Recoil", &Config.ExtraMenu.Recoil);
+                Checkbox("No Spread", &Config.ExtraMenu.Spread);
+                Checkbox("No Shake", &Config.ExtraMenu.Shake);
+                Checkbox("No Overheat", &Config.ExtraMenu.Rpd);
+                Checkbox("Firerate", &Config.ExtraMenu.Fire);
+                Checkbox("Fast Reload", &Config.ExtraMenu.Reload);
+                Checkbox("Fast Scope", &Config.ExtraMenu.Scope);
+                Checkbox("Quick Switch", &Config.ExtraMenu.Switch);
+                Checkbox("Fast Dive", &Config.ExtraMenu.Diving);
+                Checkbox("No Parachute", &Config.ExtraMenu.Parachute);
+                Checkbox("Anti Flashbang", &Config.ExtraMenu.Flash);
+                EndChild();
+
+                ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 3);
+
+                Child("Items & Movement##R2", ImVec2(col_w, full_h), true);
+                Checkbox("Weapon Kinetic", &Config.ExtraMenu.Kinetic);
+                Checkbox("Mythic Attachments", &Config.ExtraMenu.MythicAttachments);
+                Checkbox("Unlock Blueprints", &Config.ExtraMenu.Blueprints);
+                Checkbox("Unlimited Fly", &UnlimitedFly);
+                Separator_line();
+                SliderFloat("Snowboard Speed", &SnowBsize, 0.0f, 100.0f, "%.1f");
+                SliderFloat("Slide Distance", &SlideRange, 0.0f, 30.0f, "%.1f");
+                SliderFloat("SpeedHack", &speedHackMultiplier, 0.5f, 2.0f, "%.1fx");
+                SliderFloat("High Jump", &jumpHeightMultiplier, 0.5f, 5.0f, "%.2fx");
                 EndChild();
             }
 
             if (p_tabs.IsTabActive(3))
             {
-                ImGui::SetCursorPos(ImVec2(200.f, 85 + page_offset));
-                Child("ESP Player", ImVec2(ImGui::GetContentRegionAvail().x / 2, 460), true);
-                {
-                    Checkbox("Enable", &s.checkboxes[30]);
-                    Checkbox("2D Box", &s.checkboxes[31]);
-                    Checkbox("Cornered Box", &s.checkboxes[32]);
-                    Checkbox("Skeleton", &s.checkboxes[33]);
-                    Checkbox("Head Circle", &s.checkboxes[34]);
-                    Checkbox("Name", &s.checkboxes[35]);
-                    Checkbox("Distance", &s.checkboxes[36]);
-                    Checkbox("Snaplines", &s.checkboxes[37]);
-                    Checkbox("Show Bots", &s.checkboxes[38]);
-                    Checkbox("Platform", &s.checkboxes[39]);
-                    Checkbox("Rank", &s.checkboxes[40]);
-                    Checkbox("Weapon", &s.checkboxes[41]);
-                    Checkbox("Team Check", &s.checkboxes[42]);
-                    SliderInt("Skeleton Thickness", &s.slider_int[30], 0, 192);
-                    ColorEdit4("Visible", s.col, picker_flags);
+                static const char* box_types[]        = { "Fill", "Outline", "Corner", "3D" };
+                static const char* line_positions[]   = { "Top", "Mid", "Bottom" };
+                static const char* health_positions[] = { "Top", "Side" };
+                static const char* esp_styles[]       = { "None", "3D Sphere", "Player Signal" };
 
-                    Checkbox("Invisible", &s.checkboxes[43]);
-                    Checkbox("Visible Skeleton", &s.checkboxes[44]);
-                    Checkbox("Visible Text", &s.checkboxes[46]);
-                    Checkbox("Invisible Text", &s.checkboxes[47]);
-                }
+                ImGui::SetCursorPos(ImVec2(200.f, 85 + page_offset));
+
+                Child("ESP Player##L3", ImVec2(col_w, full_h), true);
+                Checkbox("ESP Line", &Config.ESPMenu.isPlayerLine);
+                Checkbox("ESP Box", &Config.ESPMenu.Box);
+                Checkbox("ESP Skeleton", &Config.ESPMenu.Skeleton);
+                Checkbox("ESP Health", &Config.ESPMenu.Health);
+                Checkbox("ESP Name", &Config.ESPMenu.Name);
+                Checkbox("ESP Distance", &Config.ESPMenu.Distance);
+                Checkbox("ESP Count", &Config.ESPMenu.Count);
+                Checkbox("360 Alert", &Config.ESPMenu.Alert);
+                Checkbox("Show AimLine", &Config.ESPMenu.Aimline);
+                Checkbox("Yellow Wallhack", &Config.ExtraMenu.WallHack);
+                Checkbox("Red Wallhack", &Config.ExtraMenu.RedWallhack);
+                Combo("Box Type", (int*)&Config.ESPMenu.BoxType, box_types, IM_ARRAYSIZE(box_types));
+                Combo("Line Position", (int*)&Config.ESPMenu.Target, line_positions, IM_ARRAYSIZE(line_positions));
+                Combo("Health Position", (int*)&Config.ESPMenu.HealthPosition, health_positions, IM_ARRAYSIZE(health_positions));
+                Combo("ESP Style", (int*)&Config.ESPMenu.EspStyle, esp_styles, IM_ARRAYSIZE(esp_styles));
+                Separator_line();
+                // One row per team: the colour is the ESP's line colour and the
+                // helper fans it out to box / name / health / distance too.
+                if (runtime_preview_menu::DrawRuntimeEspColorRow("Player ESP Color", Config.sColorsESPPLAYER.LinePLAYER))
+                    ApplyEspColorGroup(Config.sColorsESPPLAYER.LinePLAYER, Config.sColorsESPPLAYER.BoxPLAYER,
+                        Config.sColorsESPPLAYER.NamePLAYER, Config.sColorsESPPLAYER.HealthPLAYER,
+                        Config.sColorsESPPLAYER.DistancePLAYER);
+                if (runtime_preview_menu::DrawRuntimeEspColorRow("Bot ESP Color", Config.sColorsESPBOT.LineBOT))
+                    ApplyEspColorGroup(Config.sColorsESPBOT.LineBOT, Config.sColorsESPBOT.BoxBOT,
+                        Config.sColorsESPBOT.NameBOT, Config.sColorsESPBOT.HealthBOT,
+                        Config.sColorsESPBOT.DistanceBOT);
                 EndChild();
 
-                ImGui::SetCursorPos(ImVec2(540, 85));
+                ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 3);
 
-                Child("ESP Preview", ImVec2(ImGui::GetContentRegionAvail().x - 20, 460), true);
+                Child("ESP Preview##R3", ImVec2(col_w, full_h), true);
                 {
-                    // LANX previewed its live ESP through esp.h/m_esp_draw -
-                    // that renderer belongs to this app, not the ported menu.
+                    // The app's own DrawEspPreview - it reads the Config.ESPMenu
+                    // flags above, so this panel is the live ESP, not a mock-up.
+                    const ImVec2 preview_pos = ImGui::GetCursorScreenPos();
+                    const ImVec2 preview_avail = ImGui::GetContentRegionAvail();
+                    if (s.draw_esp_preview != nullptr && preview_avail.x > 40.0f && preview_avail.y > 40.0f)
+                        s.draw_esp_preview(ImGui::GetWindowDrawList(), preview_pos, preview_avail.x, preview_avail.y);
+                    else
+                        ImGui::TextUnformatted("ESP preview unavailable");
                 }
                 EndChild();
             }
 
             if (p_tabs.IsTabActive(4))
             {
-                ImGui::SetCursorPos(ImVec2(200.f, 85));
-                Child("Radar", ImVec2(ImGui::GetContentRegionAvail().x - 21, 460), true);
-                {
-                    Checkbox("Enable", &s.checkboxes[50]);
-                    SliderInt("Size", &s.slider_int[50], 0, 100);
-                    SliderInt("Position X", &s.slider_int[51], 0, 100);
-                    SliderInt("Position Y", &s.slider_int[52], 0, 100);
-                    SliderInt("Reneder Distance", &s.slider_int[53], 0, 100);
-                    SliderInt("Enemy Distance", &s.slider_int[54], 0, 100);
-                }
+                ImGui::SetCursorPos(ImVec2(200.f, 85 + page_offset));
+
+                Child("Awareness##L4", ImVec2(col_w, full_h), true);
+                Checkbox("Armor ESP", &Config.ESPMenu.Armor);
+                Checkbox("Grenade Warning", &Config.ESPMenu.GrenadeWarn);
+                Checkbox("BR Class", &Config.ESPMenu.BRClass);
+                Checkbox("Vehicle ESP", &Config.ESPMenu.Vehicle);
+                Checkbox("Vehicle Health", &Config.ESPMenu.VehicleHealth);
+                EndChild();
+
+                ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 3);
+
+                Child("Snapshots##R4", ImVec2(col_w, full_h), true);
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "ESP extras draw through the");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "player ESP pass - toggles apply");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "on the next frame.");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "Hide Stream keeps them out of");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "captured screenshots.");
+                Separator_line();
+                Checkbox("Hide Stream (screenshot-safe)", &HIDEESP);
                 EndChild();
             }
 
             if (p_tabs.IsTabActive(5))
             {
-                ImGui::SetCursorPos(ImVec2(200.f, 85));
-                Child("World esp", ImVec2(ImGui::GetContentRegionAvail().x - 21, 460), true);
-                {
-                    Checkbox("Enable", &s.checkboxes[60]);
-                    Checkbox("Vehicles", &s.checkboxes[61]);
-                    Checkbox("Chests", &s.checkboxes[62]);
-                    Checkbox("Ammo Boxes", &s.checkboxes[63]);
-                    Checkbox("Floor Loot", &s.checkboxes[64]);
-                }
+                ImGui::SetCursorPos(ImVec2(200.f, 85 + page_offset));
+
+                Child("World##L5", ImVec2(col_w, full_h), true);
+                Checkbox("No Gravity", &Config.ExtraMenu.NoGravity);
+                SliderFloat("Gravity Scale", &Config.ExtraMenu.NoGravityScale, 0.1f, 3.0f, "%.2fx");
+                Checkbox("Clear Terrain", &Config.ExtraMenu.ClearTerrain);
+                Checkbox("No Smoke", &Config.ExtraMenu.NoSmoke);
+                Checkbox("Walk Underwater", &Config.ExtraMenu.WalkUnderWater);
+                Checkbox("Spectate X", &Config.ExtraMenu.Spectatex);
+                EndChild();
+
+                ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 3);
+
+                Child("Camera & Interface##R5", ImVec2(col_w, full_h), true);
+                Checkbox("Camera POV", &Config.ExtraMenu.CameraPov);
+                SliderFloat("POV Size", &Config.ExtraMenu.CameraPovSize, 0.0f, 100.0f, "%.0f");
+                Separator_line();
+                Checkbox("Clear Display", &Config.ExtraMenu.ClearDisplay);
+                Checkbox("VSync Mode", &Config.ExtraMenu.Grap);
+                Separator_line();
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "Camera / interface changes are");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "applied by the world runtime and");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "restore when switched back off.");
                 EndChild();
             }
 
             if (p_tabs.IsTabActive(6))
             {
-                ImGui::SetCursorPos(ImVec2(200.f, 85));
-                Child("Misc", ImVec2(ImGui::GetContentRegionAvail().x - 21, 460), true);
-                {
-                    Checkbox("Crosshair", &s.checkboxes[70]);
-                    Checkbox("Fps Counter", &s.checkboxes[71]);
-                    Checkbox("Stream Proof", &s.checkboxes[72]);
-                    Checkbox("Vehicles", &s.checkboxes[73]);
-                    Checkbox("Chests", &s.checkboxes[74]);
-                    Checkbox("Ammo Boxes", &s.checkboxes[75]);
-                    Checkbox("Floor Loot", &s.checkboxes[76]);
-                }
+                ImGui::SetCursorPos(ImVec2(200.f, 85 + page_offset));
+
+                Child("Performance##L6", ImVec2(col_w, full_h), true);
+                if (Checkbox("Frame Smoothness", &Config.Aim.FpsLevel))
+                    Config.Aim.showFPSLevelSlider = Config.Aim.FpsLevel;
+                if (Config.Aim.showFPSLevelSlider)
+                    SliderFloat("Frame Level", &Config.Aim.FpsLevel1, 30.0f, 120.0f, "%.0f");
+                if (Checkbox("Ultra Frame Boost", &Config.Aim.FpsLevelUltra))
+                    Config.Aim.showFPSLevelUltraSlider = Config.Aim.FpsLevelUltra;
+                if (Config.Aim.showFPSLevelUltraSlider)
+                    SliderFloat("Ultra Frame Level", &Config.Aim.FpsLevelUltra1, 60.0f, 144.0f, "%.0f");
+                Separator_line();
+                Checkbox("Smart Reload", &Config.ExtraMenu.SmartReload);
+                EndChild();
+
+                ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 3);
+
+                Child("Account & Data##R6", ImVec2(col_w, full_h), true);
+                Checkbox("Attachment Unlock", &Config.ExtraMenu.Attachment);
+                Checkbox("Unlock Blueprints", &Config.ExtraMenu.Blueprints);
+                Checkbox("Reset Guest Account", &Config.ExtraMenu.ResetGuest);
+                Separator_line();
+                Checkbox("Camo Diagnostics (test)", &Config.ExtraMenu.CamoTest);
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "Diagnostics only reports what the");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "camo hooks resolve - it changes");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "nothing in a match.");
                 EndChild();
             }
 
             if (p_tabs.IsTabActive(7))
             {
-                ImGui::SetCursorPos(ImVec2(200.f, 85));
-                Child("Exploits", ImVec2(ImGui::GetContentRegionAvail().x - 21, 460), true);
+                ImGui::SetCursorPos(ImVec2(200.f, 85 + page_offset));
+
+                Child("Movement Patches##L7", ImVec2(col_w, full_h), true);
+                Checkbox("No Crouch (patched)", &Config.NewFeaturesMenu.NoCrouch);
+                Checkbox("No Hit Flinch (patched)", &Config.NewFeaturesMenu.NoHitFlinch);
+                Checkbox("No Drift / Hardscope (patched)", &Config.NewFeaturesMenu.NoDrift);
+                Checkbox("No Slide Fatigue (patched)", &Config.NewFeaturesMenu.NoSlideFatigue);
+                Checkbox("No Hipfire Delay (patched)", &Config.NewFeaturesMenu.NoHipfireDelay);
+                Checkbox("No Sprint Fire Delay (patched)", &Config.NewFeaturesMenu.NoSprintToFireDelay);
+                if (Config.NewFeaturesMenu.NoSprintToFireDelay)
                 {
-                    Checkbox("No Recoil", &s.checkboxes[80]);
-                    Checkbox("No Bloom", &s.checkboxes[81]);
-                    Checkbox("Wireframe", &s.checkboxes[82]);
-                    Checkbox("First Person", &s.checkboxes[83]);
-                    Keybind("Vehicle Speed Uncap (Hold key)", &s.keybind[84], &s.keybind_mode[84]);
+                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "  %s",
+                        NewFeatures::g_noSprintFireDelayWeapon.load() != nullptr
+                            ? "armed: local weapon cached"
+                            : "waiting for the local pawn tick");
                 }
+                EndChild();
+
+                ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 3);
+
+                Child("Patch Status##R7", ImVec2(col_w, full_h), true);
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "These toggles write game code at");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "runtime. Each one is written once");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "per state change and restored the");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "moment you switch it back off, so");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "an idle menu writes nothing.");
+                Separator_line();
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "No Drift also needs the patched");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "weapon, so apply it while holding");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "the weapon you want to keep steady.");
                 EndChild();
             }
 
             if (p_tabs.IsTabActive(8))
             {
-                ImGui::SetCursorPos(ImVec2(200.f, 85));
-                Child("Config", ImVec2(ImGui::GetContentRegionAvail().x - 21, 460), true);
+                static std::string config_status = "no config written yet";
+
+                ImGui::SetCursorPos(ImVec2(200.f, 85 + page_offset));
+
+                Child("Configuration##L8", ImVec2(col_w, full_h), true);
+                if (Button("SAVE CONFIG", ImVec2(ImGui::GetContentRegionAvail().x, 47)))
                 {
-                    Button("Save", ImVec2(ImGui::GetContentRegionAvail().x, 50));
-                    Button("Load", ImVec2(ImGui::GetContentRegionAvail().x, 50));
+                    SaveConfiguration("lineflow");
+                    config_status = "saved -> configs/lineflow.json";
+                }
+                if (Button("LOAD CONFIG", ImVec2(ImGui::GetContentRegionAvail().x, 47)))
+                    config_status = LoadConfiguration("lineflow")
+                        ? "loaded configs/lineflow.json"
+                        : "configs/lineflow.json not found";
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "%s", config_status.c_str());
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "Stored in the game's own files dir,");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "so it survives app updates.");
+                Separator_line();
+                if (Button("RESET TARGETING", ImVec2(ImGui::GetContentRegionAvail().x, 47)))
+                {
+                    Config.Crosshair.OffsetX = 0.0f;
+                    Config.Crosshair.OffsetY = 0.0f;
+                    Config.Crosshair.Size = 6.0f;
+                    Config.Crosshair.Color[3] = 0.95f;
+                    config_status = "crosshair reset to defaults";
+                }
+                EndChild();
+
+                ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x * 3);
+
+                Child("License##R8", ImVec2(col_w, full_h), true);
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "LICENSE   : %s", usedKey.c_str());
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "EXPIRY    : %s", settings_tab::BuildRuntimeExpiryLabel().c_str());
+                ImGui::TextColored(userType == "PREMIUM PAID"
+                        ? ImVec4(0.75f, 0.60f, 0.00f, 0.86f)
+                        : ImVec4(0.00f, 0.80f, 0.00f, 0.86f),
+                    "PLAN      : %s", userType.c_str());
+                Separator_line();
+
+                // Logo controls (same values the on-screen logo reads).
+                static float logo_opacity = 1.0f;
+                static float logo_size = 1.0f;
+                static bool  logo_loaded = false;
+                if (!logo_loaded)
+                {
+                    logo_opacity = GetLogoOpacity();
+                    logo_size = GetLogoSizeMultiplier();
+                    logo_loaded = true;
+                }
+                if (SliderFloat("Logo Opacity", &logo_opacity, 0.0f, 1.0f, "%.2f"))
+                    SetLogoOpacity(logo_opacity);
+                if (SliderFloat("Logo Size", &logo_size, 0.1f, 2.0f, "%.2f"))
+                    SetLogoSizeMultiplier(logo_size);
+                if (Button("RESET LOGO", ImVec2(ImGui::GetContentRegionAvail().x, 44)))
+                {
+                    logo_opacity = 1.0f;
+                    logo_size = 1.0f;
+                    SetLogoOpacity(1.0f);
+                    SetLogoSizeMultiplier(1.0f);
                 }
                 EndChild();
             }
