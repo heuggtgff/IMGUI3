@@ -251,6 +251,15 @@ sColorsESPBOT sColorsESPBOT{0};
         // Firing timing - each removes exactly one delay, nothing else
         bool NoSprintToFireDelay = false;  // sprint-out timer before the gun fires
         bool NoHipfireDelay = false;       // hipfire get-ready / wind-up gate
+
+        // Anti-Login (Hacks/Feature/AntiLogin.h, addresses from the GR .57
+        // dump): the game answers "account signed in on another device" with a
+        // CONNECT popup whose only button is QUIT GAME, so the intruder always
+        // won the account. With Anti-Login on that popup is never built, and the
+        // re-login switch re-runs the game's own auto-login so OUR session is
+        // the one that survives - the other device gets the popup instead.
+        bool AntiLogin = true;         // block the CONNECT popup (0E100004)
+        bool AntiLoginRelogin = true;  // and take the session back
     };
     sNewFeaturesMenu NewFeaturesMenu{0};
 

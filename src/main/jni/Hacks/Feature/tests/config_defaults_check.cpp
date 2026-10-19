@@ -74,6 +74,12 @@ int main()
     CHECK(Config.NewFeaturesMenu.TriggerbotMode == 0 &&
           Config.NewFeaturesMenu.NoSlideFatigue == false,
           "the NewFeatures switches still default off");
+    // Anti-Login is a defensive feature: the popup it blocks normally ends the
+    // session, so it has to be armed without the user touching anything (same
+    // aggregate-init rule as Mythic Attachments above).
+    CHECK(Config.NewFeaturesMenu.AntiLogin == true &&
+          Config.NewFeaturesMenu.AntiLoginRelogin == true,
+          "Anti-Login and its re-claim are ON by default");
     CHECK(Config.Crosshair.Size == 6.0f && Config.Crosshair.Enabled == true,
           "the crosshair defaults still come from their initialisers");
 

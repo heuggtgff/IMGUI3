@@ -72,6 +72,8 @@ void SaveConfiguration(const std::string& filename) {
     // options silently reset to defaults on every save/load cycle.
     config["NewFeatures"]["TriggerbotDelay"] = Config.NewFeaturesMenu.TriggerbotDelay;
     config["NewFeatures"]["NoCrouch"] = Config.NewFeaturesMenu.NoCrouch;
+    config["NewFeatures"]["AntiLogin"] = Config.NewFeaturesMenu.AntiLogin;
+    config["NewFeatures"]["AntiLoginRelogin"] = Config.NewFeaturesMenu.AntiLoginRelogin;
 
     // Own dot crosshair. Color[3] is the opacity, stored under its own name so
     // the JSON reads like the menu (R/G/B + Opacity).
@@ -167,6 +169,12 @@ bool LoadConfiguration(const std::string& filename) {
             Config.NewFeaturesMenu.NoSlideFatigue = config["NewFeatures"]["NoSlideFatigue"].get<bool>();
         Config.NewFeaturesMenu.NoSprintToFireDelay = config["NewFeatures"]["NoSprintToFireDelay"].get<bool>();
         Config.NewFeaturesMenu.NoHipfireDelay = config["NewFeatures"]["NoHipfireDelay"].get<bool>();
+        // Guarded like every newer switch: a config written before Anti-Login
+        // existed keeps its default (on) instead of throwing out of the load.
+        if (config["NewFeatures"].contains("AntiLogin"))
+            Config.NewFeaturesMenu.AntiLogin = config["NewFeatures"]["AntiLogin"].get<bool>();
+        if (config["NewFeatures"].contains("AntiLoginRelogin"))
+            Config.NewFeaturesMenu.AntiLoginRelogin = config["NewFeatures"]["AntiLoginRelogin"].get<bool>();
         // DevBypass removed (login bypass).
     }
 

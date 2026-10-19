@@ -899,6 +899,33 @@ namespace lanx
                 ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "No Drift also needs the patched");
                 ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "weapon, so apply it while holding");
                 ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1), "the weapon you want to keep steady.");
+                Separator_line();
+
+                // Anti-Login (Hacks/Feature/AntiLogin.h). The popup it blocks is
+                // the game's own CONNECT dialog for "account accessed from
+                // another location ... (0E100004)", whose only button is QUIT
+                // GAME - so without this the person logging in always won.
+                ImGui::TextColored(ImVec4(0.85f, 0.78f, 0.45f, 1), "Anti-Login");
+                Checkbox("Never show that popup", &Config.NewFeaturesMenu.AntiLogin);
+                Checkbox("Re-claim session (auto re-login)", &Config.NewFeaturesMenu.AntiLoginRelogin);
+                const int antiLoginLast = anti_login::g_lastCode.load();
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                    "blocked %d popup(s), re-login %d",
+                    anti_login::g_blocked.load(), anti_login::g_reloginStarted.load());
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                    "hook: %s",
+                    anti_login::g_armed.load() ? "installed" : "not installed (game updated?)");
+                if (antiLoginLast != 0)
+                    ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                        "last code 0E%d (signed in elsewhere)", antiLoginLast);
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                    "Re-claim re-runs the game's own");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                    "auto-login, so the server keeps");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                    "this session and the other device");
+                ImGui::TextColored(ImVec4(0.65f, 0.65f, 0.72f, 1),
+                    "gets the popup instead.");
                 EndChild();
             }
 

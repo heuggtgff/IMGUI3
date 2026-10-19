@@ -39,6 +39,7 @@
 // NoSprintFireDelayActive() so that each dump address is hooked exactly once.
 #include "Hacks/Feature/NewFeatures.h"
 #include "Hacks/Feature/Crosshair.h"
+#include "Hacks/Feature/AntiLogin.h"
 #include "MainFeatureIncludes.h"
 
 // The LANX port's pages bind straight to Config / the app's own feature state
@@ -1749,6 +1750,10 @@ EGLBoolean hook_eglSwapBuffers(EGLDisplay dpy, EGLSurface surface)
     UpdateCamoOverride();
     ApplyWorldVisualsRuntime();
     ApplyStretchScreen(ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
+    // Anti-Login: a blocked account-conflict popup leaves a pending session
+    // re-claim behind; this is where it is handed to the game's own auto-login
+    // (idle - and free - while nothing is pending).
+    anti_login::ServicePendingRelogin();
 
     // Menu toggles that write game memory, applied every frame so they hold
     // with the menu closed too.
@@ -1912,6 +1917,11 @@ void Init_Thread() {
     // NewFeatures: Weapon::Tick / Pawn::Tick hooks + 8-byte patches - the
     // dump-verified targets and citations live in NewFeatures.h.
     NewFeatures::InstallHooks();
+
+    // Anti-Login: one hook on UILoginMainController.DisplayLoginFailResult so the
+    // "account accessed from another location" popup (0E100004) is never built.
+    // Addresses + reasoning: Hacks/Feature/AntiLogin.h.
+    anti_login::Install();
 
     InstallBRClassEspConfigHook();
     InitializeAllHooks();
