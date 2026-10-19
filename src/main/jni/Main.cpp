@@ -966,33 +966,36 @@ static void DrawEspPreview(ImDrawList* draw, ImVec2 pos, float width, float heig
 
     static float animTime = 0.0f;
     animTime += ImGui::GetIO().DeltaTime;
-    float sway     = sinf(animTime * 1.1f) * 4.0f;
-    float hairSway = sinf(animTime * 1.5f) * 3.0f;
-    float blink    = fmodf(animTime, 4.5f);
-    bool  eyesShut = blink > 4.25f && blink < 4.38f;
+    const float breath = sinf(animTime * 1.2f);           // idle chest rise
+    const float sway   = sinf(animTime * 0.9f) * 2.5f;    // weight shift
 
     ImVec2 center = ImVec2(pos.x + width * 0.5f + sway, pos.y + height * 0.50f + height * 0.02f);
     float s = std::min(width, height) * 0.72f;
 
     auto P = [&](float nx, float ny) -> ImVec2 { return ImVec2(center.x + nx * s, center.y + ny * s); };
+    // Everything above the belt rides the breath so the operator moves as one.
+    auto PU = [&](float nx, float ny) -> ImVec2 { return ImVec2(center.x + nx * s, center.y + ny * s - breath * s * 0.007f); };
 
-    ImU32 skinShade = IM_COL32(232, 200, 178, 255);
-    ImU32 skinBase  = IM_COL32(248, 222, 200, 255);
-    ImU32 skinHigh  = IM_COL32(255, 236, 220, 255);
-    ImU32 hairDark  = IM_COL32(78, 60, 130, 255);
-    ImU32 hairBase  = IM_COL32(140, 110, 200, 255);
-    ImU32 hairHigh  = IM_COL32(200, 170, 250, 255);
-    ImU32 hairTip   = IM_COL32(232, 130, 220, 255);
-    ImU32 coatDark  = IM_COL32(28, 22, 48, 255);
-    ImU32 coatBase  = IM_COL32(48, 38, 82, 255);
-    ImU32 coatTrim  = IM_COL32(160, 80, 255, 255);
-    ImU32 pantsCol  = IM_COL32(24, 20, 40, 255);
-    ImU32 bootCol   = IM_COL32(14, 12, 24, 255);
-    ImU32 bootHigh  = IM_COL32(90, 60, 160, 255);
-    ImU32 eyeWhite  = IM_COL32(250, 248, 255, 255);
-    ImU32 eyeIris   = IM_COL32(150, 90, 230, 255);
-    ImU32 eyePupil  = IM_COL32(28, 12, 50, 255);
-    ImU32 outline   = IM_COL32(8, 4, 20, 220);
+    // Operator palette: olive fatigues, plate carrier, dark gunmetal rifle,
+    // amber accent. Deliberately drab - it has to read as THIS game's soldier.
+    ImU32 uniDark   = IM_COL32(38, 44, 34, 255);
+    ImU32 uniBase   = IM_COL32(62, 70, 50, 255);
+    ImU32 uniHigh   = IM_COL32(94, 104, 76, 255);
+    ImU32 vestDark  = IM_COL32(24, 26, 24, 255);
+    ImU32 vestBase  = IM_COL32(42, 46, 40, 255);
+    ImU32 pouchCol  = IM_COL32(66, 72, 58, 255);
+    ImU32 gloveCol  = IM_COL32(30, 32, 34, 255);
+    ImU32 bootCol   = IM_COL32(20, 22, 24, 255);
+    ImU32 helmetCol = IM_COL32(52, 58, 44, 255);
+    ImU32 helmetHi  = IM_COL32(88, 96, 74, 255);
+    ImU32 maskCol   = IM_COL32(34, 38, 32, 255);
+    ImU32 goggleCol = IM_COL32(18, 20, 22, 255);
+    ImU32 lensCol   = IM_COL32(214, 158, 46, 235);
+    ImU32 accent    = IM_COL32(206, 150, 52, 255);
+    ImU32 gunDark   = IM_COL32(26, 28, 30, 255);
+    ImU32 gunBase   = IM_COL32(46, 49, 52, 255);
+    ImU32 gunHigh   = IM_COL32(78, 82, 86, 255);
+    ImU32 outline   = IM_COL32(8, 10, 10, 220);
 
     auto drawLimb = [&](ImVec2 a, ImVec2 b, float w, ImU32 col) {
         draw->AddLine(a, b, col, w);
@@ -1000,204 +1003,217 @@ static void DrawEspPreview(ImDrawList* draw, ImVec2 pos, float width, float heig
         draw->AddCircleFilled(b, w * 0.5f, col, 12);
     };
 
-    ImVec2 headC  = P(0.00f, -0.72f);
+    // The same skeleton the ESP overlay below draws from - model and live
+    // box / skeleton / aim-line always agree.
+    ImVec2 headC  = PU(0.00f, -0.72f);
     float  headR  = s * 0.155f;
-    ImVec2 chin   = P(0.00f, -0.55f);
-    ImVec2 neck   = P(0.00f, -0.52f);
-    ImVec2 shL    = P(-0.19f, -0.42f);
-    ImVec2 shR    = P( 0.19f, -0.42f);
-    ImVec2 chest  = P(0.00f, -0.24f);
+    ImVec2 chin   = PU(0.00f, -0.55f);
+    ImVec2 neck   = PU(0.00f, -0.52f);
+    ImVec2 shL    = PU(-0.19f, -0.42f);
+    ImVec2 shR    = PU( 0.19f, -0.42f);
+    ImVec2 chest  = PU(0.00f, -0.24f);
     ImVec2 waist  = P(0.00f, -0.05f);
     ImVec2 hipL   = P(-0.13f,  0.05f);
     ImVec2 hipR   = P( 0.13f,  0.05f);
-    ImVec2 elbL   = P(-0.30f, -0.10f);
-    ImVec2 elbR   = P( 0.30f, -0.10f);
-    ImVec2 wrL    = P(-0.31f,  0.20f);
-    ImVec2 wrR    = P( 0.31f,  0.20f);
+    ImVec2 elbL   = PU(-0.30f, -0.10f);
+    ImVec2 elbR   = PU( 0.30f, -0.10f);
+    ImVec2 wrL    = PU(-0.31f,  0.20f);
+    ImVec2 wrR    = PU( 0.31f,  0.20f);
     ImVec2 knL    = P(-0.12f,  0.38f);
     ImVec2 knR    = P( 0.12f,  0.38f);
     ImVec2 anL    = P(-0.12f,  0.70f);
     ImVec2 anR    = P( 0.12f,  0.70f);
 
+    // ---- legs: trousers, knee pads, boots -------------------------------
+    drawLimb(hipR, knR, s * 0.118f, uniBase);
+    drawLimb(knR, anR, s * 0.096f, uniDark);
+    drawLimb(hipL, knL, s * 0.118f, uniBase);
+    drawLimb(knL, anL, s * 0.096f, uniDark);
+    draw->AddLine(ImVec2(hipL.x - s * 0.045f, hipL.y + s * 0.05f), ImVec2(knL.x - s * 0.035f, knL.y - s * 0.03f), uniHigh, 2.0f);
+    draw->AddLine(ImVec2(hipR.x + s * 0.045f, hipR.y + s * 0.05f), ImVec2(knR.x + s * 0.035f, knR.y - s * 0.03f), uniHigh, 2.0f);
+
     {
-        ImVec2 hw = ImVec2(hairSway * 0.5f, 0);
-        ImVec2 backHair[] = {
-            ImVec2(headC.x - headR * 0.95f + hw.x, headC.y - headR * 0.4f),
-            ImVec2(headC.x - headR * 1.15f + hw.x, headC.y + headR * 0.6f),
-            ImVec2(headC.x - headR * 1.05f + hw.x, headC.y + headR * 1.8f),
-            ImVec2(waist.x - s * 0.16f + hw.x,     waist.y + s * 0.05f),
-            ImVec2(waist.x - s * 0.10f + hw.x,     waist.y + s * 0.22f),
-            ImVec2(waist.x + s * 0.10f + hw.x,     waist.y + s * 0.22f),
-            ImVec2(waist.x + s * 0.16f + hw.x,     waist.y + s * 0.05f),
-            ImVec2(headC.x + headR * 1.05f + hw.x, headC.y + headR * 1.8f),
-            ImVec2(headC.x + headR * 1.15f + hw.x, headC.y + headR * 0.6f),
-            ImVec2(headC.x + headR * 0.95f + hw.x, headC.y - headR * 0.4f),
-        };
-        draw->AddConvexPolyFilled(backHair, 10, hairDark);
-        ImVec2 tipPts[] = {
-            ImVec2(headC.x - headR * 1.05f + hw.x, headC.y + headR * 1.8f),
-            ImVec2(waist.x - s * 0.16f + hw.x,     waist.y + s * 0.05f),
-            ImVec2(waist.x - s * 0.10f + hw.x,     waist.y + s * 0.22f),
-            ImVec2(waist.x + s * 0.10f + hw.x,     waist.y + s * 0.22f),
-            ImVec2(waist.x + s * 0.16f + hw.x,     waist.y + s * 0.05f),
-            ImVec2(headC.x + headR * 1.05f + hw.x, headC.y + headR * 1.8f),
-        };
-        draw->AddConvexPolyFilled(tipPts, 6, hairTip);
+        const ImVec2 knees[2] = { knL, knR };
+        for (int i = 0; i < 2; i++) {
+            ImVec2 k = knees[i];
+            ImVec2 a = ImVec2(k.x - s * 0.080f, k.y - s * 0.055f);
+            ImVec2 b = ImVec2(k.x + s * 0.080f, k.y + s * 0.065f);
+            draw->AddRectFilled(a, b, vestBase, s * 0.030f);
+            draw->AddRect(a, b, outline, s * 0.030f, 0, 1.3f);
+            draw->AddLine(ImVec2(a.x + s * 0.018f, k.y + s * 0.005f), ImVec2(b.x - s * 0.018f, k.y + s * 0.005f), pouchCol, 1.6f);
+        }
     }
 
-    drawLimb(hipR, knR, s * 0.100f, pantsCol);
-    drawLimb(knR, anR, s * 0.085f, bootCol);
-    drawLimb(hipL, knL, s * 0.100f, pantsCol);
-    drawLimb(knL, anL, s * 0.085f, bootCol);
+    {
+        const float bootX[2] = { -0.12f, 0.12f };
+        for (int i = 0; i < 2; i++) {
+            ImVec2 a = P(bootX[i] - 0.085f, 0.655f);
+            ImVec2 b = P(bootX[i] + 0.085f, 0.790f);
+            draw->AddRectFilled(a, b, bootCol, s * 0.028f);
+            draw->AddRect(a, b, outline, s * 0.028f, 0, 1.3f);
+            draw->AddLine(ImVec2(a.x + s * 0.012f, b.y - s * 0.014f), ImVec2(b.x - s * 0.012f, b.y - s * 0.014f), gunBase, 2.2f);
+            draw->AddLine(ImVec2(a.x + s * 0.018f, a.y + s * 0.045f), ImVec2(b.x - s * 0.018f, a.y + s * 0.045f), gunBase, 1.3f);
+        }
+    }
 
-    draw->AddLine(P(0.075f, 0.52f), P(0.14f, 0.60f), bootHigh, 1.4f);
-    draw->AddLine(P(-0.14f, 0.52f), P(-0.075f, 0.60f), bootHigh, 1.4f);
+    // ---- belt / hip rig -------------------------------------------------
+    ImVec2 beltA = P(-0.160f, -0.015f);
+    ImVec2 beltB = P( 0.160f,  0.060f);
+    draw->AddRectFilled(beltA, beltB, vestDark, s * 0.020f);
+    draw->AddRect(beltA, beltB, outline, s * 0.020f, 0, 1.2f);
+    draw->AddRectFilled(P(-0.024f, -0.015f), P(0.024f, 0.060f), accent, s * 0.008f);
+    draw->AddRectFilled(P(0.105f, 0.020f), P(0.190f, 0.150f), pouchCol, s * 0.018f);   // drop pouch
+    draw->AddRect(P(0.105f, 0.020f), P(0.190f, 0.150f), outline, s * 0.018f, 0, 1.2f);
 
-    draw->AddRectFilled(P(-0.185f, 0.70f), P(-0.070f, 0.78f), bootCol, 2.5f);
-    draw->AddRectFilled(P( 0.070f, 0.70f), P( 0.185f, 0.78f), bootCol, 2.5f);
-    draw->AddRect(P(-0.185f, 0.70f), P(-0.070f, 0.78f), outline, 2.5f, 0, 1.0f);
-    draw->AddRect(P( 0.070f, 0.70f), P( 0.185f, 0.78f), outline, 2.5f, 0, 1.0f);
-
-    drawLimb(shR, elbR, s * 0.078f, coatBase);
-    drawLimb(elbR, wrR, s * 0.062f, skinBase);
-    draw->AddCircleFilled(wrR, s * 0.038f, skinHigh, 14);
-
-    ImVec2 coat[] = {
-        ImVec2(shL.x + s * 0.01f, shL.y - s * 0.02f),
-        ImVec2(waist.x - s * 0.11f, waist.y),
-        ImVec2(waist.x - s * 0.14f, waist.y + s * 0.15f),
-        ImVec2(waist.x - s * 0.10f, waist.y + s * 0.22f),
-        ImVec2(waist.x + s * 0.10f, waist.y + s * 0.22f),
-        ImVec2(waist.x + s * 0.14f, waist.y + s * 0.15f),
-        ImVec2(waist.x + s * 0.11f, waist.y),
-        ImVec2(shR.x - s * 0.01f, shR.y - s * 0.02f),
+    // ---- torso: plate carrier over the uniform --------------------------
+    ImVec2 vest[] = {
+        ImVec2(shL.x - s * 0.038f, shL.y - s * 0.040f),
+        ImVec2(shR.x + s * 0.038f, shR.y - s * 0.040f),
+        ImVec2(waist.x + s * 0.150f, waist.y + s * 0.110f),
+        ImVec2(waist.x + s * 0.128f, waist.y + s * 0.220f),
+        ImVec2(waist.x - s * 0.128f, waist.y + s * 0.220f),
+        ImVec2(waist.x - s * 0.150f, waist.y + s * 0.110f),
     };
-    draw->AddConvexPolyFilled(coat, 8, coatBase);
+    draw->AddConvexPolyFilled(vest, 6, vestBase);
+    for (int i = 0; i < 6; i++)
+        draw->AddLine(vest[i], vest[(i + 1) % 6], outline, 1.2f);
 
-    draw->AddLine(ImVec2(chest.x - s * 0.01f, shL.y), ImVec2(waist.x, waist.y + s * 0.20f), coatTrim, 1.8f);
-    draw->AddLine(ImVec2(chest.x + s * 0.01f, shL.y), ImVec2(waist.x, waist.y + s * 0.20f), coatTrim, 1.8f);
-    draw->AddLine(shL, shR, coatDark, 2.5f);
-    draw->AddLine(ImVec2(shL.x, shL.y), ImVec2(chest.x, chest.y - s * 0.02f), coatTrim, 1.2f);
-    draw->AddLine(ImVec2(shR.x, shR.y), ImVec2(chest.x, chest.y - s * 0.02f), coatTrim, 1.2f);
-
-    for (int i = 0; i < 8; i++) {
-        ImVec2 a = coat[i], b = coat[(i + 1) % 8];
-        draw->AddLine(a, b, outline, 1.0f);
+    {
+        const float pX[4] = { -0.120f, 0.020f, -0.140f, 0.000f };
+        const float pY[4] = { -0.360f, -0.360f, -0.230f, -0.230f };
+        const float pW[4] = {  0.100f,  0.100f,  0.145f,  0.145f };
+        const float pH[4] = {  0.090f,  0.090f,  0.085f,  0.085f };
+        for (int i = 0; i < 4; i++) {
+            ImVec2 a = PU(pX[i], pY[i]), b = PU(pX[i] + pW[i], pY[i] + pH[i]);
+            draw->AddRectFilled(a, b, pouchCol, s * 0.010f);
+            draw->AddRect(a, b, outline, s * 0.010f, 0, 1.1f);
+            draw->AddLine(ImVec2(a.x, b.y - s * 0.020f), ImVec2(b.x, b.y - s * 0.020f), vestDark, 1.3f);
+        }
     }
+    draw->AddRectFilled(PU(-0.180f, -0.335f), PU(-0.135f, -0.245f), vestDark, s * 0.008f);   // radio
+    draw->AddRectFilled(PU( 0.055f, -0.458f), PU( 0.150f, -0.420f), accent, s * 0.006f);     // shoulder patch
+    draw->AddLine(ImVec2(shL.x - s * 0.02f, shL.y), PU(-0.055f, -0.300f), vestDark, s * 0.055f);
+    draw->AddLine(ImVec2(shR.x + s * 0.02f, shR.y), PU( 0.055f, -0.300f), vestDark, s * 0.055f);
 
-    drawLimb(shL, elbL, s * 0.078f, coatBase);
-    drawLimb(elbL, wrL, s * 0.062f, skinBase);
-    draw->AddCircleFilled(wrL, s * 0.038f, skinHigh, 14);
+    // ---- rifle: carried across the body at the ready --------------------
+    const float ry = 0.205f;
+    draw->AddLine(P(-0.470f, ry), P(-0.310f, ry), gunBase, s * 0.078f);                          // butt stock
+    draw->AddRectFilled(P(-0.492f, ry - 0.036f), P(-0.452f, ry + 0.046f), gunDark, s * 0.010f);  // butt pad
+    draw->AddRectFilled(P(-0.310f, ry - 0.046f), P( 0.130f, ry + 0.046f), gunBase, s * 0.012f);  // receiver
+    draw->AddRectFilled(P( 0.130f, ry - 0.038f), P( 0.350f, ry + 0.038f), gunDark, s * 0.012f);  // handguard
+    draw->AddLine(P(0.350f, ry), P(0.462f, ry), gunDark, s * 0.028f);                            // barrel
+    draw->AddRectFilled(P(0.442f, ry - 0.032f), P(0.484f, ry + 0.032f), gunHigh, s * 0.008f);    // muzzle brake
+    draw->AddRectFilled(P(-0.300f, ry - 0.088f), P(-0.150f, ry - 0.046f), gunDark, s * 0.008f);  // rail
+    draw->AddRectFilled(P(-0.105f, ry - 0.104f), P( 0.020f, ry - 0.038f), gunDark, s * 0.008f);  // optic
+    draw->AddCircleFilled(P(-0.042f, ry - 0.070f), s * 0.019f, lensCol, 14);
+    {
+        ImVec2 mag[]  = { P(-0.060f, ry + 0.042f), P( 0.040f, ry + 0.042f), P( 0.100f, ry + 0.205f), P(-0.010f, ry + 0.225f) };
+        ImVec2 grip[] = { P(-0.225f, ry + 0.042f), P(-0.135f, ry + 0.042f), P(-0.175f, ry + 0.205f), P(-0.262f, ry + 0.196f) };
+        draw->AddConvexPolyFilled(mag, 4, gunDark);
+        draw->AddConvexPolyFilled(grip, 4, gunBase);
+        for (int i = 0; i < 4; i++) {
+            draw->AddLine(mag[i],  mag[(i + 1) % 4],  outline, 1.1f);
+            draw->AddLine(grip[i], grip[(i + 1) % 4], outline, 1.1f);
+        }
+    }
+    draw->AddLine(P(-0.448f, ry - 0.040f), PU(-0.130f, -0.430f), vestDark, 2.2f);   // sling, front strap
+    draw->AddLine(P(-0.400f, ry + 0.042f), PU( 0.120f, -0.430f), vestDark, 2.2f);   // sling, rear strap
 
-    drawLimb(neck, ImVec2(neck.x, chest.y - s * 0.02f), s * 0.055f, skinBase);
+    // ---- arms: uniform sleeves, elbow pads, gloves -----------------------
+    drawLimb(shR, elbR, s * 0.088f, uniBase);
+    drawLimb(elbR, wrR, s * 0.072f, uniBase);
+    drawLimb(shL, elbL, s * 0.088f, uniBase);
+    drawLimb(elbL, wrL, s * 0.072f, uniBase);
+    {
+        const ImVec2 elbows[2] = { elbL, elbR };
+        for (int i = 0; i < 2; i++) {
+            ImVec2 e = elbows[i];
+            ImVec2 a = ImVec2(e.x - s * 0.048f, e.y - s * 0.048f);
+            ImVec2 b = ImVec2(e.x + s * 0.048f, e.y + s * 0.048f);
+            draw->AddRectFilled(a, b, vestDark, s * 0.020f);
+            draw->AddRect(a, b, outline, s * 0.020f, 0, 1.1f);
+        }
+    }
+    draw->AddCircleFilled(wrL, s * 0.046f, gloveCol, 16);
+    draw->AddCircleFilled(wrR, s * 0.046f, gloveCol, 16);
+    draw->AddLine(ImVec2(wrL.x - s * 0.026f, wrL.y), ImVec2(wrL.x + s * 0.026f, wrL.y), gunBase, 1.3f);
+    draw->AddLine(ImVec2(wrR.x - s * 0.026f, wrR.y), ImVec2(wrR.x + s * 0.026f, wrR.y), gunBase, 1.3f);
 
-    ImVec2 headBounds[] = {
-        ImVec2(headC.x,                 headC.y - headR * 1.05f),
-        ImVec2(headC.x + headR * 0.75f, headC.y - headR * 0.95f),
-        ImVec2(headC.x + headR * 1.00f, headC.y - headR * 0.40f),
-        ImVec2(headC.x + headR * 0.90f, headC.y + headR * 0.30f),
-        ImVec2(headC.x + headR * 0.55f, headC.y + headR * 0.90f),
-        ImVec2(chin.x,                  chin.y),
-        ImVec2(headC.x - headR * 0.55f, headC.y + headR * 0.90f),
-        ImVec2(headC.x - headR * 0.90f, headC.y + headR * 0.30f),
-        ImVec2(headC.x - headR * 1.00f, headC.y - headR * 0.40f),
-        ImVec2(headC.x - headR * 0.75f, headC.y - headR * 0.95f),
+    // ---- head: balaclava, goggles, breather, helmet ----------------------
+    drawLimb(neck, ImVec2(neck.x, chest.y - s * 0.02f), s * 0.058f, maskCol);
+
+    ImVec2 face[] = {
+        ImVec2(headC.x - headR * 0.90f, headC.y - headR * 0.36f),
+        ImVec2(headC.x - headR * 0.82f, headC.y + headR * 0.44f),
+        ImVec2(headC.x - headR * 0.46f, chin.y - headR * 0.05f),
+        ImVec2(headC.x + headR * 0.46f, chin.y - headR * 0.05f),
+        ImVec2(headC.x + headR * 0.82f, headC.y + headR * 0.44f),
+        ImVec2(headC.x + headR * 0.90f, headC.y - headR * 0.36f),
     };
-    draw->AddConvexPolyFilled(headBounds, 10, skinBase);
-
-    draw->AddCircleFilled(ImVec2(headC.x - headR * 0.98f, headC.y + headR * 0.12f), headR * 0.16f, skinBase, 16);
-    draw->AddCircleFilled(ImVec2(headC.x + headR * 0.98f, headC.y + headR * 0.12f), headR * 0.16f, skinBase, 16);
-    draw->AddLine(ImVec2(headC.x - headR * 0.99f, headC.y + headR * 0.12f),
-                  ImVec2(headC.x - headR * 0.91f, headC.y + headR * 0.20f), skinShade, 1.0f);
-    draw->AddLine(ImVec2(headC.x + headR * 0.99f, headC.y + headR * 0.12f),
-                  ImVec2(headC.x + headR * 0.91f, headC.y + headR * 0.20f), skinShade, 1.0f);
-
-    draw->AddCircleFilled(ImVec2(headC.x - headR * 0.55f, headC.y + headR * 0.25f), headR * 0.18f, IM_COL32(255, 150, 180, 90), 20);
-    draw->AddCircleFilled(ImVec2(headC.x + headR * 0.55f, headC.y + headR * 0.25f), headR * 0.18f, IM_COL32(255, 150, 180, 90), 20);
+    draw->AddConvexPolyFilled(face, 6, maskCol);
+    for (int i = 0; i < 6; i++)
+        draw->AddLine(face[i], face[(i + 1) % 6], outline, 1.1f);
 
     {
-        float browY = headC.y - headR * 0.43f;
-        float browSpacing = headR * 0.48f;
-        float browW = headR * 0.27f;
-        draw->AddLine(ImVec2(headC.x - browSpacing - browW, browY + headR * 0.02f),
-                      ImVec2(headC.x - browSpacing + browW, browY - headR * 0.02f), outline, 1.6f);
-        draw->AddLine(ImVec2(headC.x + browSpacing - browW, browY - headR * 0.02f),
-                      ImVec2(headC.x + browSpacing + browW, browY + headR * 0.02f), outline, 1.6f);
+        const float gY = headC.y - headR * 0.02f;
+        const float gH = headR * 0.22f;
+        ImVec2 gA = ImVec2(headC.x - headR * 0.80f, gY - gH);
+        ImVec2 gB = ImVec2(headC.x + headR * 0.80f, gY + gH);
+        draw->AddRectFilled(gA, gB, goggleCol, headR * 0.14f);
+        draw->AddRect(gA, gB, outline, headR * 0.14f, 0, 1.2f);
+        draw->AddCircleFilled(ImVec2(headC.x - headR * 0.40f, gY), headR * 0.20f, lensCol, 18);
+        draw->AddCircleFilled(ImVec2(headC.x + headR * 0.40f, gY), headR * 0.20f, lensCol, 18);
+        draw->AddCircleFilled(ImVec2(headC.x - headR * 0.46f, gY - headR * 0.06f), headR * 0.06f, IM_COL32(255, 236, 190, 200), 10);
+        draw->AddCircleFilled(ImVec2(headC.x + headR * 0.34f, gY - headR * 0.06f), headR * 0.06f, IM_COL32(255, 236, 190, 200), 10);
     }
-
-    if (!eyesShut) {
-        float eyeY = headC.y - headR * 0.10f;
-        float eyeSpacing = headR * 0.48f;
-        float eyeW = headR * 0.34f;
-        float eyeH = headR * 0.46f;
-
-        auto drawEye = [&](float x) {
-            ImVec2 eC(x, eyeY);
-            draw->AddEllipseFilled(eC, eyeW, eyeH, eyeWhite, 0.0f, 24);
-            draw->AddEllipseFilled(eC, eyeW * 0.72f, eyeH * 0.85f, eyeIris, 0.0f, 24);
-            draw->AddEllipseFilled(eC, eyeW * 0.32f, eyeH * 0.42f, eyePupil, 0.0f, 20);
-            draw->PathClear();
-            draw->PathArcTo(ImVec2(eC.x, eC.y - eyeH * 0.10f), eyeW, IM_PI + 0.25f, -0.25f, 20);
-            draw->PathStroke(outline, false, 1.8f);
-            draw->AddCircleFilled(ImVec2(eC.x - eyeW * 0.28f, eC.y - eyeH * 0.35f), eyeW * 0.22f, IM_COL32(255,255,255,240), 12);
-            draw->AddCircleFilled(ImVec2(eC.x + eyeW * 0.25f, eC.y + eyeH * 0.30f), eyeW * 0.10f, IM_COL32(255,255,255,180), 10);
-        };
-        drawEye(headC.x - eyeSpacing);
-        drawEye(headC.x + eyeSpacing);
-    } else {
-        float eyeY = headC.y - headR * 0.10f;
-        float eyeSpacing = headR * 0.45f;
-        float eyeW = headR * 0.38f;
-        draw->PathClear();
-        draw->PathArcTo(ImVec2(headC.x - eyeSpacing, eyeY), eyeW, IM_PI + 0.2f, -0.2f, 20);
-        draw->PathStroke(outline, false, 1.8f);
-        draw->PathClear();
-        draw->PathArcTo(ImVec2(headC.x + eyeSpacing, eyeY), eyeW, IM_PI + 0.2f, -0.2f, 20);
-        draw->PathStroke(outline, false, 1.8f);
-    }
-
-    draw->AddCircleFilled(ImVec2(headC.x + headR * 0.10f, headC.y + headR * 0.22f), headR * 0.03f, IM_COL32(200, 150, 130, 200), 8);
-    draw->PathClear();
-    draw->PathArcTo(ImVec2(headC.x, headC.y + headR * 0.42f), headR * 0.10f, 0.15f, IM_PI - 0.15f, 12);
-    draw->PathStroke(IM_COL32(180, 90, 110, 220), false, 1.2f);
 
     {
-        ImVec2 hw = ImVec2(hairSway, 0);
-        ImVec2 bangs[] = {
-            ImVec2(headC.x - headR * 1.05f + hw.x, headC.y - headR * 0.35f),
-            ImVec2(headC.x - headR * 0.85f + hw.x, headC.y - headR * 1.10f),
-            ImVec2(headC.x - headR * 0.30f + hw.x, headC.y - headR * 1.30f),
-            ImVec2(headC.x + headR * 0.30f + hw.x, headC.y - headR * 1.30f),
-            ImVec2(headC.x + headR * 0.85f + hw.x, headC.y - headR * 1.10f),
-            ImVec2(headC.x + headR * 1.05f + hw.x, headC.y - headR * 0.35f),
-            ImVec2(headC.x + headR * 0.55f + hw.x, headC.y - headR * 0.55f),
-            ImVec2(headC.x + headR * 0.15f + hw.x, headC.y - headR * 0.85f),
-            ImVec2(headC.x - headR * 0.10f + hw.x, headC.y - headR * 0.55f),
-            ImVec2(headC.x - headR * 0.45f + hw.x, headC.y - headR * 0.85f),
-        };
-        draw->AddConvexPolyFilled(bangs, 10, hairBase);
+        ImVec2 filt = ImVec2(headC.x, headC.y + headR * 0.50f);
+        draw->AddCircleFilled(filt, headR * 0.36f, vestDark, 18);
+        draw->AddCircle(filt, headR * 0.36f, outline, 18, 1.2f);
+        draw->AddLine(ImVec2(filt.x - headR * 0.22f, filt.y), ImVec2(filt.x + headR * 0.22f, filt.y), gunHigh, 1.3f);
+        draw->AddCircleFilled(ImVec2(filt.x - headR * 0.34f, filt.y - headR * 0.06f), headR * 0.07f, accent, 10);
+        draw->AddCircleFilled(ImVec2(filt.x + headR * 0.34f, filt.y - headR * 0.06f), headR * 0.07f, accent, 10);
+    }
 
-        draw->AddLine(ImVec2(headC.x - headR * 0.55f, headC.y - headR * 0.95f),
-                      ImVec2(headC.x - headR * 0.30f, headC.y - headR * 0.55f), hairHigh, 1.2f);
-        draw->AddLine(ImVec2(headC.x + headR * 0.15f, headC.y - headR * 1.10f),
-                      ImVec2(headC.x + headR * 0.30f, headC.y - headR * 0.55f), hairHigh, 1.2f);
+    {
+        ImVec2 helm[] = {
+            ImVec2(headC.x - headR * 1.10f, headC.y - headR * 0.30f),
+            ImVec2(headC.x - headR * 1.04f, headC.y - headR * 0.62f),
+            ImVec2(headC.x - headR * 0.68f, headC.y - headR * 1.05f),
+            ImVec2(headC.x,                 headC.y - headR * 1.18f),
+            ImVec2(headC.x + headR * 0.68f, headC.y - headR * 1.05f),
+            ImVec2(headC.x + headR * 1.04f, headC.y - headR * 0.62f),
+            ImVec2(headC.x + headR * 1.10f, headC.y - headR * 0.30f),
+        };
+        draw->AddConvexPolyFilled(helm, 7, helmetCol);
+        for (int i = 0; i < 7; i++)
+            draw->AddLine(helm[i], helm[(i + 1) % 7], outline, 1.2f);
+        draw->AddLine(ImVec2(headC.x - headR * 0.80f, headC.y - headR * 0.74f),
+                      ImVec2(headC.x + headR * 0.80f, headC.y - headR * 0.74f), helmetHi, 2.0f);
+        draw->AddCircleFilled(ImVec2(headC.x + headR * 0.74f, headC.y - headR * 0.58f), headR * 0.09f, accent, 10);
 
-        ImVec2 sideL[] = {
-            ImVec2(headC.x - headR * 1.00f + hw.x, headC.y - headR * 0.30f),
-            ImVec2(headC.x - headR * 1.15f + hw.x, headC.y + headR * 0.40f),
-            ImVec2(headC.x - headR * 1.00f + hw.x, headC.y + headR * 1.40f),
-            ImVec2(headC.x - headR * 0.85f + hw.x, headC.y + headR * 0.55f),
-            ImVec2(headC.x - headR * 0.85f + hw.x, headC.y - headR * 0.20f),
+        const ImVec2 flaps[2] = {
+            ImVec2(headC.x - headR * 1.10f, headC.y - headR * 0.34f),
+            ImVec2(headC.x + headR * 1.10f, headC.y - headR * 0.34f),
         };
-        draw->AddConvexPolyFilled(sideL, 5, hairBase);
-        ImVec2 sideR[] = {
-            ImVec2(headC.x + headR * 1.00f + hw.x, headC.y - headR * 0.30f),
-            ImVec2(headC.x + headR * 1.15f + hw.x, headC.y + headR * 0.40f),
-            ImVec2(headC.x + headR * 1.00f + hw.x, headC.y + headR * 1.40f),
-            ImVec2(headC.x + headR * 0.85f + hw.x, headC.y + headR * 0.55f),
-            ImVec2(headC.x + headR * 0.85f + hw.x, headC.y - headR * 0.20f),
-        };
-        draw->AddConvexPolyFilled(sideR, 5, hairBase);
+        for (int i = 0; i < 2; i++) {
+            float dir = (i == 0) ? -1.0f : 1.0f;
+            ImVec2 fl[] = {
+                flaps[i],
+                ImVec2(headC.x + dir * headR * 0.84f, headC.y - headR * 0.34f),
+                ImVec2(headC.x + dir * headR * 0.86f, headC.y + headR * 0.20f),
+                ImVec2(headC.x + dir * headR * 1.06f, headC.y + headR * 0.24f),
+            };
+            draw->AddConvexPolyFilled(fl, 4, helmetCol);
+            for (int j = 0; j < 4; j++)
+                draw->AddLine(fl[j], fl[(j + 1) % 4], outline, 1.1f);
+        }
+
+        ImVec2 nvgA = ImVec2(headC.x - headR * 0.28f, headC.y - headR * 1.24f);
+        ImVec2 nvgB = ImVec2(headC.x + headR * 0.28f, headC.y - headR * 0.98f);
+        draw->AddRectFilled(nvgA, nvgB, gunDark, headR * 0.08f);
+        draw->AddRect(nvgA, nvgB, outline, headR * 0.08f, 0, 1.1f);
     }
 
     float minX = headC.x - headR * 1.20f;
@@ -1807,7 +1823,6 @@ void Init_SwapHook() {}
 
 void Init_Thread() {
     while (!m_unity) { m_unity = Tools::GetBaseAddress("libunity.so"); sleep(1); }
-    LOGI("libunity.so: %p", m_unity);
     UpdateAllOffset();
 
     Patches.A1 = MemoryPatch::createWithHex("libunity.so", 0x8D781DC, "1F 20 03 D5 E0 03 13 AA");
@@ -1883,8 +1898,6 @@ void Init_Thread() {
     if (Tools::IsPtrValid(bulletLineAddr)) {
         Tools::Hook(bulletLineAddr, (void *)&WeaponFireComponent_Instant_CreateBulletLine,
                     (void **)&oWeaponFireComponent_Instant_CreateBulletLine);
-        LOGI("BulletTrack: CreateBulletLine hooked @%p -> orig %p",
-             bulletLineAddr, (void *)oWeaponFireComponent_Instant_CreateBulletLine);
     } else {
         LOGE("BulletTrack: CreateBulletLine RVA 0xC9B6F90 did not resolve");
     }
@@ -1892,8 +1905,6 @@ void Init_Thread() {
     if (Tools::IsPtrValid(bulletProjAddr)) {
         Tools::Hook(bulletProjAddr, (void *)&WeaponFireComponent_Instant_CreateBulletProjectile,
                     (void **)&oWeaponFireComponent_Instant_CreateBulletProjectile);
-        LOGI("BulletTrack: CreateBulletProjectile hooked @%p -> orig %p",
-             bulletProjAddr, (void *)oWeaponFireComponent_Instant_CreateBulletProjectile);
     } else {
         LOGE("BulletTrack: CreateBulletProjectile RVA 0xC9C33A4 did not resolve");
     }

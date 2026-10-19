@@ -3161,14 +3161,6 @@ namespace NewFeatures
         d.fires++;
         s_dbgTriggerState = 2;                           // firing
 
-        LOGI("[NewFeatures] triggerbot: StartFire(held=%p) target=%p path=%s aim=%.1fpx "
-             "hit=%.3fm ident=%d dist=%.3f travel=%.4f",
-             (void *)held, (void *)target.pawn,
-             target.path == 0 ? "centre-ray" : "zone",
-             target.pxOffset,
-             d.lastLosHitDist, (int)target.visibilityIdentified,
-             target.worldDist, target.travelTime);
-
         g_afireInTick = false;
     }
 
@@ -3513,9 +3505,6 @@ namespace NewFeatures
             Tools::Hook(weaponTick, (void *)&Hook_Weapon_Tick, (void **)&orig_Weapon_Tick);
             if (orig_Weapon_Tick == nullptr)
                 LOGE("[NewFeatures] triggerbot: Weapon::Tick hook FAILED at %p", weaponTick);
-            else
-                LOGI("[NewFeatures] triggerbot: hooked Weapon::Tick @%p -> orig %p",
-                     weaponTick, (void *)orig_Weapon_Tick);
         } else {
             LOGE("[NewFeatures] triggerbot: Weapon::Tick RVA 0x%llX did not resolve -"
                  " triggerbot DISABLED", (unsigned long long)RVA::Weapon_Tick);
@@ -3524,8 +3513,6 @@ namespace NewFeatures
         void *pawnTick = UnityRva(RVA::Pawn_Tick);
         if (Tools::IsPtrValid(pawnTick)) {
             Tools::Hook(pawnTick, (void *)&Hook_Pawn_Tick, (void **)&orig_Pawn_Tick);
-            LOGI("[NewFeatures] triggerbot: hooked Pawn::Tick @%p -> orig %p",
-                 pawnTick, (void *)orig_Pawn_Tick);
         } else {
             LOGE("[NewFeatures] triggerbot: Pawn::Tick RVA 0x%llX did not resolve",
                  (unsigned long long)RVA::Pawn_Tick);
@@ -3549,22 +3536,11 @@ namespace NewFeatures
             void *addr = UnityRva(t.rva);
             if (Tools::IsPtrValid(addr)) {
                 Tools::Hook(addr, t.hook, t.orig);
-                LOGI("[NewFeatures] triggerbot: hooked %s @%p -> orig %p",
-                     t.name, addr, *t.orig);
             } else {
                 LOGE("[NewFeatures] triggerbot: %s RVA 0x%llX did not resolve",
                      t.name, (unsigned long long)t.rva);
             }
         }
-
-        LOGI("[NewFeatures] triggerbot: StartFire=%p StopFire=%p W2S=%p S2W=%p RayAll=%p RayHitOut=%p RaySeg=%p IsTrigger=%p Fwd=%p Parent=%p Raycast=%p CamRight=%p CamUp=%p",
-             (void *)fn_Weapon_StartFire, (void *)fn_Weapon_StopFire,
-             (void *)fn_WorldToScreen, (void *)fn_ScreenToWorldPoint,
-             (void *)fn_PhysicsRaycastAll,
-             (void *)fn_PhysicsRaycastHitOut, (void *)fn_PhysicsRaycastSegment,
-             (void *)fn_ColliderIsTrigger, (void *)fn_TransformGetForward,
-             (void *)fn_TransformGetParent, (void *)fn_PhysicsRaycastLOS,
-             (void *)fn_TransformGetRight, (void *)fn_TransformGetUp);
     }
 
     // True while the game-thread heartbeat has run recently.
@@ -3741,10 +3717,5 @@ namespace NewFeatures
         // Patches.NoHipfireSpringFireGetReady) - the two getters are 8-byte leaf
         // functions and must never be inline-hooked (their setters are adjacent).
 
-        LOGI("[NewFeatures] hooks installed: Pawn_Tick=%p Weapon_StartFire=%p Weapon_StopFire=%p "
-             "(NoHipfireDelay + NoSlideFatigue are 8-byte patches owned by Main.cpp)",
-             (void *)orig_Pawn_Tick,
-             (void *)fn_Weapon_StartFire,
-             (void *)fn_Weapon_StopFire);
     }
 }
